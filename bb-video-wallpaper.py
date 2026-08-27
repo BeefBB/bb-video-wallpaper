@@ -8,6 +8,9 @@ import time
 import win32gui
 import win32con
 import win32api
+import win32event
+import winerror
+
 import ctypes
 from ctypes import wintypes
 import psutil
@@ -70,6 +73,48 @@ else:
     sys.exit(1)
 
 import vlc
+
+
+# 唯一的 Mutex 名稱
+MUTEX_NAME = "Global\\BBVideoWallpaper_SingleInstance_Mutex"
+
+def is_already_running():
+    """
+    檢查程式是否已經在執行中
+    """
+
+    # 建立全域 Mutex
+    mutex = win32event.CreateMutex(None, False, MUTEX_NAME)  # type: ignore
+
+
+    # 檢查錯誤碼
+    if win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS:
+        return True, mutex
+
+    return False, mutex
+
+
+def show_already_running_toast():
+    """
+    跳出 Windows 系統右下角通知並退出
+    """
+
+    app = QApplication(sys.argv)
+
+    tray = QSystemTrayIcon(QIcon(str(ICON_PATH)))
+    tray.show()
+
+    # 標題, 內容, 圖示類型, 顯示毫秒數
+    tray.showMessage(
+        "BB Video Wallpaper",
+        "程式已經在背景執行中!!\n從系統匣查看它",
+        QSystemTrayIcon.Information,  # type: ignore
+        3000
+    )
+
+    # 延遲後退出
+    QTimer.singleShot(3000, app.quit)
+    app.exec()
 
 
 WM_POWERBROADCAST = 0x0218
@@ -1212,6 +1257,16 @@ class Tray:
 
 
 if __name__ == "__main__":
+
+    # 檢查是否重複執行
+    already_running, mutex = is_already_running()
+
+    if already_running:
+
+        show_already_running_toast()
+
+        sys.exit(0)
+
 
     while True:
         time.sleep(1)
