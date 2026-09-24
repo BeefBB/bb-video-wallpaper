@@ -692,6 +692,11 @@ class Wallpaper(QWidget):
         self.setGeometry(screen.geometry())
 
 
+        # 螢幕解析度變更事件
+        if screen:
+            screen.geometryChanged.connect(self.on_screen_changed)
+
+
         # VLC
         self.instance = vlc.Instance(
             "--no-video-title-show",
@@ -880,6 +885,19 @@ class Wallpaper(QWidget):
 
             else:
                 print("重新掛載桌布失敗")
+
+
+    def on_screen_changed(self, geometry) -> None:
+        """
+        螢幕解析度變更時重整
+        """
+
+        if self.is_recreating:
+            return
+
+
+        print(f"screen_changed - {geometry}")
+        QTimer.singleShot(200, self.reattach_to_desktop)
 
 
     def set_play_media(self, path: Path) -> None:
