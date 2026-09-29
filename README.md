@@ -35,6 +35,8 @@
 bb-yt-downloader/
  ├─ icon/
  │   └─ bb-video-wallpaper.ico
+ ├─ lang/
+ │   └─ ...
  ├─ VLC/
  │   ├─ plugins/
  │   ├─ libvlc.dll
@@ -57,12 +59,14 @@ pyinstaller --noconfirm --onedir --noconsole --uac-admin --icon=icon/bb-video-wa
 ```
 
 打包後會在 `./dist`,  
-然後將 `VLC/`, `libvlc.dll` 放在 .exe 旁邊  
+然後將 `lang/`, `VLC/`, `libvlc.dll` 放在 .exe 旁邊  
 像是這樣:  
 
 ```
 Folder/
  ├─ _internal/
+ │   └─ ...
+ ├─ lang/
  │   └─ ...
  ├─ VLC/
  │   ├─ plugins/
