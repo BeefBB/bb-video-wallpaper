@@ -75,6 +75,31 @@ else:
 import vlc
 
 
+# 多語言
+LANG_DIR = ROOT_DIR / "lang"
+
+def load_language(language: str) -> dict:
+
+    path = LANG_DIR / f"{language}.json"
+
+    if not path.is_file():
+        path = LANG_DIR / "en-US.json"
+
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+LANG = load_language("zh-TW")
+
+
+def tr(key: str) -> str:
+    """
+    文字id -> 顯示文字
+    """
+
+    return LANG.get(key, key)
+
+
 # 唯一的 Mutex 名稱
 MUTEX_NAME = "Global\\BBVideoWallpaper_SingleInstance_Mutex"
 
@@ -106,8 +131,8 @@ def show_already_running_toast():
 
     # 標題, 內容, 圖示類型, 顯示毫秒數
     tray.showMessage(
-        "BB Video Wallpaper",
-        "程式已經在背景執行中!!\n從系統匣查看它",
+        tr("app_name"),
+        tr("already_running_message"),
         QSystemTrayIcon.Information,  # type: ignore
         3000
     )
@@ -1063,41 +1088,41 @@ class Tray:
 
         self.tray = QSystemTrayIcon()
         self.tray.setIcon(QIcon(str(ICON_PATH)))
-        self.tray.setToolTip("BB Video Wallpaper")
+        self.tray.setToolTip(tr("app_name"))
 
 
         menu = QMenu()
 
 
-        play_action = QAction("播放", menu)
-        pause_action = QAction("暫停", menu)
-        stop_action = QAction("停止", menu)
-        exit_action = QAction("退出", menu)
+        play_action = QAction(tr("play"), menu)
+        pause_action = QAction(tr("pause"), menu)
+        stop_action = QAction(tr("stop"), menu)
+        exit_action = QAction(tr("exit"), menu)
 
 
-        open_video_action = QAction("開啟影片資料夾", menu)
+        open_video_action = QAction(tr("open_video_folder"), menu)
         open_video_action.triggered.connect(self.open_video_folder)
 
 
-        auto_pause_if_fullscreen_action = QAction("視窗最大化時自動暫停", menu)
+        auto_pause_if_fullscreen_action = QAction(tr("auto_pause_fullscreen"), menu)
         auto_pause_if_fullscreen_action.setCheckable(True)
         auto_pause_if_fullscreen_action.setChecked(
             config.get("autoPauseIfFullscreen", True)
         )
 
-        auto_pause_if_screen_off_action = QAction("螢幕關閉時自動暫停", menu)
+        auto_pause_if_screen_off_action = QAction(tr("auto_pause_screen_off"), menu)
         auto_pause_if_screen_off_action.setCheckable(True)
         auto_pause_if_screen_off_action.setChecked(
             config.get("autoPauseIfScreenOff", True)
         )
 
-        auto_pause_if_on_battery_action = QAction("沒插電時自動暫停", menu)
+        auto_pause_if_on_battery_action = QAction(tr("auto_pause_battery"), menu)
         auto_pause_if_on_battery_action.setCheckable(True)
         auto_pause_if_on_battery_action.setChecked(
             config.get("autoPauseIfOnBattery", False)
         )
 
-        startup_action = QAction("開機自動啟動", menu)
+        startup_action = QAction(tr("startup"), menu)
         startup_action.setCheckable(True)
         startup_action.setChecked(task_exists())
 
@@ -1141,7 +1166,7 @@ class Tray:
         menu.addSeparator()
 
 
-        self.video_menu = menu.addMenu("選擇影片")
+        self.video_menu = menu.addMenu(tr("select_video"))
         self.video_menu.aboutToShow.connect(
             self.refresh_video_menu
         )
@@ -1152,7 +1177,7 @@ class Tray:
         menu.addSeparator()
 
 
-        self.options_menu = menu.addMenu("選項")
+        self.options_menu = menu.addMenu(tr("options"))
 
         self.options_menu.addAction(auto_pause_if_fullscreen_action)
         self.options_menu.addAction(auto_pause_if_screen_off_action)
@@ -1209,7 +1234,7 @@ class Tray:
         videos = get_media()
 
         if not videos:
-            action = QAction("沒有影片", self.video_menu)
+            action = QAction(tr("no_video"), self.video_menu)
             action.setEnabled(False)
             self.video_menu.addAction(action)
             return

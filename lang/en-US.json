@@ -1,0 +1,16 @@
+{
+  "app_name": "BB Video Wallpaper",
+  "play": "Play",
+  "pause": "Pause",
+  "stop": "Stop",
+  "exit": "Exit",
+  "open_video_folder": "Open Video Folder",
+  "select_video": "Select Video",
+  "no_video": "No videos",
+  "options": "Options",
+  "auto_pause_fullscreen": "Pause when a window is maximized",
+  "auto_pause_screen_off": "Pause when the screen is off",
+  "auto_pause_battery": "Pause when on battery",
+  "startup": "Start with Windows",
+  "already_running_message": "The program is already running in the background!\nCheck the system tray."
+}

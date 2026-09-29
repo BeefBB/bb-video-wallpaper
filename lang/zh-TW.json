@@ -1,0 +1,16 @@
+{
+  "app_name": "BB 影片桌布",
+  "play": "播放",
+  "pause": "暫停",
+  "stop": "停止",
+  "exit": "退出",
+  "open_video_folder": "開啟影片資料夾",
+  "select_video": "選擇影片",
+  "no_video": "沒有影片",
+  "options": "選項",
+  "auto_pause_fullscreen": "視窗最大化時自動暫停",
+  "auto_pause_screen_off": "螢幕關閉時自動暫停",
+  "auto_pause_battery": "沒插電時自動暫停",
+  "startup": "開機自動啟動",
+  "already_running_message": "程式已經在背景執行中!!\n從系統匣查看它"
+}
