@@ -4,6 +4,7 @@ import subprocess
 import json
 from pathlib import Path
 import time
+import locale
 
 import win32gui
 import win32con
@@ -75,21 +76,77 @@ else:
 import vlc
 
 
+def load_config() -> dict:
+
+    if not CONFIG_PATH.exists():
+        return {}
+
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    except Exception as e:
+
+        print(f"讀取config時發生錯誤")
+        print(f" > {e}")
+
+        return {}
+
+
+def save_config(config) -> None:
+
+    temp_path = CONFIG_PATH.with_suffix(".tmp")
+
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(
+                config,
+                f,
+                indent=2,
+                ensure_ascii=False
+            )
+            f.flush()
+            os.fsync(f.fileno())
+
+        os.replace(temp_path, CONFIG_PATH)
+
+    except Exception as e:
+        print(f"儲存 config 時發生錯誤")
+        print(f" > {e}")
+
+        try:
+            if temp_path.exists():
+                temp_path.unlink()
+
+        except Exception:
+            pass
+
+
 # 多語言
 LANG_DIR = ROOT_DIR / "lang"
 
-def load_language(language: str) -> dict:
+def load_language(language_code: str="") -> dict:
 
-    path = LANG_DIR / f"{language}.json"
+    config = load_config()
+
+    if language_code:
+        config["language"] = language_code
+        save_config(config)
+
+    else:
+        language_code = config.get("language", str(locale.getdefaultlocale()[0]))
+
+
+    path = LANG_DIR / f"{language_code}.json"
 
     if not path.is_file():
-        path = LANG_DIR / "en-US.json"
+        path = LANG_DIR / "zh-TW.json"
 
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-LANG = load_language("zh-TW")
+LANG = load_language()
 
 
 def tr(key: str) -> str:
@@ -261,52 +318,6 @@ def is_on_battery() -> bool:
     # 1 = 接上 AC 電源
     # 255 = 未知
     return status.ACLineStatus == 0
-
-
-def load_config() -> dict:
-
-    if not CONFIG_PATH.exists():
-        return {}
-
-    try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-
-    except Exception as e:
-
-        print(f"讀取config時發生錯誤")
-        print(f" > {e}")
-
-        return {}
-
-
-def save_config(config) -> None:
-
-    temp_path = CONFIG_PATH.with_suffix(".tmp")
-
-    try:
-        with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(
-                config,
-                f,
-                indent=2,
-                ensure_ascii=False
-            )
-            f.flush()
-            os.fsync(f.fileno())
-
-        os.replace(temp_path, CONFIG_PATH)
-
-    except Exception as e:
-        print(f"儲存 config 時發生錯誤")
-        print(f" > {e}")
-
-        try:
-            if temp_path.exists():
-                temp_path.unlink()
-
-        except Exception:
-            pass
 
 
 def create_task() -> None:
@@ -1086,6 +1097,9 @@ class Tray:
         config = load_config()
 
 
+        self.current_language_code = config.get("language", "zh-TW")
+
+
         self.tray = QSystemTrayIcon()
         self.tray.setIcon(QIcon(str(ICON_PATH)))
         self.tray.setToolTip(tr("app_name"))
@@ -1185,6 +1199,13 @@ class Tray:
 
         self.options_menu.addSeparator()
 
+        self.options_language_menu = self.options_menu.addMenu(tr("language"))
+        self.options_language_menu.aboutToShow.connect(
+            self.refresh_language_menu
+        )
+
+        self.options_menu.addSeparator()
+
         self.options_menu.addAction(startup_action)
 
 
@@ -1227,6 +1248,29 @@ class Tray:
         print("manual - stop")
 
 
+    def refresh_language_menu(self) -> None:
+
+        self.options_language_menu.clear()
+
+        all_language_dict = {
+            "繁體中文": "zh-TW",
+            "English": "en-US",
+        }
+
+        for language_display, language_code in all_language_dict.items():
+
+            action = QAction(language_display, self.options_language_menu)
+
+            action.triggered.connect(
+                lambda checked=False, c=language_code: self.set_language(c)
+            )
+
+            action.setCheckable(True)
+            action.setChecked(language_code == self.current_language_code)
+
+            self.options_language_menu.addAction(action)
+
+
     def refresh_video_menu(self) -> None:
 
         self.video_menu.clear()
@@ -1250,6 +1294,17 @@ class Tray:
             action.setChecked(video == self.wallpaper.current_video)
 
             self.video_menu.addAction(action)
+
+
+    def set_language(self, language_code: str):
+
+        if language_code == self.current_language_code:
+            return
+
+        self.current_language_code = language_code
+        load_language(language_code)
+
+        print(f"set_language - {language_code}")
 
 
     def play_from_menu(self, path: Path):

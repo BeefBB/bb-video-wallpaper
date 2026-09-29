@@ -1,5 +1,6 @@
 {
   "app_name": "BB Video Wallpaper",
+  "language": "Language (Restart Required)",
   "play": "Play",
   "pause": "Pause",
   "stop": "Stop",
@@ -11,6 +12,6 @@
   "auto_pause_fullscreen": "Pause when a window is maximized",
   "auto_pause_screen_off": "Pause when the screen is off",
   "auto_pause_battery": "Pause when on battery",
-  "startup": "Start with Windows",
-  "already_running_message": "The program is already running in the background!\nCheck the system tray."
+  "startup": "Start on boot",
+  "already_running_message": "The program is already running in the background!\nCheck the system tray"
 }
