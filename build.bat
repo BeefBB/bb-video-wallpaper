@@ -40,11 +40,19 @@ xcopy /E /I /Y "lang" "dist\BB Video Wallpaper\lang"
 echo.
 echo [5/5] Cleaning up build files...
 
-timeout /t 2 /nobreak >nul
+timeout /t 3 /nobreak >nul
 
-if exist "build" (
-    rmdir /S /Q "build"
+for /L %%i in (1,1,5) do (
+
+    rmdir /S /Q "build" >nul 2>&1
+
+    if not exist "build" goto cleanup_done
+
+    timeout /t 1 /nobreak >nul
+
 )
+
+:cleanup_done
 
 if exist "BB Video Wallpaper.spec" (
     del /Q "BB Video Wallpaper.spec"
