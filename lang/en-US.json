@@ -13,5 +13,5 @@
   "auto_pause_screen_off": "Pause when the screen is off",
   "auto_pause_battery": "Pause when on battery",
   "startup": "Start on boot",
-  "already_running_message": "The program is already running in the background!\nCheck the system tray"
+  "already_running_message": "The program is already running in the background!!\nCheck the system tray"
 }
