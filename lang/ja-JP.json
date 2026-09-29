@@ -1,0 +1,17 @@
+{
+  "app_name": "BB 動画壁紙",
+  "language": "言語（再起動が必要）",
+  "play": "再生",
+  "pause": "一時停止",
+  "stop": "停止",
+  "exit": "終了",
+  "open_video_folder": "動画フォルダーを開く",
+  "select_video": "動画を選択",
+  "no_video": "動画がありません",
+  "options": "オプション",
+  "auto_pause_fullscreen": "ウィンドウを最大化したときに自動的に一時停止",
+  "auto_pause_screen_off": "画面がオフのときに自動的に一時停止",
+  "auto_pause_battery": "バッテリー駆動時に自動的に一時停止",
+  "startup": "起動時に自動的に起動",
+  "already_running_message": "プログラムはすでにバックグラウンドで実行されています！！\nシステムトレイを確認してください"
+}

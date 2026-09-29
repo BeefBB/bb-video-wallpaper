@@ -1,0 +1,17 @@
+{
+  "app_name": "BB 视频壁纸",
+  "language": "语言 (需要重启)",
+  "play": "播放",
+  "pause": "暂停",
+  "stop": "停止",
+  "exit": "退出",
+  "open_video_folder": "打开视频文件夹",
+  "select_video": "选择视频",
+  "no_video": "没有视频",
+  "options": "选项",
+  "auto_pause_fullscreen": "窗口最大化时自动暂停",
+  "auto_pause_screen_off": "屏幕关闭时自动暂停",
+  "auto_pause_battery": "未接通电源时自动暂停",
+  "startup": "开机自动启动",
+  "already_running_message": "程序已经在后台运行中!!\n请从系统托盘查看"
+}
