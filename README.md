@@ -82,10 +82,10 @@ Folder/
 
 # VLC
 
-`bb-video-wallpaper-setup.exe` 內含經刪減的 **VLC 3.0.23**, 僅保留 BB 影片桌布 播放影片所需的元件  
+`bb-video-wallpaper-setup.exe` 內含經刪減的 **VLC 3.0.24**, 僅保留 BB 影片桌布 播放影片所需的元件  
 VLC 為開源軟體, 相關版權與授權資訊請參閱 `安裝目錄/VLC/` 中的 VLC 授權文件  
 
 # 版權
 
 BB 影片桌布 採用 MIT License  
-軟體內含的 VLC 3.0.23 相關元件依 VLC 所適用的授權條款提供  
+軟體內含的 VLC 3.0.24 相關元件依 VLC 所適用的授權條款提供  

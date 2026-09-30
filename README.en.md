@@ -82,10 +82,10 @@ Folder/
 
 # VLC
 
-`bb-video-wallpaper-setup.exe` includes a reduced version of **VLC 3.0.23**, containing only the components required by BB Video Wallpaper for video playback.  
+`bb-video-wallpaper-setup.exe` includes a reduced version of **VLC 3.0.24**, containing only the components required by BB Video Wallpaper for video playback.  
 VLC is open-source software. For copyright and license information, please refer to the VLC license documents located in `Installation Directory/VLC/`.  
 
 # Copyright
 
 BB Video Wallpaper is licensed under the MIT License.  
-The included VLC 3.0.23 components are provided under the applicable VLC license terms.  
+The included VLC 3.0.24 components are provided under the applicable VLC license terms.  
