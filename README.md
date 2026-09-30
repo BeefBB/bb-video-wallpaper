@@ -32,7 +32,7 @@
 ### 把 `VLC` 放在適當位置
 
 ```
-bb-yt-downloader/
+bb-video-wallpaper/
  ├─ icon/
  │   └─ bb-video-wallpaper.ico
  ├─ lang/
