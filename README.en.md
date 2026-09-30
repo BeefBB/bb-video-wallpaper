@@ -22,9 +22,9 @@ Store your wallpapers in a single folder, making it easy to switch between them 
 
 # Usage
 
-1. Open the video folder
+1. "Open Video Folder"
 2. Put your videos into the folder
-3. Select a video
+3. "Select Video"
 
 # Want to Build It Yourself?
 
