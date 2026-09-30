@@ -1,10 +1,9 @@
 # BB Video Wallpaper
 
-**[繁體中文](README.md) | English**
+**[繁體中文](README.md) | [简体中文](README.cn.md) | [日本語](README.ja.md) | English**
 
-Play videos as your desktop wallpaper while keeping it lightweight and simple to manage.
-
-Store your wallpapers in a single folder, making it easy to switch between them at any time.
+Play videos as your desktop wallpaper while keeping it lightweight and simple to manage.  
+Store your wallpapers in a single folder, making it easy to switch between them at any time.  
 
 - Lightweight (~200 MB)
 - Various automatic pause options (when a window is maximized, the screen is turned off, or the PC is running on battery)
@@ -62,11 +61,9 @@ pip install -r requirements.txt
 pyinstaller --noconfirm --onedir --noconsole --uac-admin --icon=icon/bb-video-wallpaper.ico --name="BB Video Wallpaper" --add-data "icon;icon" bb-video-wallpaper.py
 ```
 
-After building, the output will be in `./dist`.
-
-Then place `lang/`, `VLC/`, and `libvlc.dll` next to the `.exe`.
-
-The final folder structure should look like this:
+After building, the output will be in `./dist`.  
+Then place `lang/`, `VLC/`, and `libvlc.dll` next to the `.exe`.  
+The final folder structure should look like this:  
 
 ```text
 Folder/
@@ -85,12 +82,10 @@ Folder/
 
 # VLC
 
-`bb-video-wallpaper-setup.exe` includes a reduced version of **VLC 3.0.23**, containing only the components required by BB Video Wallpaper for video playback.
-
-VLC is open-source software. For copyright and license information, please refer to the VLC license documents located in `Installation Directory/VLC/`.
+`bb-video-wallpaper-setup.exe` includes a reduced version of **VLC 3.0.23**, containing only the components required by BB Video Wallpaper for video playback.  
+VLC is open-source software. For copyright and license information, please refer to the VLC license documents located in `Installation Directory/VLC/`.  
 
 # Copyright
 
-BB Video Wallpaper is licensed under the MIT License.
-
-The included VLC 3.0.23 components are provided under the applicable VLC license terms.
+BB Video Wallpaper is licensed under the MIT License.  
+The included VLC 3.0.23 components are provided under the applicable VLC license terms.  

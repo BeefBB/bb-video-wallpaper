@@ -1,8 +1,8 @@
 # BB 影片桌布
 
-**繁體中文 | [English](README.en.md)**
+**繁體中文 | [简体中文](README.cn.md) | [日本語](README.ja.md) | [English](README.en.md)**
 
-能在桌布撥放影片, 同時也是一個極輕量的桌布管理軟體  
+能在桌布播放影片, 同時也是一個極輕量的桌布管理軟體  
 將桌布保存在一個資料夾中, 以便隨時切換  
 
 - 輕量 (~200MB)
@@ -56,6 +56,7 @@ py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
+
 ```bash
 pyinstaller --noconfirm --onedir --noconsole --uac-admin --icon=icon/bb-video-wallpaper.ico --name="BB Video Wallpaper" --add-data "icon;icon" bb-video-wallpaper.py
 ```
@@ -81,8 +82,8 @@ Folder/
 
 # VLC
 
-`bb-video-wallpaper-setup.exe` 內含經刪減的 **VLC 3.0.23** , 僅保留 BB 影片桌布 播放影片所需的元件  
-VLC 為開源軟體, 相關版權與授權資訊請參閱 `安裝目錄/VLC/` 中的 VLC 授權文件
+`bb-video-wallpaper-setup.exe` 內含經刪減的 **VLC 3.0.23**, 僅保留 BB 影片桌布 播放影片所需的元件  
+VLC 為開源軟體, 相關版權與授權資訊請參閱 `安裝目錄/VLC/` 中的 VLC 授權文件  
 
 # 版權
 
