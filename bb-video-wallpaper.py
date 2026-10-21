@@ -105,7 +105,18 @@ def load_config() -> dict:
 
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+            config = json.load(f)
+
+        recent = config.get("recentVideo", [])
+        if isinstance(recent, str):
+            recent = [recent]
+        elif not isinstance(recent, list):
+            recent = []
+
+        config["recentVideo"] = [
+            video for video in recent if isinstance(video, str) and video
+        ]
+        return config
 
     except Exception:
 
@@ -723,7 +734,7 @@ class Wallpaper(QWidget):
         recent = config.get("recentVideo")
 
         if recent:
-            recent_path = VIDEO_DIR / recent
+            recent_path = VIDEO_DIR / recent[0]
 
             if recent_path.is_file():
                 self.current_video = recent_path
@@ -962,7 +973,11 @@ class Wallpaper(QWidget):
         self.current_video = path
 
         config = load_config()
-        config["recentVideo"] = path.relative_to(VIDEO_DIR).as_posix()
+        video = path.relative_to(VIDEO_DIR).as_posix()
+        recent = config.get("recentVideo", [])
+        config["recentVideo"] = [video] + [
+            item for item in recent if item != video
+        ][:4]
         save_config(config)
 
 
