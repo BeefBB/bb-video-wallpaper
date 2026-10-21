@@ -45,6 +45,31 @@ else:
 TASK_NAME = "BBVideoWallpaper"
 
 
+# 唯一的 Mutex 名稱
+MUTEX_NAME = "Global\\BBVideoWallpaper_SingleInstance_Mutex"
+
+def is_already_running():
+    """
+    檢查程式是否已經在執行中
+    """
+
+    # 建立全域 Mutex
+    mutex = win32event.CreateMutex(None, False, MUTEX_NAME)  # type: ignore
+
+
+    # 檢查錯誤碼
+    if win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS:
+        return True, mutex
+
+    return False, mutex
+
+
+# 開啟日誌前先確認單一實例, 避免重複啟動時鎖住日誌檔
+already_running = False
+if __name__ == "__main__":
+    already_running, mutex = is_already_running()
+
+
 APPDATA_DIR = (Path(os.getenv("LOCALAPPDATA")) / "BB" / "BB Video Wallpaper")  # type: ignore
 APPDATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -54,22 +79,23 @@ VIDEO_DIR.mkdir(exist_ok=True)
 CONFIG_PATH = APPDATA_DIR / "config.json"
 
 LOG_DIR = APPDATA_DIR / "log"
-LOG_DIR.mkdir(exist_ok=True)
 
+if not already_running:
+    LOG_DIR.mkdir(exist_ok=True)
 
-handler = RotatingFileHandler(
-    LOG_DIR / "log.log",
-    maxBytes=2 * 1024 * 1024,  # 每份最多約 2 MB
-    backupCount=3,             # 額外保留 3 份舊日誌
-    encoding="utf-8",
-)
+    handler = RotatingFileHandler(
+        LOG_DIR / "log.log",
+        maxBytes=2 * 1024 * 1024,  # 每份最多約 2 MB
+        backupCount=3,             # 額外保留 3 份舊日誌
+        encoding="utf-8",
+    )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[handler],
-)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=[handler],
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -189,25 +215,6 @@ def tr(key: str) -> str:
     """
 
     return LANG.get(key, key)
-
-
-# 唯一的 Mutex 名稱
-MUTEX_NAME = "Global\\BBVideoWallpaper_SingleInstance_Mutex"
-
-def is_already_running():
-    """
-    檢查程式是否已經在執行中
-    """
-
-    # 建立全域 Mutex
-    mutex = win32event.CreateMutex(None, False, MUTEX_NAME)  # type: ignore
-
-
-    # 檢查錯誤碼
-    if win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS:
-        return True, mutex
-
-    return False, mutex
 
 
 def show_already_running_toast():
@@ -1520,6 +1527,8 @@ class Tray:
             tr("add_media"),
             "",
             f'{tr("media_files")} ({patterns})',
+            # Windows 原生選檔視窗不會派送 QTimer, 會中斷自動暫停偵測
+            options=QFileDialog.Option.DontUseNativeDialog,
         )
 
         if not filename:
@@ -1606,9 +1615,6 @@ class Tray:
 
 
 if __name__ == "__main__":
-
-    # 檢查是否重複執行
-    already_running, mutex = is_already_running()
 
     if already_running:
 
