@@ -2,6 +2,9 @@ import sys
 import os
 import subprocess
 import json
+import hashlib
+import shutil
+import tempfile
 from pathlib import Path
 import time
 import locale
@@ -18,8 +21,8 @@ import ctypes
 from ctypes import wintypes
 import psutil
 
-from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog
+from PySide6.QtCore import Qt, QTimer, QThread
 from PySide6.QtGui import QAction, QIcon, QFont
 
 from comtypes import GUID as ComGUID, HRESULT, IUnknown, COMMETHOD
@@ -438,6 +441,124 @@ def get_media() -> list[Path]:
             p.suffix.lower() in SUPPORTED_MEDIA_EXTENSIONS
         )
     ]
+
+
+def calculate_sha256(path: Path) -> bytes:
+    """
+    分塊讀取檔案並計算 SHA-256
+    """
+
+    digest = hashlib.sha256()
+
+    with path.open("rb") as file:
+
+        while True:
+
+            chunk = file.read(1024 * 1024)
+
+            if not chunk:
+                break
+
+            digest.update(chunk)
+
+
+    return digest.digest()
+
+
+def import_media(source: Path) -> Path:
+    """
+    複製檔案至 video/video 資料夾; 重複時回傳現有檔案, 否則複製
+    """
+
+    source = source.resolve(strict=True)
+
+    if (
+        not source.is_file() or
+        source.suffix.lower() not in SUPPORTED_MEDIA_EXTENSIONS
+    ):
+        raise ValueError(source.name)
+
+
+    import_dir = VIDEO_DIR / "video"
+    import_dir.mkdir(parents=True, exist_ok=True)
+
+    source_size = source.stat().st_size
+    source_hash = None
+
+
+    for candidate in sorted(import_dir.iterdir()):
+
+        if (
+            not candidate.is_file() or
+            candidate.suffix.lower() not in SUPPORTED_MEDIA_EXTENSIONS
+        ):
+            continue
+
+        if candidate.samefile(source):
+            return candidate
+
+        if candidate.stat().st_size != source_size:
+            continue
+
+        if source_hash is None:
+            source_hash = calculate_sha256(source)
+
+        if calculate_sha256(candidate) == source_hash:
+            return candidate
+
+
+    # 暫存檔不會出現在影片清單, 完成複製後才改成正式檔名
+    with tempfile.NamedTemporaryFile(
+        dir=import_dir,
+        prefix=".import-",
+        suffix=".tmp",
+        delete=False
+    ) as temp:
+        temp_path = Path(temp.name)
+
+
+    try:
+
+        shutil.copyfile(source, temp_path)
+
+        destination = import_dir / source.name
+        index = 1
+
+        while True:
+
+            try:
+                # Windows 的 rename 不會覆蓋已存在的檔案
+                temp_path.rename(destination)
+                return destination
+
+            except FileExistsError:
+                destination = import_dir / f"{source.stem}({index}){source.suffix}"
+                index += 1
+
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+class MediaImportThread(QThread):
+
+    def __init__(self, source: Path):
+
+        super().__init__()
+
+
+        self.source = source
+        self.destination: Path | None = None
+        self.error = ""
+
+
+    def run(self) -> None:
+
+        try:
+            self.destination = import_media(self.source)
+
+        except Exception as exc:
+            logger.exception("新增影片失敗 - %s", self.source)
+            self.error = str(exc)
 
 
 def create_workerw(parent_hwnd):
@@ -1124,6 +1245,8 @@ class Tray:
 
         self.app = app
         self.wallpaper = wallpaper
+        self.import_thread: MediaImportThread | None = None
+        self.app.aboutToQuit.connect(self.wait_for_import)
 
 
         config = load_config()
@@ -1145,6 +1268,9 @@ class Tray:
         stop_action = QAction(tr("stop"), menu)
         exit_action = QAction(tr("exit"), menu)
 
+
+        self.add_media_action = QAction(tr("add_media"), menu)
+        self.add_media_action.triggered.connect(self.add_media)
 
         open_video_action = QAction(tr("open_video_folder"), menu)
         open_video_action.triggered.connect(self.open_video_folder)
@@ -1217,6 +1343,7 @@ class Tray:
             self.refresh_video_menu
         )
 
+        menu.addAction(self.add_media_action)
         menu.addAction(open_video_action)
 
 
@@ -1376,6 +1503,70 @@ class Tray:
         logger.info("play_from_menu - play")
 
 
+    def add_media(self) -> None:
+
+        if self.import_thread is not None:
+            return
+
+        self.add_media_action.setEnabled(False)
+
+        patterns = " ".join(
+            f"*{ext}"
+            for ext in sorted(SUPPORTED_MEDIA_EXTENSIONS)
+        )
+
+        filename, _ = QFileDialog.getOpenFileName(
+            None,
+            tr("add_media"),
+            "",
+            f'{tr("media_files")} ({patterns})',
+        )
+
+        if not filename:
+            self.add_media_action.setEnabled(True)
+            return
+
+        self.add_media_action.setText(tr("adding_media"))
+
+        self.import_thread = MediaImportThread(Path(filename))
+        self.import_thread.finished.connect(self.finish_import)
+        self.import_thread.start()
+
+
+    def finish_import(self) -> None:
+
+        worker = self.import_thread
+
+        if worker is None:
+            return
+
+        self.import_thread = None
+        worker.deleteLater()
+
+        self.add_media_action.setText(tr("add_media"))
+        self.add_media_action.setEnabled(True)
+
+        if self.wallpaper.is_exiting:
+            return
+
+        if worker.destination is not None:
+            self.play_from_menu(worker.destination)
+            self.refresh_video_menu()
+
+        else:
+            self.tray.showMessage(
+                tr("app_name"),
+                tr("media_add_failed").format(error=worker.error),
+                QSystemTrayIcon.MessageIcon.Warning,
+            )
+
+
+    def wait_for_import(self) -> None:
+
+        if self.import_thread is not None:
+            self.import_thread.wait()
+
+
     def open_video_folder(self) -> None:
         os.startfile(str(VIDEO_DIR))
 
@@ -1439,6 +1630,9 @@ if __name__ == "__main__":
 
     # 建立 Qt 應用程式
     app = QApplication(sys.argv)
+
+    # 系統匣程式在關閉選檔視窗後仍需繼續執行
+    app.setQuitOnLastWindowClosed(False)
 
 
     font = QFont()
