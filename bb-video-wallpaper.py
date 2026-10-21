@@ -1309,6 +1309,14 @@ class Tray:
 
         self.video_menu.clear()
 
+        recent = load_config().get("recentVideo", [])[:5]
+
+        for video in recent:
+            self.add_video_menu_action(VIDEO_DIR / video)
+
+        if recent:
+            self.video_menu.addSeparator()
+
         videos = get_media()
 
         if not videos:
@@ -1318,16 +1326,22 @@ class Tray:
             return
 
         for video in videos:
-            action = QAction(video.stem, self.video_menu)
+            self.add_video_menu_action(video)
 
-            action.triggered.connect(
-                lambda checked=False, v=video: self.play_from_menu(v)
-            )
 
-            action.setCheckable(True)
-            action.setChecked(video == self.wallpaper.current_video)
+    def add_video_menu_action(self, video: Path) -> None:
 
-            self.video_menu.addAction(action)
+        action = QAction(video.stem, self.video_menu)
+
+        action.triggered.connect(
+            lambda checked=False, v=video: self.play_from_menu(v)
+        )
+
+        action.setCheckable(True)
+        action.setChecked(video == self.wallpaper.current_video)
+        action.setEnabled(video.is_file())
+
+        self.video_menu.addAction(action)
 
 
     def set_language(self, language_code: str):
