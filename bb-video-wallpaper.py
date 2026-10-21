@@ -1527,8 +1527,6 @@ class Tray:
             tr("add_media"),
             "",
             f'{tr("media_files")} ({patterns})',
-            # Windows 原生選檔視窗不會派送 QTimer, 會中斷自動暫停偵測
-            options=QFileDialog.Option.DontUseNativeDialog,
         )
 
         if not filename:
