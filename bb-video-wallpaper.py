@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import time
 import locale
+import logging
+from logging.handlers import RotatingFileHandler
 
 import win32gui
 import win32con
@@ -48,6 +50,26 @@ VIDEO_DIR.mkdir(exist_ok=True)
 
 CONFIG_PATH = APPDATA_DIR / "config.json"
 
+LOG_DIR = APPDATA_DIR / "log"
+LOG_DIR.mkdir(exist_ok=True)
+
+
+handler = RotatingFileHandler(
+    LOG_DIR / "log.log",
+    maxBytes=2 * 1024 * 1024,  # 每份最多約 2 MB
+    backupCount=3,             # 額外保留 3 份舊日誌
+    encoding="utf-8",
+)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[handler],
+)
+
+logger = logging.getLogger(__name__)
+
 
 VLC_DIR = next(
     (
@@ -67,10 +89,10 @@ if VLC_DIR:
         ctypes.CDLL(str(VLC_DIR / "libvlccore.dll"))
         ctypes.CDLL(str(VLC_DIR / "libvlc.dll"))
     except OSError:
-        print("VLC 載入失敗")
+        logger.exception("VLC 載入失敗")
         sys.exit(1)
 else:
-    print("找不到 VLC-lite/ 或 VLC/")
+    logger.error("找不到 VLC-lite/ 或 VLC/")
     sys.exit(1)
 
 import vlc
@@ -85,10 +107,9 @@ def load_config() -> dict:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             return json.load(f)
 
-    except Exception as e:
+    except Exception:
 
-        print(f"讀取config時發生錯誤")
-        print(f" > {e}")
+        logger.exception("讀取config時發生錯誤")
 
         return {}
 
@@ -110,9 +131,8 @@ def save_config(config) -> None:
 
         os.replace(temp_path, CONFIG_PATH)
 
-    except Exception as e:
-        print(f"儲存 config 時發生錯誤")
-        print(f" > {e}")
+    except Exception:
+        logger.exception("儲存 config 時發生錯誤")
 
         try:
             if temp_path.exists():
@@ -271,9 +291,8 @@ def run_as_admin() -> None:
         is_admin = False
 
     if not is_admin:
-        print()
-        print("請以系統管理員執行")
-        input("Press Enter...")
+        logger.error("請以系統管理員執行")
+        input("請以系統管理員執行。Press Enter...")
 
         sys.exit()
 
@@ -670,7 +689,7 @@ def is_any_fullscreen(wallpaper_hwnd) -> bool:
 
 
         if has_fullscreen:
-            print(f"Fullscreen - {hwnd} - {window_title}")
+            logger.debug("Fullscreen - %s - %s", hwnd, window_title)
 
 
         return True
@@ -773,7 +792,7 @@ class Wallpaper(QWidget):
             self.set_play_media(self.current_video)
 
             self.media_play()
-            print("init - play")
+            logger.info("init - play")
 
 
         self.timer = QTimer(self)
@@ -857,7 +876,7 @@ class Wallpaper(QWidget):
 
         try:
 
-            print("reattach_to_desktop - start")
+            logger.info("reattach_to_desktop - start")
 
 
             # 紀錄當前播放時間進度
@@ -901,14 +920,13 @@ class Wallpaper(QWidget):
                     self.player.set_time(curr_time)
 
 
-            print("reattach_to_desktop - finish")
+            logger.info("reattach_to_desktop - finish")
             self.is_recreating = False
             self.reattach_retry_count = 0
 
-        except Exception as e:
+        except Exception:
 
-            print(f"重新掛載桌布時發生錯誤")
-            print(f" > {e}")
+            logger.exception("重新掛載桌布時發生錯誤")
 
             self.is_recreating = False
 
@@ -916,11 +934,11 @@ class Wallpaper(QWidget):
 
                 self.reattach_retry_count += 1
 
-                print("正在重試")
+                logger.warning("正在重試重新掛載桌布（第 %s 次）", self.reattach_retry_count)
                 QTimer.singleShot(2000, self.reattach_to_desktop)
 
             else:
-                print("重新掛載桌布失敗")
+                logger.error("重新掛載桌布失敗")
 
 
     def on_screen_changed(self, geometry) -> None:
@@ -932,7 +950,7 @@ class Wallpaper(QWidget):
             return
 
 
-        print(f"screen_changed - {geometry}")
+        logger.info("screen_changed - %s", geometry)
         QTimer.singleShot(200, self.reattach_to_desktop)
 
 
@@ -952,12 +970,12 @@ class Wallpaper(QWidget):
 
 
         self.media_stop()
-        print("set_play_media - stop")
+        logger.debug("set_play_media - stop")
 
 
         media = self.instance.media_new(str(path))  # type: ignore
         self.player.set_media(media)
-        print(f"set_play_media - {path}")
+        logger.info("set_play_media - %s", path)
 
         # 裁切填滿螢幕
         self.player.video_set_crop_geometry(self.get_screen_aspect_ratio())
@@ -965,19 +983,19 @@ class Wallpaper(QWidget):
 
         # 讓畫面跑出來
         self.media_play()
-        print("set_play_media - play")
+        logger.debug("set_play_media - play")
 
 
         # 回復原樣
         if previous_play_state == "pause":
 
             self.media_pause()
-            print("set_play_media - pause")
+            logger.debug("set_play_media - pause")
 
         elif previous_play_state == "stop":
 
             self.media_stop()
-            print("set_play_media - stop")
+            logger.debug("set_play_media - stop")
 
 
     def attach_to_desktop(self) -> None:
@@ -1002,7 +1020,7 @@ class Wallpaper(QWidget):
         )
 
         if not self.power_notify:
-            print("螢幕電源通知註冊失敗")
+            logger.error("螢幕電源通知註冊失敗")
 
 
     def get_screen_aspect_ratio(self) -> str:
@@ -1022,7 +1040,7 @@ class Wallpaper(QWidget):
         """
 
         self.fullscreen_detection_ready = True
-        print("fullscreen detection - ready")
+        logger.debug("fullscreen detection - ready")
 
 
     def check_auto_pause(self) -> None:
@@ -1059,13 +1077,13 @@ class Wallpaper(QWidget):
             if self.play_state == "play":
 
                 self.media_pause()
-                print("auto_pause - pause")
+                logger.info("auto_pause - pause")
 
         else:
             if self.play_state == "pause":
 
                 self.media_play()
-                print("auto_pause - play")
+                logger.info("auto_pause - play")
 
 
     def unregister_power_notification(self) -> None:
@@ -1078,9 +1096,8 @@ class Wallpaper(QWidget):
             try:
                 ctypes.windll.user32.UnregisterPowerSettingNotification(self.power_notify)
 
-            except Exception as e:
-                print(f"取消註冊電源通知時發生錯誤")
-                print(f" > {e}")
+            except Exception:
+                logger.exception("取消註冊電源通知時發生錯誤")
 
             finally:
                 self.power_notify = None
@@ -1225,7 +1242,7 @@ class Tray:
 
             self.wallpaper.media_play()
             self.wallpaper.enable_auto_pause = True
-            print("manual - play")
+            logger.info("manual - play")
 
 
     def pause(self) -> None:
@@ -1238,14 +1255,14 @@ class Tray:
                     self.wallpaper.media_pause()
 
         self.wallpaper.enable_auto_pause = False
-        print("manual - pause")
+        logger.info("manual - pause")
 
 
     def stop(self) -> None:
 
         self.wallpaper.media_stop()
         self.wallpaper.enable_auto_pause = False
-        print("manual - stop")
+        logger.info("manual - stop")
 
 
     def refresh_language_menu(self) -> None:
@@ -1306,7 +1323,7 @@ class Tray:
         self.current_language_code = language_code
         load_language(language_code)
 
-        print(f"set_language - {language_code}")
+        logger.info("set_language - %s", language_code)
 
 
     def play_from_menu(self, path: Path):
@@ -1314,7 +1331,7 @@ class Tray:
         self.wallpaper.set_play_media(path)
         self.wallpaper.media_play()
         self.wallpaper.enable_auto_pause = True
-        print("play_from_menu - play")
+        logger.info("play_from_menu - play")
 
 
     def open_video_folder(self) -> None:
@@ -1348,12 +1365,11 @@ class Tray:
             self.wallpaper.player.release()
             self.wallpaper.instance.release()
 
-        except Exception as e:
-            print(f"退出時發生錯誤")
-            print(f" > {e}")
+        except Exception:
+            logger.exception("退出時發生錯誤")
 
         self.app.quit()
-        print("exit")
+        logger.info("exit")
 
 
 if __name__ == "__main__":
