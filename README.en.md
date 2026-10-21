@@ -6,6 +6,7 @@ Play videos as your desktop wallpaper while keeping it lightweight and simple to
 Store your wallpapers in a single folder, making it easy to switch between them at any time.  
 
 - Lightweight (~200 MB)
+- Keep a history of recently used wallpapers
 - Various automatic pause options (when a window is maximized, the screen is turned off, or the PC is running on battery)
 - Optional launch on system startup
 
@@ -21,9 +22,18 @@ Store your wallpapers in a single folder, making it easy to switch between them 
 
 # Usage
 
-1. "Open Video Folder"
-2. Put your videos into the folder
-3. "Select Video"
+1. Right-click the system tray icon and choose "Add Video"
+2. Select a video or image
+3. Use "Select Video" to switch wallpapers afterward
+
+You can also use "Open Video Folder" to add videos or images manually, then choose one from "Select Video".  
+
+> "Clear History" clears recent history while keeping the current wallpaper. It does not delete any files.  
+
+## Logs
+
+If you encounter a problem, check `%LOCALAPPDATA%\BB\BB Video Wallpaper\log\log.log`.  
+Logs record operations, warnings, and errors. Caught exceptions include full stack traces.  
 
 # Want to Build It Yourself?
 
