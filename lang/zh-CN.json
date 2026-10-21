@@ -7,6 +7,7 @@
   "exit": "退出",
   "open_video_folder": "打开视频文件夹",
   "select_video": "选择视频",
+  "clear_recent_videos": "清除记录",
   "no_video": "没有视频",
   "options": "选项",
   "auto_pause_fullscreen": "窗口最大化时自动暂停",

@@ -1315,6 +1315,10 @@ class Tray:
             self.add_video_menu_action(VIDEO_DIR / video)
 
         if recent:
+            clear_action = QAction(tr("clear_recent_videos"), self.video_menu)
+            clear_action.setEnabled(len(recent) > 1)
+            clear_action.triggered.connect(self.clear_recent_videos)
+            self.video_menu.addAction(clear_action)
             self.video_menu.addSeparator()
 
         videos = get_media()
@@ -1327,6 +1331,15 @@ class Tray:
 
         for video in videos:
             self.add_video_menu_action(video)
+
+
+    def clear_recent_videos(self) -> None:
+
+        config = load_config()
+        config["recentVideo"] = config.get("recentVideo", [])[:1]
+        save_config(config)
+
+        logger.info("clear_recent_videos")
 
 
     def add_video_menu_action(self, video: Path) -> None:
