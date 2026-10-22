@@ -4,7 +4,7 @@
 #define ProjectDir ".."
 #define MyAppName "BB Video Wallpaper"
 #define MyAppNameC "BB 影片桌布"
-#define MyAppVersion "1.11.1"
+#define MyAppVersion "1.12.0"
 #define MyAppPublisher "BeefBB"
 #define MyAppExeName "BB Video Wallpaper.exe"
 
