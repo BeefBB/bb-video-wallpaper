@@ -127,31 +127,138 @@ else:
 import vlc
 
 
-def load_config() -> dict:
+# 設定檔
+CONFIG_DEFAULTS = {
+    "autoPauseIfFullscreen": True,
+    "autoPauseIfScreenOff": True,
+    "autoPauseIfOnBattery": False,
+}
 
-    if not CONFIG_PATH.exists():
-        return {}
+SUPPORTED_LANGUAGES = {
+    "繁體中文": "zh-TW",
+    "简体中文": "zh-CN",
+    "日本語": "ja-JP",
+    "English": "en-US",
+}
+
+
+def validate_config(raw) -> dict:
+    """
+    逐欄檢查設定, 異常欄位使用預設值
+    """
+
+    if not isinstance(raw, dict):
+        logger.warning("設定檔最外層必須是物件, 使用預設設定")
+        raw = {}
+
+    config = raw.copy()
+
+
+    # 自動暫停選項只接受布林值
+    for key, default in CONFIG_DEFAULTS.items():
+
+        if key not in config:
+            config[key] = default
+
+        elif not isinstance(config[key], bool):
+            logger.warning("設定欄位 %s 型別錯誤, 使用預設值", key)
+            config[key] = default
+
+
+    # 未指定語言時使用系統語言, 不支援時使用繁體中文
+    if "language" not in config:
+
+        try:
+            language = str(locale.getdefaultlocale()[0]).replace("_", "-")
+
+        except (ValueError, TypeError):
+            language = "zh-TW"
+
+        if language not in SUPPORTED_LANGUAGES.values():
+            language = "zh-TW"
+
+        config["language"] = language
+
+    language = config["language"]
+
+    if (
+        not isinstance(language, str) or
+        language not in SUPPORTED_LANGUAGES.values()
+    ):
+        logger.warning("設定欄位 language 無效, 使用繁體中文")
+        config["language"] = "zh-TW"
+
+
+    # 相容舊版單筆紀錄, 保留影片資料夾內的相對路徑
+    recent = config.get("recentVideo", [])
+
+    if isinstance(recent, str):
+        recent = [recent]
+
+    normalized_recent = []
+    seen = set()
+
+    if isinstance(recent, list):
+
+        video_root = VIDEO_DIR.resolve()
+
+        for video in recent:
+
+            if not isinstance(video, str) or not video or "\0" in video:
+                continue
+
+            try:
+                path = Path(video)
+
+                if (
+                    path.drive or
+                    path.root or
+                    not path.parts or
+                    ".." in path.parts
+                ):
+                    continue
+
+                if not (video_root / path).resolve().is_relative_to(video_root):
+                    continue
+
+            except (OSError, ValueError, RuntimeError):
+                continue
+
+            if path not in seen:
+                seen.add(path)
+                normalized_recent.append(path.as_posix())
+
+                if len(normalized_recent) == 5:
+                    break
+
+    if normalized_recent != recent:
+        logger.warning("設定欄位 recentVideo 已移除無效或重複項目, 最多保留 5 筆")
+
+    config["recentVideo"] = normalized_recent
+
+
+    return config
+
+
+def load_config() -> dict:
+    """
+    讀取並驗證設定, 不自動寫回修正內容
+    """
 
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             config = json.load(f)
 
-        recent = config.get("recentVideo", [])
-        if isinstance(recent, str):
-            recent = [recent]
-        elif not isinstance(recent, list):
-            recent = []
-
-        config["recentVideo"] = [
-            video for video in recent if isinstance(video, str) and video
-        ]
-        return config
+    except FileNotFoundError:
+        config = {}
 
     except Exception:
 
         logger.exception("讀取config時發生錯誤")
 
-        return {}
+        config = {}
+
+    return validate_config(config)
 
 
 def save_config(config) -> None:
@@ -194,7 +301,7 @@ def load_language(language_code: str="") -> dict:
         save_config(config)
 
     else:
-        language_code = config.get("language", str(locale.getdefaultlocale()[0]))
+        language_code = config["language"]
 
 
     path = LANG_DIR / f"{language_code}.json"
@@ -1412,14 +1519,7 @@ class Tray:
 
         self.options_language_menu.clear()
 
-        all_language_dict = {
-            "繁體中文": "zh-TW",
-            "简体中文": "zh-CN",
-            "日本語": "ja-JP",
-            "English": "en-US",
-        }
-
-        for language_display, language_code in all_language_dict.items():
+        for language_display, language_code in SUPPORTED_LANGUAGES.items():
 
             action = QAction(language_display, self.options_language_menu)
 
