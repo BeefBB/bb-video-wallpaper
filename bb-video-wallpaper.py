@@ -24,7 +24,7 @@ from ctypes import wintypes
 import psutil
 
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog, QLabel
-from PySide6.QtCore import Qt, QTimer, QThread
+from PySide6.QtCore import Qt, QTimer, QThread, Signal, Slot
 from PySide6.QtGui import QAction, QIcon, QFont, QPixmap, QCursor, QImage, QImageReader
 
 from comtypes import GUID as ComGUID, HRESULT, IUnknown, COMMETHOD
@@ -928,8 +928,11 @@ def ensure_thumbnail(path: Path, cancelled) -> Path:
 
 class ThumbnailThread(QThread):
     """
-    依序處理懸停要求, 同一路徑在排隊或處理中時不重複加入
+    依序處理縮圖要求, 同一路徑在排隊或處理中時不重複加入
     """
+
+    thumbnail_ready = Signal(str, QImage)
+
 
     def __init__(self, parent=None):
 
@@ -969,8 +972,15 @@ class ThumbnailThread(QThread):
             if path is None or self.isInterruptionRequested():
                 break
 
+            image = QImage()
+
             try:
-                ensure_thumbnail(path, self.isInterruptionRequested)
+
+                thumbnail_path = ensure_thumbnail(path, self.isInterruptionRequested)
+                image = QImage(str(thumbnail_path))
+
+                if image.isNull():
+                    raise RuntimeError("無法讀取縮圖")
 
             except InterruptedError:
                 break
@@ -981,6 +991,9 @@ class ThumbnailThread(QThread):
             finally:
                 with self.pending_lock:
                     self.pending.discard(path)
+
+            if not image.isNull() and not self.isInterruptionRequested():
+                self.thumbnail_ready.emit(str(path), image)
 
 
     def stop(self) -> None:
@@ -1687,7 +1700,7 @@ class Wallpaper(QWidget):
 
 class MediaPreviewMenu(QMenu):
     """
-    桌布選單的懸停預覽, 暫時共用 test.png
+    桌布選單的懸停預覽, 在背景驗證並載入對應縮圖
     """
 
     def __init__(self, title: str, parent=None):
@@ -1703,19 +1716,31 @@ class MediaPreviewMenu(QMenu):
         self.preview.setStyleSheet("background: #202020; padding: 4px;")
 
 
-        # 暫時共用測試圖片
+        # 縮圖驗證與產生期間使用的載入圖片
         if getattr(sys, "frozen", False):
             resource_dir = Path(sys._MEIPASS)
 
         else:
             resource_dir = ROOT_DIR
 
-        self.preview_pixmap = QPixmap(str(resource_dir / "test.png"))
+        self.loading_pixmap = QPixmap(str(resource_dir / "test.png"))
+
+        if self.loading_pixmap.isNull():
+
+            self.loading_pixmap = QPixmap(300, 169)
+            self.loading_pixmap.fill(Qt.GlobalColor.darkGray)
+
+        self.loading_pixmap = self.loading_pixmap.scaledToWidth(
+            300, Qt.TransformationMode.SmoothTransformation
+        )
+
+        self.preview_pixmap = self.loading_pixmap
         self.preview_mode = False
         self.preview_action = None
 
 
         self.thumbnail_thread = ThumbnailThread(self)
+        self.thumbnail_thread.thumbnail_ready.connect(self.update_preview)
 
 
         # 首次懸停 0.5 秒後顯示預覽
@@ -1804,9 +1829,42 @@ class MediaPreviewMenu(QMenu):
         ):
             return
 
+        # 切換項目時先換成載入圖片, 不保留上一個項目的縮圖
+        self.preview_pixmap = self.loading_pixmap
+        self.display_preview()
+
         self.thumbnail_thread.request(Path(action.data()))
 
-        if self.preview_pixmap.isNull():
+
+    @Slot(str, QImage)
+    def update_preview(self, media_path: str, image: QImage) -> None:
+
+        action = self.preview_action
+
+        if (
+            not self.preview_mode or
+            action is None or
+            Path(action.data()) != Path(media_path) or
+            image.isNull()
+        ):
+            return
+
+        # 背景只傳遞 QImage, QPixmap 在主執行緒建立
+        self.preview_pixmap = QPixmap.fromImage(image)
+        self.display_preview()
+
+
+    def display_preview(self) -> None:
+
+        action = self.preview_action
+        cursor = QCursor.pos()
+
+        if (
+            not self.isVisible() or
+            action is None or
+            self.actionAt(self.mapFromGlobal(cursor)) != action or
+            self.preview_pixmap.isNull()
+        ):
             return
 
 
@@ -2150,6 +2208,8 @@ class Tray:
             return
 
         if worker.destination is not None:
+
+            self.media_menu.thumbnail_thread.request(worker.destination)
             self.play_from_menu(worker.destination)
             self.refresh_media_menu()
 
