@@ -21,9 +21,9 @@ import ctypes
 from ctypes import wintypes
 import psutil
 
-from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog
+from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog, QLabel
 from PySide6.QtCore import Qt, QTimer, QThread
-from PySide6.QtGui import QAction, QIcon, QFont
+from PySide6.QtGui import QAction, QIcon, QFont, QPixmap, QCursor
 
 from comtypes import GUID as ComGUID, HRESULT, IUnknown, COMMETHOD
 from comtypes.client import CreateObject
@@ -1347,6 +1347,129 @@ class Wallpaper(QWidget):
                 self.power_notify = None
 
 
+class MediaPreviewMenu(QMenu):
+    """
+    桌布選單的懸停預覽, 暫時共用 test.png
+    """
+
+    def __init__(self, title: str, parent=None):
+
+        super().__init__(title, parent)
+        self.setMouseTracking(True)
+
+        self.preview = QLabel(self, Qt.WindowType.ToolTip)
+        self.preview.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.preview.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.preview.setStyleSheet("background: #202020; padding: 4px;")
+
+        resource_dir = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else ROOT_DIR
+        self.preview_pixmap = QPixmap(str(resource_dir / "test.png"))
+        self.preview_mode = False
+        self.preview_action = None
+
+        self.preview_timer = QTimer(self)
+        self.preview_timer.setSingleShot(True)
+        self.preview_timer.setInterval(500)
+        self.preview_timer.timeout.connect(self.show_preview)
+
+        self.reset_timer = QTimer(self)
+        self.reset_timer.setSingleShot(True)
+        self.reset_timer.setInterval(1000)
+        self.reset_timer.timeout.connect(self.reset_preview)
+
+
+    def mouseMoveEvent(self, event):
+
+        super().mouseMoveEvent(event)
+        action = self.actionAt(event.position().toPoint())
+
+        if action is None or not action.isEnabled() or action.data() is None:
+            self.leave_preview()
+            return
+
+        self.reset_timer.stop()
+
+        if action == self.preview_action:
+            return
+
+        self.preview_action = action
+
+        if self.preview_mode:
+            self.show_preview()
+        else:
+            self.preview_timer.start()
+
+
+    def leaveEvent(self, event):
+
+        self.leave_preview()
+        super().leaveEvent(event)
+
+
+    def hideEvent(self, event):
+
+        self.reset_preview()
+        super().hideEvent(event)
+
+
+    def leave_preview(self):
+
+        self.preview_timer.stop()
+        self.preview_action = None
+        self.preview.hide()
+
+        if self.preview_mode and not self.reset_timer.isActive():
+            self.reset_timer.start()
+
+
+    def reset_preview(self):
+
+        self.preview_timer.stop()
+        self.reset_timer.stop()
+        self.preview_action = None
+        self.preview_mode = False
+        self.preview.hide()
+
+
+    def show_preview(self):
+
+        action = self.preview_action
+        cursor = QCursor.pos()
+
+        if (
+            not self.isVisible() or
+            action is None or
+            self.actionAt(self.mapFromGlobal(cursor)) != action or
+            self.preview_pixmap.isNull()
+        ):
+            return
+
+        screen = QApplication.screenAt(cursor) or self.screen()
+        available = screen.availableGeometry()
+        pixmap = self.preview_pixmap.scaled(
+            min(300, max(1, available.width() - 8)),
+            max(1, available.height() - 8),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.preview.setPixmap(pixmap)
+        self.preview.adjustSize()
+
+        menu_rect = self.frameGeometry()
+        x = menu_rect.right() + 8
+
+        if x + self.preview.width() > available.right() + 1:
+            x = menu_rect.left() - self.preview.width() - 8
+
+        y = self.mapToGlobal(self.actionGeometry(action).topLeft()).y()
+        x = max(available.left(), min(x, available.right() - self.preview.width() + 1))
+        y = max(available.top(), min(y, available.bottom() - self.preview.height() + 1))
+
+        self.preview.move(x, y)
+        self.preview.show()
+        self.preview_mode = True
+
+
 class Tray:
 
     def __init__(self, app, wallpaper):
@@ -1446,7 +1569,8 @@ class Tray:
         menu.addSeparator()
 
 
-        self.media_menu = menu.addMenu(tr("select_video"))
+        self.media_menu = MediaPreviewMenu(tr("select_video"), menu)
+        menu.addMenu(self.media_menu)
         self.media_menu.aboutToShow.connect(
             self.refresh_media_menu
         )
@@ -1535,6 +1659,7 @@ class Tray:
 
     def refresh_media_menu(self) -> None:
 
+        self.media_menu.reset_preview()
         self.media_menu.clear()
 
         recent = load_config().get("recentVideo", [])[:5]
@@ -1573,6 +1698,7 @@ class Tray:
     def add_media_menu_action(self, media_path: Path) -> None:
 
         action = QAction(media_path.name, self.media_menu)
+        action.setData(str(media_path))
 
         action.triggered.connect(
             lambda checked=False, v=media_path: self.play_from_menu(v)
