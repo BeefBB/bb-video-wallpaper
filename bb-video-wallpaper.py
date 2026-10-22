@@ -73,8 +73,8 @@ if __name__ == "__main__":
 APPDATA_DIR = (Path(os.getenv("LOCALAPPDATA")) / "BB" / "BB Video Wallpaper")  # type: ignore
 APPDATA_DIR.mkdir(parents=True, exist_ok=True)
 
-VIDEO_DIR = APPDATA_DIR / "video"
-VIDEO_DIR.mkdir(exist_ok=True)
+MEDIA_DIR = APPDATA_DIR / "video"
+MEDIA_DIR.mkdir(exist_ok=True)
 
 CONFIG_PATH = APPDATA_DIR / "config.json"
 
@@ -189,7 +189,7 @@ def validate_config(raw) -> dict:
         config["language"] = "zh-TW"
 
 
-    # 相容舊版單筆紀錄, 保留影片資料夾內的相對路徑
+    # 相容舊版單筆紀錄, 保留媒體資料夾內的相對路徑
     recent = config.get("recentVideo", [])
 
     if isinstance(recent, str):
@@ -200,15 +200,15 @@ def validate_config(raw) -> dict:
 
     if isinstance(recent, list):
 
-        video_root = VIDEO_DIR.resolve()
+        media_root = MEDIA_DIR.resolve()
 
-        for video in recent:
+        for media_path in recent:
 
-            if not isinstance(video, str) or not video or "\0" in video:
+            if not isinstance(media_path, str) or not media_path or "\0" in media_path:
                 continue
 
             try:
-                path = Path(video)
+                path = Path(media_path)
 
                 if (
                     path.drive or
@@ -218,7 +218,7 @@ def validate_config(raw) -> dict:
                 ):
                     continue
 
-                if not (video_root / path).resolve().is_relative_to(video_root):
+                if not (media_root / path).resolve().is_relative_to(media_root):
                     continue
 
             except (OSError, ValueError, RuntimeError):
@@ -544,12 +544,12 @@ def task_exists() -> bool:
 
 def get_media() -> list[Path]:
     """
-    從 VIDEO_DIR 取得媒體
+    從 MEDIA_DIR 取得媒體
     """
 
     return [
         p
-        for p in sorted(VIDEO_DIR.rglob("*"), key=lambda p: p.relative_to(VIDEO_DIR).as_posix().casefold())
+        for p in sorted(MEDIA_DIR.rglob("*"), key=lambda p: p.relative_to(MEDIA_DIR).as_posix().casefold())
         if (
             p.is_file() and
             p.suffix.lower() in SUPPORTED_MEDIA_EXTENSIONS
@@ -593,7 +593,7 @@ def import_media(source: Path) -> Path:
         raise ValueError(source.name)
 
 
-    import_dir = VIDEO_DIR / "video"
+    import_dir = MEDIA_DIR / "video"
     import_dir.mkdir(parents=True, exist_ok=True)
 
     source_size = source.stat().st_size
@@ -621,7 +621,7 @@ def import_media(source: Path) -> Path:
             return candidate
 
 
-    # 暫存檔不會出現在影片清單, 完成複製後才改成正式檔名
+    # 暫存檔不會出現在媒體清單, 完成複製後才改成正式檔名
     with tempfile.NamedTemporaryFile(
         dir=import_dir,
         prefix=".import-",
@@ -671,7 +671,7 @@ class MediaImportThread(QThread):
             self.destination = import_media(self.source)
 
         except Exception as exc:
-            logger.exception("新增影片失敗 - %s", self.source)
+            logger.exception("新增媒體失敗 - %s", self.source)
             self.error = str(exc)
 
 
@@ -960,8 +960,8 @@ class Wallpaper(QWidget):
         self.is_exiting = False
 
 
-        self.current_video: Path | None = None
-        videos = get_media()
+        self.current_media: Path | None = None
+        media_files = get_media()
 
 
         config = load_config()
@@ -969,13 +969,13 @@ class Wallpaper(QWidget):
         recent = config.get("recentVideo")
 
         if recent:
-            recent_path = VIDEO_DIR / recent[0]
+            recent_path = MEDIA_DIR / recent[0]
 
             if recent_path.is_file():
-                self.current_video = recent_path
+                self.current_media = recent_path
 
-        if not self.current_video and videos:
-            self.current_video = videos[0]
+        if not self.current_media and media_files:
+            self.current_media = media_files[0]
 
 
         # 建立視窗
@@ -1033,9 +1033,9 @@ class Wallpaper(QWidget):
 
 
         # 播放
-        if self.current_video:
+        if self.current_media:
 
-            self.set_play_media(self.current_video)
+            self.set_play_media(self.current_media)
 
             self.media_play()
             logger.info("init - play")
@@ -1158,9 +1158,9 @@ class Wallpaper(QWidget):
 
 
             # 恢復播放與時間進度
-            if self.current_video:
+            if self.current_media:
 
-                self.set_play_media(self.current_video)
+                self.set_play_media(self.current_media)
 
                 if curr_time > 0:
                     self.player.set_time(curr_time)
@@ -1205,13 +1205,13 @@ class Wallpaper(QWidget):
         把媒體檔案給VLC
         """
 
-        self.current_video = path
+        self.current_media = path
 
         config = load_config()
-        video = path.relative_to(VIDEO_DIR).as_posix()
+        media_path = path.relative_to(MEDIA_DIR).as_posix()
         recent = config.get("recentVideo", [])
-        config["recentVideo"] = [video] + [
-            item for item in recent if item != video
+        config["recentVideo"] = [media_path] + [
+            item for item in recent if item != media_path
         ][:4]
         save_config(config)
 
@@ -1306,7 +1306,7 @@ class Wallpaper(QWidget):
             return
 
         # 圖片不需要暫停
-        if self.current_video and self.current_video.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
+        if self.current_media and self.current_media.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
             return
 
 
@@ -1380,8 +1380,8 @@ class Tray:
         self.add_media_action = QAction(tr("add_media"), menu)
         self.add_media_action.triggered.connect(self.add_media)
 
-        open_video_action = QAction(tr("open_video_folder"), menu)
-        open_video_action.triggered.connect(self.open_video_folder)
+        open_media_action = QAction(tr("open_video_folder"), menu)
+        open_media_action.triggered.connect(self.open_media_folder)
 
 
         auto_pause_if_fullscreen_action = QAction(tr("auto_pause_fullscreen"), menu)
@@ -1446,13 +1446,13 @@ class Tray:
         menu.addSeparator()
 
 
-        self.video_menu = menu.addMenu(tr("select_video"))
-        self.video_menu.aboutToShow.connect(
-            self.refresh_video_menu
+        self.media_menu = menu.addMenu(tr("select_video"))
+        self.media_menu.aboutToShow.connect(
+            self.refresh_media_menu
         )
 
         menu.addAction(self.add_media_action)
-        menu.addAction(open_video_action)
+        menu.addAction(open_media_action)
 
 
         menu.addSeparator()
@@ -1488,7 +1488,7 @@ class Tray:
 
 
     def play(self) -> None:
-        if self.wallpaper.current_video:
+        if self.wallpaper.current_media:
 
             self.wallpaper.media_play()
             self.wallpaper.enable_auto_pause = True
@@ -1496,9 +1496,9 @@ class Tray:
 
 
     def pause(self) -> None:
-        if self.wallpaper.current_video:
+        if self.wallpaper.current_media:
 
-            if self.wallpaper.current_video.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS:
+            if self.wallpaper.current_media.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS:
 
                 if self.wallpaper.play_state == "play":
 
@@ -1533,56 +1533,56 @@ class Tray:
             self.options_language_menu.addAction(action)
 
 
-    def refresh_video_menu(self) -> None:
+    def refresh_media_menu(self) -> None:
 
-        self.video_menu.clear()
+        self.media_menu.clear()
 
         recent = load_config().get("recentVideo", [])[:5]
 
-        for video in recent:
-            self.add_video_menu_action(VIDEO_DIR / video)
+        for media_path in recent:
+            self.add_media_menu_action(MEDIA_DIR / media_path)
 
         if recent:
-            clear_action = QAction(tr("clear_recent_videos"), self.video_menu)
+            clear_action = QAction(tr("clear_recent_videos"), self.media_menu)
             clear_action.setEnabled(len(recent) > 1)
-            clear_action.triggered.connect(self.clear_recent_videos)
-            self.video_menu.addAction(clear_action)
-            self.video_menu.addSeparator()
+            clear_action.triggered.connect(self.clear_recent_media)
+            self.media_menu.addAction(clear_action)
+            self.media_menu.addSeparator()
 
-        videos = get_media()
+        media_files = get_media()
 
-        if not videos:
-            action = QAction(tr("no_video"), self.video_menu)
+        if not media_files:
+            action = QAction(tr("no_video"), self.media_menu)
             action.setEnabled(False)
-            self.video_menu.addAction(action)
+            self.media_menu.addAction(action)
             return
 
-        for video in videos:
-            self.add_video_menu_action(video)
+        for media_path in media_files:
+            self.add_media_menu_action(media_path)
 
 
-    def clear_recent_videos(self) -> None:
+    def clear_recent_media(self) -> None:
 
         config = load_config()
         config["recentVideo"] = config.get("recentVideo", [])[:1]
         save_config(config)
 
-        logger.info("clear_recent_videos")
+        logger.info("clear_recent_media")
 
 
-    def add_video_menu_action(self, video: Path) -> None:
+    def add_media_menu_action(self, media_path: Path) -> None:
 
-        action = QAction(video.stem, self.video_menu)
+        action = QAction(media_path.stem, self.media_menu)
 
         action.triggered.connect(
-            lambda checked=False, v=video: self.play_from_menu(v)
+            lambda checked=False, v=media_path: self.play_from_menu(v)
         )
 
         action.setCheckable(True)
-        action.setChecked(video == self.wallpaper.current_video)
-        action.setEnabled(video.is_file())
+        action.setChecked(media_path == self.wallpaper.current_media)
+        action.setEnabled(media_path.is_file())
 
-        self.video_menu.addAction(action)
+        self.media_menu.addAction(action)
 
 
     def set_language(self, language_code: str):
@@ -1652,7 +1652,7 @@ class Tray:
 
         if worker.destination is not None:
             self.play_from_menu(worker.destination)
-            self.refresh_video_menu()
+            self.refresh_media_menu()
 
         else:
             self.tray.showMessage(
@@ -1668,8 +1668,8 @@ class Tray:
             self.import_thread.wait()
 
 
-    def open_video_folder(self) -> None:
-        os.startfile(str(VIDEO_DIR))
+    def open_media_folder(self) -> None:
+        os.startfile(str(MEDIA_DIR))
 
 
     def set_auto_pause_option(self, config_key: str, attribute: str, checked: bool) -> None:

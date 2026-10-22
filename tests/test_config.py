@@ -77,12 +77,12 @@ class ConfigTests(unittest.TestCase):
         self.addCleanup(self.temp_dir.cleanup)
 
         self.config_path = Path(self.temp_dir.name) / "config.json"
-        self.video_dir = Path(self.temp_dir.name) / "video"
-        self.video_dir.mkdir()
+        self.media_dir = Path(self.temp_dir.name) / "video"
+        self.media_dir.mkdir()
 
         namespace.update(
             CONFIG_PATH=self.config_path,
-            VIDEO_DIR=self.video_dir,
+            MEDIA_DIR=self.media_dir,
             LANG_DIR=SOURCE_PATH.parent / "lang"
         )
 
@@ -188,7 +188,7 @@ class ConfigTests(unittest.TestCase):
             ".",
             "../outside.mp4",
             "video/../../outside.mp4",
-            str(self.video_dir / "absolute.mp4"),
+            str(self.media_dir / "absolute.mp4"),
             "bad\0.mp4",
             "video/first.mp4",
             "missing.mp4",
