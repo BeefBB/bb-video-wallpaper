@@ -5,7 +5,9 @@ import json
 import hashlib
 import shutil
 import tempfile
+import threading
 from pathlib import Path
+from queue import Queue
 import time
 import locale
 import logging
@@ -23,7 +25,7 @@ import psutil
 
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog, QLabel
 from PySide6.QtCore import Qt, QTimer, QThread
-from PySide6.QtGui import QAction, QIcon, QFont, QPixmap, QCursor
+from PySide6.QtGui import QAction, QIcon, QFont, QPixmap, QCursor, QImage, QImageReader
 
 from comtypes import GUID as ComGUID, HRESULT, IUnknown, COMMETHOD
 from comtypes.client import CreateObject
@@ -75,6 +77,8 @@ APPDATA_DIR.mkdir(parents=True, exist_ok=True)
 
 MEDIA_DIR = APPDATA_DIR / "video"
 MEDIA_DIR.mkdir(exist_ok=True)
+
+THUMBNAIL_DIR = APPDATA_DIR / "thumbnails"
 
 CONFIG_PATH = APPDATA_DIR / "config.json"
 
@@ -651,6 +655,340 @@ def import_media(source: Path) -> Path:
 
     finally:
         temp_path.unlink(missing_ok=True)
+
+
+def fast_hash(path: Path) -> str:
+    """
+    以大小與頭尾各 16KB 計算縮圖識別碼
+    """
+
+    digest = hashlib.sha256()
+
+    with path.open("rb") as file:
+
+        size = os.fstat(file.fileno()).st_size
+        digest.update(str(size).encode("ascii"))
+
+        if size <= 32 * 1024:
+            digest.update(file.read())
+
+        else:
+
+            digest.update(file.read(16 * 1024))
+            file.seek(-16 * 1024, os.SEEK_END)
+            digest.update(file.read(16 * 1024))
+
+
+    return digest.hexdigest()[:8]
+
+
+def create_video_thumbnail(path: Path, cancelled) -> QImage:
+    """
+    使用獨立的靜音 VLC 播放器, 將第一個解碼畫面複製到記憶體, 不建立視窗
+    """
+
+    ready = threading.Event()
+    frame = {}
+    uint_pointer = ctypes.POINTER(ctypes.c_uint)
+
+
+    # chroma 是可寫入的四位元組指標; 不使用會轉成 Python bytes 的 c_char_p
+    @ctypes.CFUNCTYPE(
+        ctypes.c_uint,
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.c_void_p,
+        uint_pointer,
+        uint_pointer,
+        uint_pointer,
+        uint_pointer
+    )
+    def setup(opaque, chroma, width, height, pitches, lines):
+
+        try:
+
+            scaled_height = max(1, round(300 * height[0] / width[0]))
+            width[0], height[0] = 300, scaled_height
+            pitches[0] = (300 * 4 + 31) & ~31
+            lines[0] = (scaled_height + 31) & ~31
+            ctypes.memmove(chroma, b"RV32", 4)
+
+
+            # VLC 要求像素平面對齊 32 bytes, 並保留 buffer 至播放器釋放後
+            frame["buffer"] = ctypes.create_string_buffer(pitches[0] * lines[0] + 31)
+            frame["address"] = (ctypes.addressof(frame["buffer"]) + 31) & ~31
+            frame["height"] = scaled_height
+            frame["pitch"] = pitches[0]
+
+            return 1
+
+        except Exception:
+            logger.exception("初始化影片縮圖緩衝區失敗 - %s", path)
+            ready.set()
+            return 0
+
+
+    @vlc.CallbackDecorators.VideoLockCb
+    def lock(opaque, planes):
+
+        planes[0] = frame["address"]
+        return None
+
+
+    @vlc.CallbackDecorators.VideoUnlockCb
+    def unlock(opaque, picture, planes):
+
+        if not ready.is_set():
+
+            try:
+
+                pixels = ctypes.string_at(frame["address"], frame["pitch"] * frame["height"])
+                frame["image"] = QImage(
+                    pixels,
+                    300,
+                    frame["height"],
+                    frame["pitch"],
+                    QImage.Format.Format_RGB32
+                ).copy()
+
+            except Exception:
+                logger.exception("複製影片縮圖畫面失敗 - %s", path)
+
+            finally:
+                ready.set()
+
+
+    instance = vlc.Instance(
+        "--no-audio",
+        "--no-video-title-show",
+        "--no-osd",
+        "--avcodec-hw=none",
+        "--quiet"
+    )
+
+    if instance is None:
+        raise RuntimeError("無法建立縮圖播放器")
+
+    player = None
+    media = None
+
+
+    try:
+
+        player = instance.media_player_new()
+        media = instance.media_new(str(path))
+        player.set_media(media)
+        player.video_set_callbacks(lock, unlock, None, None)
+        player.video_set_format_callbacks(setup, None)
+
+        if player.play() == -1:
+            raise RuntimeError("無法開啟影片")
+
+        deadline = time.monotonic() + 10
+
+        while not ready.wait(0.1):
+
+            if cancelled():
+                raise InterruptedError("縮圖工作已取消")
+
+            if time.monotonic() >= deadline:
+                raise TimeoutError("擷取影片縮圖逾時")
+
+            if player.get_state() in (vlc.State.Error, vlc.State.Ended, vlc.State.Stopped):
+                raise RuntimeError("影片沒有可用的畫面")
+
+
+        image = frame.get("image")
+
+        if image is None or image.isNull():
+            raise RuntimeError("無法取得影片畫面")
+
+        return image
+
+    finally:
+
+        # 先停止並釋放 VLC, 再讓 Python 回收上方的回呼函式和像素緩衝區
+        if player is not None:
+
+            player.stop()
+            player.release()
+
+        if media is not None:
+            media.release()
+
+        instance.release()
+
+
+def ensure_thumbnail(path: Path, cancelled) -> Path:
+    """
+    驗證既有縮圖或產生寬 300px 的 JPEG; 成功後才取代檔案並清除舊縮圖
+    """
+
+    path = path.resolve(strict=True)
+    relative_path = path.relative_to(MEDIA_DIR.resolve())
+
+    if (
+        not path.is_file() or
+        path.suffix.lower() not in SUPPORTED_MEDIA_EXTENSIONS
+    ):
+        raise ValueError("不支援的縮圖來源")
+
+
+    original_stat = path.stat()
+    digest = fast_hash(path)
+    prefix = f"{path.stem}-{path.suffix[1:]}-"
+    directory = THUMBNAIL_DIR / relative_path.parent
+    destination = directory / f"{prefix}{digest}.jpg"
+
+    if cancelled():
+        raise InterruptedError("縮圖工作已取消")
+
+    if destination.is_file() and not QImage(str(destination)).isNull():
+        return destination
+
+
+    if path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
+
+        reader = QImageReader(str(path))
+        reader.setAutoTransform(True)
+        size = reader.size()
+
+        if size.isValid() and size.width() > 0:
+
+            size.setHeight(max(1, round(300 * size.height() / size.width())))
+            size.setWidth(300)
+            reader.setScaledSize(size)
+
+        image = reader.read()
+
+    else:
+        image = create_video_thumbnail(path, cancelled)
+
+    if image.isNull():
+        raise RuntimeError("無法讀取縮圖來源")
+
+    image = image.scaledToWidth(300, Qt.TransformationMode.SmoothTransformation)
+    current_stat = path.stat()
+
+    if (
+        (original_stat.st_size, original_stat.st_mtime_ns) !=
+        (current_stat.st_size, current_stat.st_mtime_ns)
+    ):
+        raise OSError("產生縮圖期間來源檔案已變更")
+
+    if cancelled():
+        raise InterruptedError("縮圖工作已取消")
+
+
+    directory.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.NamedTemporaryFile(
+        dir=directory,
+        prefix=".thumbnail-",
+        suffix=".tmp",
+        delete=False
+    ) as temp:
+        temp_path = Path(temp.name)
+
+
+    try:
+
+        if not image.save(str(temp_path), "JPG", 85):
+            raise OSError("無法儲存縮圖")
+
+        os.replace(temp_path, destination)
+
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+    # 不使用原檔名組成 glob, 避免檔名中的 [] 等字元被當成萬用字元
+    try:
+
+        for old_path in directory.iterdir():
+
+            suffix = old_path.name.removeprefix(prefix)
+
+            if (
+                old_path != destination and
+                old_path.name.startswith(prefix) and
+                len(suffix) == 12 and
+                suffix.endswith(".jpg") and
+                all(char in "0123456789abcdef" for char in suffix[:8]) and
+                old_path.is_file()
+            ):
+                old_path.unlink()
+
+    except OSError:
+        logger.warning("清除舊縮圖失敗 - %s", path, exc_info=True)
+
+
+    logger.info("已產生縮圖 - %s", destination)
+    return destination
+
+
+class ThumbnailThread(QThread):
+    """
+    依序處理懸停要求, 同一路徑在排隊或處理中時不重複加入
+    """
+
+    def __init__(self, parent=None):
+
+        super().__init__(parent)
+
+
+        self.queue = Queue()
+        self.pending = set()
+        self.pending_lock = threading.Lock()
+        self.stopping = False
+
+
+    def request(self, path: Path) -> None:
+
+        if self.stopping:
+            return
+
+        with self.pending_lock:
+
+            if path in self.pending:
+                return
+
+            self.pending.add(path)
+
+        self.queue.put(path)
+
+        if not self.isRunning():
+            self.start()
+
+
+    def run(self) -> None:
+
+        while not self.isInterruptionRequested():
+
+            path = self.queue.get()
+
+            if path is None or self.isInterruptionRequested():
+                break
+
+            try:
+                ensure_thumbnail(path, self.isInterruptionRequested)
+
+            except InterruptedError:
+                break
+
+            except Exception:
+                logger.exception("產生縮圖失敗 - %s", path)
+
+            finally:
+                with self.pending_lock:
+                    self.pending.discard(path)
+
+
+    def stop(self) -> None:
+
+        self.stopping = True
+        self.requestInterruption()
+        self.queue.put(None)
+        self.wait()
 
 
 class MediaImportThread(QThread):
@@ -1357,21 +1695,37 @@ class MediaPreviewMenu(QMenu):
         super().__init__(title, parent)
         self.setMouseTracking(True)
 
+
+        # 預覽視窗不搶焦點, 也不攔截滑鼠事件
         self.preview = QLabel(self, Qt.WindowType.ToolTip)
         self.preview.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.preview.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.preview.setStyleSheet("background: #202020; padding: 4px;")
 
-        resource_dir = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else ROOT_DIR
+
+        # 暫時共用測試圖片
+        if getattr(sys, "frozen", False):
+            resource_dir = Path(sys._MEIPASS)
+
+        else:
+            resource_dir = ROOT_DIR
+
         self.preview_pixmap = QPixmap(str(resource_dir / "test.png"))
         self.preview_mode = False
         self.preview_action = None
 
+
+        self.thumbnail_thread = ThumbnailThread(self)
+
+
+        # 首次懸停 0.5 秒後顯示預覽
         self.preview_timer = QTimer(self)
         self.preview_timer.setSingleShot(True)
         self.preview_timer.setInterval(500)
         self.preview_timer.timeout.connect(self.show_preview)
 
+
+        # 離開所有桌布選項滿 1 秒後退出預覽模式
         self.reset_timer = QTimer(self)
         self.reset_timer.setSingleShot(True)
         self.reset_timer.setInterval(1000)
@@ -1383,9 +1737,15 @@ class MediaPreviewMenu(QMenu):
         super().mouseMoveEvent(event)
         action = self.actionAt(event.position().toPoint())
 
-        if action is None or not action.isEnabled() or action.data() is None:
+        if (
+            action is None or
+            not action.isEnabled() or
+            action.data() is None
+        ):
+
             self.leave_preview()
             return
+
 
         self.reset_timer.stop()
 
@@ -1396,6 +1756,7 @@ class MediaPreviewMenu(QMenu):
 
         if self.preview_mode:
             self.show_preview()
+
         else:
             self.preview_timer.start()
 
@@ -1412,7 +1773,7 @@ class MediaPreviewMenu(QMenu):
         super().hideEvent(event)
 
 
-    def leave_preview(self):
+    def leave_preview(self) -> None:
 
         self.preview_timer.stop()
         self.preview_action = None
@@ -1422,7 +1783,7 @@ class MediaPreviewMenu(QMenu):
             self.reset_timer.start()
 
 
-    def reset_preview(self):
+    def reset_preview(self) -> None:
 
         self.preview_timer.stop()
         self.reset_timer.stop()
@@ -1431,7 +1792,7 @@ class MediaPreviewMenu(QMenu):
         self.preview.hide()
 
 
-    def show_preview(self):
+    def show_preview(self) -> None:
 
         action = self.preview_action
         cursor = QCursor.pos()
@@ -1439,31 +1800,42 @@ class MediaPreviewMenu(QMenu):
         if (
             not self.isVisible() or
             action is None or
-            self.actionAt(self.mapFromGlobal(cursor)) != action or
-            self.preview_pixmap.isNull()
+            self.actionAt(self.mapFromGlobal(cursor)) != action
         ):
             return
 
+        self.thumbnail_thread.request(Path(action.data()))
+
+        if self.preview_pixmap.isNull():
+            return
+
+
+        # 等比例縮小預覽圖片, 避免超出目前螢幕的可用範圍
         screen = QApplication.screenAt(cursor) or self.screen()
         available = screen.availableGeometry()
+
         pixmap = self.preview_pixmap.scaled(
             min(300, max(1, available.width() - 8)),
             max(1, available.height() - 8),
             Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
+            Qt.TransformationMode.SmoothTransformation
         )
         self.preview.setPixmap(pixmap)
         self.preview.adjustSize()
 
+
+        # 優先放在選單右側, 空間不足時改放左側
         menu_rect = self.frameGeometry()
         x = menu_rect.right() + 8
 
         if x + self.preview.width() > available.right() + 1:
             x = menu_rect.left() - self.preview.width() - 8
 
+
         y = self.mapToGlobal(self.actionGeometry(action).topLeft()).y()
         x = max(available.left(), min(x, available.right() - self.preview.width() + 1))
         y = max(available.top(), min(y, available.bottom() - self.preview.height() + 1))
+
 
         self.preview.move(x, y)
         self.preview.show()
@@ -1570,6 +1942,7 @@ class Tray:
 
 
         self.media_menu = MediaPreviewMenu(tr("select_video"), menu)
+        self.app.aboutToQuit.connect(self.media_menu.thumbnail_thread.stop)
         menu.addMenu(self.media_menu)
         self.media_menu.aboutToShow.connect(
             self.refresh_media_menu
