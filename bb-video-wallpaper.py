@@ -1572,7 +1572,7 @@ class Tray:
 
     def add_media_menu_action(self, media_path: Path) -> None:
 
-        action = QAction(media_path.stem, self.media_menu)
+        action = QAction(media_path.name, self.media_menu)
 
         action.triggered.connect(
             lambda checked=False, v=media_path: self.play_from_menu(v)
