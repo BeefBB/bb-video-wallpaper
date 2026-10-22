@@ -793,7 +793,7 @@ def create_video_thumbnail(path: Path, cancelled) -> QImage:
             if time.monotonic() >= deadline:
                 raise TimeoutError("擷取影片縮圖逾時")
 
-            if player.get_state() in (vlc.State.Error, vlc.State.Ended, vlc.State.Stopped):
+            if player.get_state() in (vlc.State.Error, vlc.State.Ended, vlc.State.Stopped):  # type: ignore
                 raise RuntimeError("影片沒有可用的畫面")
 
 
@@ -892,7 +892,7 @@ def ensure_thumbnail(path: Path, cancelled) -> Path:
 
     try:
 
-        if not image.save(str(temp_path), "JPG", 85):
+        if not image.save(str(temp_path), "JPG", 85):  # type: ignore
             raise OSError("無法儲存縮圖")
 
         os.replace(temp_path, destination)
@@ -1718,7 +1718,7 @@ class MediaPreviewMenu(QMenu):
 
         # 縮圖驗證與產生期間使用的載入圖片
         if getattr(sys, "frozen", False):
-            resource_dir = Path(sys._MEIPASS)
+            resource_dir = Path(sys._MEIPASS)  # type: ignore
 
         else:
             resource_dir = ROOT_DIR
