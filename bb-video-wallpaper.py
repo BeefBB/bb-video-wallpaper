@@ -1203,16 +1203,10 @@ class Wallpaper(QWidget):
             return
 
 
-        any_fullscreen = False
-
-        if self.fullscreen_detection_ready:
-            hwnd = int(self.winId())
-            any_fullscreen = is_any_fullscreen(hwnd)
-
         need_auto_pause = (
-            (self.auto_pause_if_fullscreen and any_fullscreen) or
             (self.auto_pause_if_screen_off and self.screen_off) or
-            (self.auto_pause_if_on_battery and is_on_battery())
+            (self.auto_pause_if_on_battery and is_on_battery()) or
+            (self.auto_pause_if_fullscreen and self.fullscreen_detection_ready and is_any_fullscreen(int(self.winId())))
         )
 
 
