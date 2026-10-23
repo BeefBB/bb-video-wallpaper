@@ -778,6 +778,7 @@ def create_video_thumbnail(path: Path, cancelled) -> QImage:
 
     ready = threading.Event()
     frame = {}
+    thumbnail_size = None
     uint_pointer = ctypes.POINTER(ctypes.c_uint)
 
 
@@ -795,16 +796,18 @@ def create_video_thumbnail(path: Path, cancelled) -> QImage:
 
         try:
 
-            if player is None:
-                raise RuntimeError("縮圖播放器尚未初始化")
+            # AV1 可能在選定影像軌前就要求緩衝區
+            # 回呼內不呼叫 VLC 播放器 API, 避免停止播放時卡住
+            if thumbnail_size is not None:
+                _, scaled_height = thumbnail_size
 
-            # 回呼尺寸可能包含解碼填補, 依 VLC 實際選用的影像軌取得顯示比例
-            track_id = player.video_get_track()
+            else:
 
-            if track_id not in thumbnail_sizes:
-                raise RuntimeError("目前影像軌沒有可用的尺寸資訊")
+                if not width[0] or not height[0]:
+                    raise RuntimeError("影片沒有可用的緩衝區尺寸")
 
-            _, scaled_height = thumbnail_sizes[track_id]
+                scaled_height = max(1, round(300 * height[0] / width[0]))
+
             width[0], height[0] = 300, scaled_height
             pitches[0] = (300 * 4 + 31) & ~31
             lines[0] = (scaled_height + 31) & ~31
@@ -879,6 +882,10 @@ def create_video_thumbnail(path: Path, cancelled) -> QImage:
 
         media = instance.media_new(str(path))
         thumbnail_sizes = get_video_thumbnail_sizes(media, cancelled)
+
+        if len(thumbnail_sizes) == 1:
+            thumbnail_size = next(iter(thumbnail_sizes.values()))
+
         player.set_media(media)
         player.video_set_callbacks(lock, unlock, None, None)
         player.video_set_format_callbacks(setup, None)
@@ -888,10 +895,26 @@ def create_video_thumbnail(path: Path, cancelled) -> QImage:
 
         deadline = time.monotonic() + 10
 
-        while not ready.wait(0.1):
+        while True:
 
             if cancelled():
                 raise InterruptedError("縮圖工作已取消")
+
+            # 在縮圖工作執行緒查詢選軌, 不從 VLC 的原生回呼呼叫播放器 API
+            track_id = player.video_get_track()
+
+            if track_id in thumbnail_sizes:
+                thumbnail_size = thumbnail_sizes[track_id]
+
+            if ready.is_set():
+
+                image = frame.get("image")
+
+                if image is None or image.isNull():
+                    raise RuntimeError("無法取得影片畫面")
+
+                if thumbnail_size is not None:
+                    break
 
             if time.monotonic() >= deadline:
                 raise TimeoutError("擷取影片縮圖逾時")
@@ -899,13 +922,22 @@ def create_video_thumbnail(path: Path, cancelled) -> QImage:
             if player.get_state() in (vlc.State.Error, vlc.State.Ended, vlc.State.Stopped):  # type: ignore
                 raise RuntimeError("影片沒有可用的畫面")
 
+            if thumbnail_size is None:
+                time.sleep(0.05)
 
-        image = frame.get("image")
+            else:
+                ready.wait(0.05)
 
-        if image is None or image.isNull():
-            raise RuntimeError("無法取得影片畫面")
 
-        return image
+        if cancelled():
+            raise InterruptedError("縮圖工作已取消")
+
+        # 選軌前的緩衝區可能使用暫定比例; 最後以實際影像軌的可見尺寸校正
+        return image.scaled(
+            *thumbnail_size,
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
 
     finally:
 

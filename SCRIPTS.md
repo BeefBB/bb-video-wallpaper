@@ -198,7 +198,7 @@ ISCC.exe '.\installer\BB Video Wallpaper.iss'
 ---                                                          | ---                                                              | ---
 [test_config.py](./tests/test_config.py)                     | 預設設定, 無效欄位, 路徑與紀錄驗證, 語言載入, 儲存失敗時保留原檔 | 不需初始化 VLC
 [test_thumbnails.py](./tests/test_thumbnails.py)             | 長檔名, 獨立快取, 舊快取替換, 清理範圍與儲存失敗處理             | PySide6, 不需初始化 VLC
-[test_video_thumbnails.py](./tests/test_video_thumbnails.py) | 實際影片縮圖的可見比例, 像素比例, 旋轉方向及取消解析             | Windows, 專案內的 VLC-lite, PATH 中可找到的 FFmpeg, 且 FFmpeg 需支援 `libx264` 與 `-display_rotation`
+[test_video_thumbnails.py](./tests/test_video_thumbnails.py) | 影片縮圖比例, 旋轉方向, 多影像軌, 取消及錯誤處理                 | Windows, 專案內的 VLC-lite, PATH 中可找到的 FFmpeg
 
 測試會在暫存目錄操作, 不會啟動桌布或改寫使用者設定. 影片測試會呼叫 FFmpeg 產生短片, 再用 VLC-lite 擷取縮圖; FFmpeg 是測試工具, 主程式的播放與縮圖仍使用 VLC
 

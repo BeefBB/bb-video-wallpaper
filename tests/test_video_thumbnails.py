@@ -1,11 +1,14 @@
 """
-使用實際 VLC-lite 與暫存合成影片測試縮圖比例與方向, 不啟動桌布或修改使用者設定
+使用實際 VLC-lite 與暫存合成影片測試縮圖比例, 方向, 影像軌選擇及錯誤處理
+不啟動桌布或修改使用者設定
 需要 Windows, 專案內的 VLC-lite 與 PATH 中的 ffmpeg; 缺少時跳過
 """
 
 import ast
+from contextlib import nullcontext
 import ctypes
 import logging
+import multiprocessing
 import os
 from pathlib import Path
 import shutil
@@ -13,9 +16,11 @@ import subprocess
 import tempfile
 import threading
 import time
+from typing import ClassVar
 import unittest
 from unittest import mock
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage
 
 
@@ -24,11 +29,120 @@ VLC_DIR = ROOT / "VLC-lite"
 FFMPEG = shutil.which("ffmpeg")
 
 
+def load_video_thumbnail_functions(vlc) -> dict:
+    """
+    只載入影片縮圖函式, 避免執行主程式的初始化流程
+    """
+
+    names = {"get_video_thumbnail_sizes", "create_video_thumbnail"}
+    source_path = ROOT / "bb-video-wallpaper.py"
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    nodes: list[ast.stmt] = [
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in names
+    ]
+
+    namespace = {
+        "ctypes": ctypes,
+        "logger": logging.getLogger("video_thumbnail_tests"),
+        "Path": Path,
+        "QImage": QImage,
+        "Qt": Qt,
+        "threading": threading,
+        "time": time,
+        "vlc": vlc,
+    }
+
+    module = ast.Module(body=nodes, type_ignores=[])
+    code = compile(module, str(source_path), "exec")
+    exec(code, namespace)
+
+    return namespace
+
+
+def thumbnail_probe(path: str, mode: str, connection) -> None:
+    """
+    在獨立程序中擷取縮圖, 檢查取消或錯誤後 VLC 是否能正常停止
+    """
+
+    cancelled = threading.Event()
+    callback_refs = []
+
+    with os.add_dll_directory(str(VLC_DIR)), mock.patch.dict(os.environ, {
+        "PYTHON_VLC_LIB_PATH": str(VLC_DIR / "libvlc.dll"),
+        "PYTHON_VLC_MODULE_PATH": str(VLC_DIR),
+    }):
+
+        ctypes.CDLL(str(VLC_DIR / "libvlccore.dll"))
+        ctypes.CDLL(str(VLC_DIR / "libvlc.dll"))
+        import vlc
+
+        namespace = load_video_thumbnail_functions(vlc)
+        namespace["logger"].addHandler(logging.NullHandler())
+        namespace["logger"].propagate = False
+        original_set_callbacks = vlc.MediaPlayer.video_set_format_callbacks
+
+        def cancel_after_setup(player, setup, cleanup):
+
+            def wrapped(*args):
+
+                result = setup(*args)
+                cancelled.set()
+                return result
+
+            callback = type(setup)(wrapped)
+            callback_refs.append(callback)
+            return original_set_callbacks(player, callback, cleanup)
+
+        if mode == "cancel":
+
+            patch = mock.patch.object(
+                vlc.MediaPlayer,
+                "video_set_format_callbacks",
+                cancel_after_setup
+            )
+
+        elif mode == "setup_failure":
+
+            patch = mock.patch.object(
+                ctypes,
+                "create_string_buffer",
+                side_effect=MemoryError("模擬緩衝區配置失敗")
+            )
+
+        else:
+            patch = nullcontext()
+
+        try:
+
+            with patch:
+                image = namespace["create_video_thumbnail"](Path(path), cancelled.is_set)
+
+            color = image.pixelColor(image.width() // 2, image.height() // 2)
+            connection.send({
+                "size": (image.width(), image.height()),
+                "color": (color.red(), color.green(), color.blue()),
+            })
+
+        except Exception as error:
+
+            connection.send({
+                "error": type(error).__name__,
+                "cancelled": cancelled.is_set(),
+            })
+
+        finally:
+            connection.close()
+
+
 @unittest.skipUnless(
     os.name == "nt" and FFMPEG and (VLC_DIR / "libvlc.dll").is_file(),
     "需要 Windows, VLC-lite 與 ffmpeg",
 )
 class VideoThumbnailTests(unittest.TestCase):
+
+    ffmpeg: ClassVar[str]
+
 
     @classmethod
     def setUpClass(cls):
@@ -37,6 +151,8 @@ class VideoThumbnailTests(unittest.TestCase):
 
         if ffmpeg is None:
             raise unittest.SkipTest("需要 ffmpeg")
+
+        cls.ffmpeg = ffmpeg
 
         dll_directory = os.add_dll_directory(str(VLC_DIR))
         cls.addClassCleanup(dll_directory.close)
@@ -50,22 +166,7 @@ class VideoThumbnailTests(unittest.TestCase):
         ctypes.CDLL(str(VLC_DIR / "libvlc.dll"))
         import vlc
 
-        names = {"get_video_thumbnail_sizes", "create_video_thumbnail"}
-        tree = ast.parse((ROOT / "bb-video-wallpaper.py").read_text(encoding="utf-8"))
-        nodes: list[ast.stmt] = [
-            node for node in tree.body
-            if isinstance(node, ast.FunctionDef) and node.name in names
-        ]
-        cls.namespace = {
-            "ctypes": ctypes,
-            "logger": logging.getLogger("video_thumbnail_tests"),
-            "Path": Path,
-            "QImage": QImage,
-            "threading": threading,
-            "time": time,
-            "vlc": vlc,
-        }
-        exec(compile(ast.Module(body=nodes, type_ignores=[]), str(ROOT / "bb-video-wallpaper.py"), "exec"), cls.namespace)
+        cls.namespace = load_video_thumbnail_functions(vlc)
 
         temporary = tempfile.TemporaryDirectory()
         cls.addClassCleanup(temporary.cleanup)
@@ -116,6 +217,138 @@ class VideoThumbnailTests(unittest.TestCase):
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
             cls.rotated_media[rotation] = path
+
+
+    def require_av1_encoder(self) -> None:
+
+        result = subprocess.run(
+            [self.ffmpeg, "-hide_banner", "-encoders"],
+            check=True, capture_output=True, timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+
+        if b"libaom-av1" not in result.stdout:
+            self.skipTest("目前 FFmpeg 不支援測試使用的 AV1 編碼器")
+
+
+    def create_av1_video(self, path: Path) -> None:
+
+        subprocess.run(
+            [
+                self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30",
+                "-t", "2", "-c:v", "libaom-av1", "-cpu-used", "8", "-threads", "1", str(path),
+            ],
+            check=True, capture_output=True, timeout=30,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+
+
+    def isolated_thumbnail(self, path: Path, mode: str = "render") -> dict:
+
+        context = multiprocessing.get_context("spawn")
+        receiver, sender = context.Pipe(duplex=False)
+        process = context.Process(target=thumbnail_probe, args=(str(path), mode, sender))
+        process.start()
+        sender.close()
+
+        try:
+
+            process.join(15)
+            self.assertFalse(
+                process.is_alive(),
+                f"縮圖工作未在 15 秒內結束: {path.name}, {mode}"
+            )
+            self.assertEqual(process.exitcode, 0)
+            self.assertTrue(receiver.poll(), "縮圖子程序未回傳結果")
+            return receiver.recv()
+
+        finally:
+
+            if process.is_alive():
+                process.terminate()
+                process.join()
+
+            receiver.close()
+            process.close()
+
+
+    def test_av1_thumbnails_finish_without_hanging(self):
+
+        self.require_av1_encoder()
+
+        with tempfile.TemporaryDirectory() as directory:
+
+            for extension in ("mp4", "mkv"):
+
+                with self.subTest(extension=extension):
+
+                    path = Path(directory) / f"av1.{extension}"
+                    self.create_av1_video(path)
+                    result = self.isolated_thumbnail(path)
+
+                    self.assertNotIn("error", result)
+                    self.assertEqual(result["size"], (300, 169))
+
+
+    def test_default_av1_video_track_determines_size_and_pixels(self):
+
+        self.require_av1_encoder()
+
+        with tempfile.TemporaryDirectory() as directory:
+
+            for selected, height, color in (
+                (0, 169, (255, 0, 0)),
+                (1, 533, (0, 255, 0)),
+            ):
+
+                with self.subTest(default_video_track=selected):
+
+                    path = Path(directory) / f"av1-default-{selected}.mkv"
+                    subprocess.run(
+                        [
+                            self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
+                            "-f", "lavfi", "-i", "color=red:s=320x180:r=30",
+                            "-f", "lavfi", "-i", "color=lime:s=180x320:r=30",
+                            "-t", "2", "-map", "0:a", "-map", "1:v", "-map", "2:v",
+                            "-c:a", "aac", "-c:v", "libaom-av1", "-cpu-used", "8", "-threads", "1",
+                            "-disposition:v:0", "default" if selected == 0 else "0",
+                            "-disposition:v:1", "default" if selected == 1 else "0",
+                            str(path),
+                        ],
+                        check=True, capture_output=True, timeout=30,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                    )
+                    result = self.isolated_thumbnail(path)
+
+                    self.assertNotIn("error", result)
+                    self.assertEqual(result["size"], (300, height))
+
+                    for actual, expected in zip(result["color"], color):
+                        self.assertLessEqual(abs(actual - expected), 30)
+
+
+    def test_av1_cancellation_and_setup_failure_finish(self):
+
+        self.require_av1_encoder()
+
+        with tempfile.TemporaryDirectory() as directory:
+
+            path = Path(directory) / "av1.mp4"
+            self.create_av1_video(path)
+
+            for mode, error in (
+                ("cancel", "InterruptedError"),
+                ("setup_failure", "RuntimeError"),
+            ):
+
+                with self.subTest(mode=mode):
+
+                    result = self.isolated_thumbnail(path, mode)
+
+                    self.assertEqual(result.get("error"), error)
+                    self.assertEqual(result["cancelled"], mode == "cancel")
 
 
     def test_visible_height_excludes_decoder_padding(self):
