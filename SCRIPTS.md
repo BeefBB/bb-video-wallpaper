@@ -64,7 +64,7 @@ Python 與 VLC 的架構需要相容, 例如搭配使用 64 位元版本. 只有
 - 自動暫停, 螢幕電源通知及開機啟動排程
 - 設定檔驗證, 儲存與日誌
 
-虛擬環境準備完成後, 也可以直接執行:
+虛擬環境準備完成後, 也可以先以系統管理員身分開啟 PowerShell, 切換到專案根目錄後直接執行:
 
 ```powershell
 .\.venv\Scripts\python.exe .\bb-video-wallpaper.py

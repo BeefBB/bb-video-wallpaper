@@ -13,11 +13,10 @@ if (-not (Test-Path -LiteralPath $transformPlugin -PathType Leaf)) {
 }
 
 # This program uses libVLC only for silent, local image/video wallpaper playback.
-# Retain every video decode/demux/packetizer/chroma/output module so libVLC can
+# Retain all modules in the selected playback-related categories so libVLC can
 # fall back safely for different local files and Windows GPU configurations.
-# Retain the transform filter so memory output (vmem) can handle video rotation
-# GUI, audio, network, streaming, disc, subtitle, and media-library plugins are
-# intentionally omitted.
+# Selected categories still include some audio, network, disc, and subtitle
+# modules; categories not listed below are omitted.
 $rootFiles = @(
     'libvlc.dll',
     'libvlccore.dll',
@@ -57,6 +56,7 @@ foreach ($category in $pluginCategories) {
         Copy-Item -Destination $targetDirectory
 }
 
+# Preserve video orientation in thumbnails.
 $filterDirectory = Join-Path $destination 'plugins/video_filter'
 New-Item -ItemType Directory -Path $filterDirectory -Force | Out-Null
 Copy-Item -LiteralPath $transformPlugin -Destination $filterDirectory
