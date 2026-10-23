@@ -148,6 +148,24 @@ class ThumbnailTests(unittest.TestCase):
         self.assertTrue(directory.is_dir())
 
 
+    def test_previous_algorithm_cache_is_replaced(self):
+
+        source = self.media_dir / "sample.bmp"
+        self.save_image(source, Qt.GlobalColor.red)
+        contents = source.read_bytes()
+        old_digest = hashlib.sha256(str(len(contents)).encode("ascii") + contents).hexdigest()[:8]
+        source_id = hashlib.sha256(source.name.encode("utf-8")).hexdigest()[:16]
+        self.thumbnail_dir.mkdir()
+        previous = self.thumbnail_dir / f"{source_id}-{old_digest}.jpg"
+        self.save_image(previous, Qt.GlobalColor.blue)
+
+        current = self.thumbnail(source)
+
+        self.assertNotEqual(current, previous)
+        self.assertFalse(previous.exists())
+        self.assertEqual(QImage(str(current)).width(), 300)
+
+
     def test_replace_failure_preserves_cache_and_removes_temp(self):
 
         source = self.media_dir / "sample.bmp"

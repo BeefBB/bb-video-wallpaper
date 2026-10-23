@@ -665,6 +665,8 @@ def fast_hash(path: Path) -> str:
     """
 
     digest = hashlib.sha256()
+    # 縮圖演算法更新時更換版本, 讓既有快取重新產生並清除舊檔
+    digest.update(b"thumbnail-v2\0")
 
     with path.open("rb") as file:
 
@@ -682,6 +684,86 @@ def fast_hash(path: Path) -> str:
 
 
     return digest.hexdigest()[:8]
+
+
+def get_video_thumbnail_size(media, cancelled) -> tuple[int, int]:
+    """
+    以可見尺寸, 像素比例與方向計算縮圖大小, 不使用解碼緩衝區的填補尺寸
+    """
+
+    if cancelled():
+        raise InterruptedError("縮圖工作已取消")
+
+    # python-vlc 在類別外動態建立列舉成員, 以 getattr 讀取這些執行期屬性
+    if media.parse_with_options(getattr(vlc.MediaParseFlag, "local"), 5000) == -1:
+        raise RuntimeError("無法解析影片資訊")
+
+    deadline = time.monotonic() + 5
+
+    try:
+
+        while media.get_parsed_status() != getattr(vlc.MediaParsedStatus, "done"):
+
+            if cancelled():
+                raise InterruptedError("縮圖工作已取消")
+
+            if time.monotonic() >= deadline:
+                raise TimeoutError("解析影片資訊逾時")
+
+            if media.get_parsed_status() in (
+                getattr(vlc.MediaParsedStatus, "failed"),
+                getattr(vlc.MediaParsedStatus, "skipped"),
+                getattr(vlc.MediaParsedStatus, "timeout"),
+            ):
+                raise RuntimeError("無法解析影片資訊")
+
+            time.sleep(0.05)
+
+    finally:
+        media.parse_stop()
+
+
+    # python-vlc 的 tracks_get 不會釋放原生陣列, 因此直接取得並成對釋放
+    tracks = ctypes.POINTER(vlc.MediaTrack)()
+    count = vlc.libvlc_media_tracks_get(media, ctypes.byref(tracks))
+    track_array = ctypes.cast(tracks, ctypes.POINTER(ctypes.POINTER(vlc.MediaTrack)))
+
+    try:
+
+        for index in range(count):
+
+            track = track_array[index].contents
+
+            if track.type != getattr(vlc.TrackType, "video") or not track.audio:
+                continue
+
+            # LibVLC 的 audio/video 共用 union; python-vlc 將它們展開成獨立欄位,
+            # 因此從第一個槽位 (audio) 轉型, 才能取得正確的 video 指標
+            video = ctypes.cast(track.audio, ctypes.POINTER(vlc.VideoTrack)).contents
+
+            if not video.width or not video.height:
+                continue
+
+            width, height = video.width, video.height
+
+            if video.sar_num and video.sar_den:
+                width *= video.sar_num
+                height *= video.sar_den
+
+            if video.orientation in (
+                getattr(vlc.VideoOrient, "left_top"),
+                getattr(vlc.VideoOrient, "left_bottom"),
+                getattr(vlc.VideoOrient, "right_top"),
+                getattr(vlc.VideoOrient, "right_bottom"),
+            ):
+                width, height = height, width
+
+            return 300, max(1, round(300 * height / width))
+
+    finally:
+        vlc.libvlc_media_tracks_release(track_array, count)
+
+    raise RuntimeError("影片沒有可用的尺寸資訊")
 
 
 def create_video_thumbnail(path: Path, cancelled) -> QImage:
@@ -708,7 +790,8 @@ def create_video_thumbnail(path: Path, cancelled) -> QImage:
 
         try:
 
-            scaled_height = max(1, round(300 * height[0] / width[0]))
+            # 回呼傳入的尺寸可能包含解碼填補, 使用先前解析的顯示比例
+            scaled_height = thumbnail_height
             width[0], height[0] = 300, scaled_height
             pitches[0] = (300 * 4 + 31) & ~31
             lines[0] = (scaled_height + 31) & ~31
@@ -778,6 +861,7 @@ def create_video_thumbnail(path: Path, cancelled) -> QImage:
 
         player = instance.media_player_new()
         media = instance.media_new(str(path))
+        _, thumbnail_height = get_video_thumbnail_size(media, cancelled)
         player.set_media(media)
         player.video_set_callbacks(lock, unlock, None, None)
         player.video_set_format_callbacks(setup, None)
