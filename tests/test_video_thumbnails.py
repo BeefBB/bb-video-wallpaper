@@ -50,7 +50,7 @@ class VideoThumbnailTests(unittest.TestCase):
         ctypes.CDLL(str(VLC_DIR / "libvlc.dll"))
         import vlc
 
-        names = {"get_video_thumbnail_size", "create_video_thumbnail"}
+        names = {"get_video_thumbnail_sizes", "create_video_thumbnail"}
         tree = ast.parse((ROOT / "bb-video-wallpaper.py").read_text(encoding="utf-8"))
         nodes: list[ast.stmt] = [
             node for node in tree.body
@@ -134,6 +134,49 @@ class VideoThumbnailTests(unittest.TestCase):
         self.assertEqual((image.width(), image.height()), (300, 84))
 
 
+    def test_default_video_track_determines_size_and_pixels(self):
+
+        ffmpeg = FFMPEG
+
+        if ffmpeg is None:
+            raise unittest.SkipTest("需要 ffmpeg")
+
+        with tempfile.TemporaryDirectory() as directory:
+
+            for selected, height, color in (
+                (0, 169, (255, 0, 0)),
+                (1, 533, (0, 255, 0)),
+            ):
+
+                with self.subTest(default_video_track=selected):
+
+                    path = Path(directory) / f"default-{selected}.mkv"
+                    # 音訊放在第一軌, 避免把影像軌 ID 誤當成影像軌索引
+                    subprocess.run(
+                        [
+                            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
+                            "-f", "lavfi", "-i", "color=red:s=320x180:r=30",
+                            "-f", "lavfi", "-i", "color=lime:s=180x320:r=30",
+                            "-t", "1", "-map", "0:a", "-map", "1:v", "-map", "2:v",
+                            "-c:a", "aac", "-c:v", "libx264", "-threads", "1",
+                            "-disposition:v:0", "default" if selected == 0 else "0",
+                            "-disposition:v:1", "default" if selected == 1 else "0",
+                            str(path),
+                        ],
+                        check=True, capture_output=True, timeout=30,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                    )
+                    image = self.namespace["create_video_thumbnail"](path, lambda: False)
+
+                    self.assertFalse(image.isNull())
+                    self.assertEqual((image.width(), image.height()), (300, height))
+                    pixel = image.pixelColor(image.width() // 2, image.height() // 2)
+
+                    for actual, expected in zip((pixel.red(), pixel.green(), pixel.blue()), color):
+                        self.assertLessEqual(abs(actual - expected), 30)
+
+
     def test_cancellation_stops_media_parsing(self):
 
         media = mock.Mock()
@@ -142,7 +185,7 @@ class VideoThumbnailTests(unittest.TestCase):
         cancelled = mock.Mock(side_effect=[False, True])
 
         with self.assertRaises(InterruptedError):
-            self.namespace["get_video_thumbnail_size"](media, cancelled)
+            self.namespace["get_video_thumbnail_sizes"](media, cancelled)
 
         media.parse_stop.assert_called_once_with()
 

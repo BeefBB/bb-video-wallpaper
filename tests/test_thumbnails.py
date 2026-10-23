@@ -153,7 +153,7 @@ class ThumbnailTests(unittest.TestCase):
         source = self.media_dir / "sample.bmp"
         self.save_image(source, Qt.GlobalColor.red)
         contents = source.read_bytes()
-        old_digest = hashlib.sha256(str(len(contents)).encode("ascii") + contents).hexdigest()[:8]
+        old_digest = hashlib.sha256(b"thumbnail-v2\0" + str(len(contents)).encode("ascii") + contents).hexdigest()[:8]
         source_id = hashlib.sha256(source.name.encode("utf-8")).hexdigest()[:16]
         self.thumbnail_dir.mkdir()
         previous = self.thumbnail_dir / f"{source_id}-{old_digest}.jpg"

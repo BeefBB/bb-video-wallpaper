@@ -666,7 +666,7 @@ def fast_hash(path: Path) -> str:
 
     digest = hashlib.sha256()
     # 縮圖演算法更新時更換版本, 讓既有快取重新產生並清除舊檔
-    digest.update(b"thumbnail-v2\0")
+    digest.update(b"thumbnail-v3\0")
 
     with path.open("rb") as file:
 
@@ -686,9 +686,9 @@ def fast_hash(path: Path) -> str:
     return digest.hexdigest()[:8]
 
 
-def get_video_thumbnail_size(media, cancelled) -> tuple[int, int]:
+def get_video_thumbnail_sizes(media, cancelled) -> dict[int, tuple[int, int]]:
     """
-    以可見尺寸, 像素比例與方向計算縮圖大小, 不使用解碼緩衝區的填補尺寸
+    依影像軌 ID 記錄縮圖大小, 使用可見尺寸, 像素比例與方向
     """
 
     if cancelled():
@@ -727,6 +727,7 @@ def get_video_thumbnail_size(media, cancelled) -> tuple[int, int]:
     tracks = ctypes.POINTER(vlc.MediaTrack)()
     count = vlc.libvlc_media_tracks_get(media, ctypes.byref(tracks))
     track_array = ctypes.cast(tracks, ctypes.POINTER(ctypes.POINTER(vlc.MediaTrack)))
+    sizes = {}
 
     try:
 
@@ -758,12 +759,15 @@ def get_video_thumbnail_size(media, cancelled) -> tuple[int, int]:
             ):
                 width, height = height, width
 
-            return 300, max(1, round(300 * height / width))
+            sizes[track.id] = (300, max(1, round(300 * height / width)))
 
     finally:
         vlc.libvlc_media_tracks_release(track_array, count)
 
-    raise RuntimeError("影片沒有可用的尺寸資訊")
+    if not sizes:
+        raise RuntimeError("影片沒有可用的尺寸資訊")
+
+    return sizes
 
 
 def create_video_thumbnail(path: Path, cancelled) -> QImage:
@@ -790,8 +794,16 @@ def create_video_thumbnail(path: Path, cancelled) -> QImage:
 
         try:
 
-            # 回呼傳入的尺寸可能包含解碼填補, 使用先前解析的顯示比例
-            scaled_height = thumbnail_height
+            if player is None:
+                raise RuntimeError("縮圖播放器尚未初始化")
+
+            # 回呼尺寸可能包含解碼填補, 依 VLC 實際選用的影像軌取得顯示比例
+            track_id = player.video_get_track()
+
+            if track_id not in thumbnail_sizes:
+                raise RuntimeError("目前影像軌沒有可用的尺寸資訊")
+
+            _, scaled_height = thumbnail_sizes[track_id]
             width[0], height[0] = 300, scaled_height
             pitches[0] = (300 * 4 + 31) & ~31
             lines[0] = (scaled_height + 31) & ~31
@@ -853,15 +865,19 @@ def create_video_thumbnail(path: Path, cancelled) -> QImage:
     if instance is None:
         raise RuntimeError("無法建立縮圖播放器")
 
-    player = None
+    player: vlc.MediaPlayer | None = None
     media = None
 
 
     try:
 
         player = instance.media_player_new()
+
+        if player is None:
+            raise RuntimeError("無法建立縮圖播放器")
+
         media = instance.media_new(str(path))
-        _, thumbnail_height = get_video_thumbnail_size(media, cancelled)
+        thumbnail_sizes = get_video_thumbnail_sizes(media, cancelled)
         player.set_media(media)
         player.video_set_callbacks(lock, unlock, None, None)
         player.video_set_format_callbacks(setup, None)
