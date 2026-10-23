@@ -501,6 +501,7 @@ def create_task() -> None:
         $task = Get-ScheduledTask -TaskName '{TASK_NAME}'
         $task.Settings.DisallowStartIfOnBatteries = $false
         $task.Settings.StopIfGoingOnBatteries = $false
+        $task.Settings.ExecutionTimeLimit = 'PT0S'
         Set-ScheduledTask -InputObject $task
         """.strip()
     ]
