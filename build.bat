@@ -30,12 +30,16 @@ echo.
 echo [3/5] Copying VLC files...
 
 xcopy /E /I /Y "VLC-lite" "dist\BB Video Wallpaper\VLC"
+if errorlevel 1 goto copy_failed
+
 copy /Y "VLC-lite\libvlc.dll" "dist\BB Video Wallpaper\libvlc.dll"
+if errorlevel 1 goto copy_failed
 
 echo.
 echo [4/5] Copying Language files...
 
 xcopy /E /I /Y "lang" "dist\BB Video Wallpaper\lang"
+if errorlevel 1 goto copy_failed
 
 echo.
 echo [5/5] Cleaning up build files...
@@ -61,3 +65,9 @@ if exist "BB Video Wallpaper.spec" (
 echo.
 echo Build completed.
 pause
+exit /b 0
+
+:copy_failed
+echo File copy failed. Build aborted.
+pause
+exit /b 1
