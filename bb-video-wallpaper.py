@@ -1679,6 +1679,7 @@ class Wallpaper(QWidget):
 
         media = self.instance.media_new(str(path))  # type: ignore
         self.player.set_media(media)
+        media.release()
         logger.info("set_play_media - %s", path)
 
         # 裁切填滿螢幕
