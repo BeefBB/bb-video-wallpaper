@@ -1723,7 +1723,7 @@ class MediaPreviewMenu(QMenu):
         else:
             resource_dir = ROOT_DIR
 
-        self.loading_pixmap = QPixmap(str(resource_dir / "test.png"))
+        self.loading_pixmap = QPixmap(str(resource_dir / "loading.jpg"))
 
         if self.loading_pixmap.isNull():
 
