@@ -837,7 +837,8 @@ def ensure_thumbnail(path: Path, cancelled) -> Path:
 
     original_stat = path.stat()
     digest = fast_hash(path)
-    prefix = f"{path.stem}-{path.suffix[1:]}-"
+    source_id = hashlib.sha256(path.name.encode("utf-8")).hexdigest()[:16]
+    prefix = f"{source_id}-"
     directory = THUMBNAIL_DIR / relative_path.parent
     destination = directory / f"{prefix}{digest}.jpg"
 
@@ -903,7 +904,7 @@ def ensure_thumbnail(path: Path, cancelled) -> Path:
         temp_path.unlink(missing_ok=True)
 
 
-    # 不使用原檔名組成 glob, 避免檔名中的 [] 等字元被當成萬用字元
+    # 成功後只清除同一來源識別碼的舊縮圖
     try:
 
         for old_path in directory.iterdir():
