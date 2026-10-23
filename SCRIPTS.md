@@ -116,9 +116,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 
 腳本會先刪除既有的 `VLC-lite/`, 再建立新的輸出. 手動放進輸出目錄的檔案也會被移除; 需要長期保留的模組應加入腳本的複製規則
 
-目前保留的外掛類別為 `access`, `codec`, `d3d11`, `d3d9`, `demux`, `packetizer`, `video_chroma` 與 `video_output`. 複製完成後會重新產生外掛快取, 並顯示精簡前後的容量
+目前保留的外掛類別為 `access`, `codec`, `d3d11`, `d3d9`, `demux`, `packetizer`, `video_chroma` 與 `video_output`, 另外從 `video_filter` 保留 `libtransform_plugin.dll`, 供記憶體影片輸出處理旋轉. 複製完成後會重新產生外掛快取, 並顯示精簡前後的容量
 
-調整保留清單後, 需重新執行腳本, 並用新產生的精簡版驗證播放與縮圖. 帶旋轉資訊影片的縮圖擷取問題目前仍待處理; 現有影片測試涵蓋一般比例與非正方形像素, 尚未涵蓋旋轉案例
+調整保留清單後, 需重新執行腳本, 並用新產生的精簡版驗證播放與縮圖. 現有影片測試涵蓋一般比例, 非正方形像素, 以及 90/180/270 度旋轉後的尺寸與實際畫面方向
 
 ## 打包與製作安裝程式
 
@@ -198,7 +198,7 @@ ISCC.exe '.\installer\BB Video Wallpaper.iss'
 ---                                                          | ---                                                              | ---
 [test_config.py](./tests/test_config.py)                     | 預設設定, 無效欄位, 路徑與紀錄驗證, 語言載入, 儲存失敗時保留原檔 | 不需初始化 VLC
 [test_thumbnails.py](./tests/test_thumbnails.py)             | 長檔名, 獨立快取, 舊快取替換, 清理範圍與儲存失敗處理             | PySide6, 不需初始化 VLC
-[test_video_thumbnails.py](./tests/test_video_thumbnails.py) | 實際影片縮圖的可見比例, 像素比例及取消解析                       | Windows, 專案內的 VLC-lite, PATH 中可找到的 FFmpeg, 且 FFmpeg 需支援 `libx264`
+[test_video_thumbnails.py](./tests/test_video_thumbnails.py) | 實際影片縮圖的可見比例, 像素比例, 旋轉方向及取消解析             | Windows, 專案內的 VLC-lite, PATH 中可找到的 FFmpeg, 且 FFmpeg 需支援 `libx264` 與 `-display_rotation`
 
 測試會在暫存目錄操作, 不會啟動桌布或改寫使用者設定. 影片測試會呼叫 FFmpeg 產生短片, 再用 VLC-lite 擷取縮圖; FFmpeg 是測試工具, 主程式的播放與縮圖仍使用 VLC
 

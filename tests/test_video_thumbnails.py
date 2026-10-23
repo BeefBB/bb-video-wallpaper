@@ -1,5 +1,5 @@
 """
-使用實際 VLC-lite 與暫存合成影片測試縮圖比例, 不啟動桌布或修改使用者設定
+使用實際 VLC-lite 與暫存合成影片測試縮圖比例與方向, 不啟動桌布或修改使用者設定
 需要 Windows, 專案內的 VLC-lite 與 PATH 中的 ffmpeg; 缺少時跳過
 """
 
@@ -86,6 +86,37 @@ class VideoThumbnailTests(unittest.TestCase):
             )
             cls.media[sar] = path
 
+        # 四個象限使用不同顏色, 同時驗證旋轉後的尺寸及實際像素方向
+        quadrants = Path(temporary.name) / "quadrants.mp4"
+        subprocess.run(
+            [
+                ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i",
+                "color=c=red:s=320x180:r=30,"
+                "drawbox=x=160:y=0:w=160:h=90:color=lime:t=fill,"
+                "drawbox=x=0:y=90:w=160:h=90:color=blue:t=fill,"
+                "drawbox=x=160:y=90:w=160:h=90:color=yellow:t=fill",
+                "-t", "3", "-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", str(quadrants),
+            ],
+            check=True, capture_output=True, timeout=30,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        cls.rotated_media = {}
+
+        for rotation in (90, 180, 270):
+
+            path = Path(temporary.name) / f"rotated-{rotation}.mp4"
+            subprocess.run(
+                [
+                    ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                    "-display_rotation:v:0", str(rotation), "-i", str(quadrants),
+                    "-c", "copy", str(path),
+                ],
+                check=True, capture_output=True, timeout=30,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            cls.rotated_media[rotation] = path
+
 
     def test_visible_height_excludes_decoder_padding(self):
 
@@ -114,6 +145,32 @@ class VideoThumbnailTests(unittest.TestCase):
             self.namespace["get_video_thumbnail_size"](media, cancelled)
 
         media.parse_stop.assert_called_once_with()
+
+
+    def test_rotated_videos_preserve_size_and_pixel_orientation(self):
+
+        red, green, blue, yellow = (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0)
+        expected = {
+            90: (533, (green, yellow, red, blue)),
+            180: (169, (yellow, blue, green, red)),
+            270: (533, (blue, red, yellow, green)),
+        }
+
+        for rotation, (height, colors) in expected.items():
+
+            with self.subTest(rotation=rotation):
+
+                image = self.namespace["create_video_thumbnail"](self.rotated_media[rotation], lambda: False)
+                self.assertFalse(image.isNull())
+                self.assertEqual((image.width(), image.height()), (300, height))
+
+                for (x, y), color in zip(((1, 1), (3, 1), (1, 3), (3, 3)), colors):
+
+                    pixel = image.pixelColor(image.width() * x // 4, image.height() * y // 4)
+                    actual = (pixel.red(), pixel.green(), pixel.blue())
+
+                    for actual_channel, expected_channel in zip(actual, color):
+                        self.assertLessEqual(abs(actual_channel - expected_channel), 30)
 
 
 if __name__ == "__main__":

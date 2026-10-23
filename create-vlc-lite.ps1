@@ -7,9 +7,15 @@ if (-not (Test-Path (Join-Path $source 'libvlc.dll'))) {
     throw "VLC source folder was not found: $source"
 }
 
+$transformPlugin = Join-Path $source 'plugins/video_filter/libtransform_plugin.dll'
+if (-not (Test-Path -LiteralPath $transformPlugin -PathType Leaf)) {
+    throw "VLC video transform plugin was not found: $transformPlugin"
+}
+
 # This program uses libVLC only for silent, local image/video wallpaper playback.
 # Retain every video decode/demux/packetizer/chroma/output module so libVLC can
 # fall back safely for different local files and Windows GPU configurations.
+# Retain the transform filter so memory output (vmem) can handle video rotation
 # GUI, audio, network, streaming, disc, subtitle, and media-library plugins are
 # intentionally omitted.
 $rootFiles = @(
@@ -50,6 +56,10 @@ foreach ($category in $pluginCategories) {
     Get-ChildItem -LiteralPath (Join-Path (Join-Path $source 'plugins') $category) -File |
         Copy-Item -Destination $targetDirectory
 }
+
+$filterDirectory = Join-Path $destination 'plugins/video_filter'
+New-Item -ItemType Directory -Path $filterDirectory -Force | Out-Null
+Copy-Item -LiteralPath $transformPlugin -Destination $filterDirectory
 
 & (Join-Path $destination 'vlc-cache-gen.exe') (Join-Path $destination 'plugins')
 if ($LASTEXITCODE -ne 0) {
