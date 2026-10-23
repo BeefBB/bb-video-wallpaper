@@ -36,12 +36,14 @@ if getattr(sys, "frozen", False):
     FILE = Path(sys.executable).resolve()
     ROOT_DIR = FILE.parent
     ICON_PATH = ROOT_DIR / "_internal" / "icon" / "bb-video-wallpaper.ico"
+    LOADING_IMAGE_PATH = ROOT_DIR / "_internal" / "icon" / "loading.jpg"
 
 else:
 
     FILE = Path(__file__).resolve()
     ROOT_DIR = FILE.parent
     ICON_PATH = ROOT_DIR / "icon" / "bb-video-wallpaper.ico"
+    LOADING_IMAGE_PATH = ROOT_DIR / "icon" / "loading.jpg"
 
 
 TASK_NAME = "BBVideoWallpaper"
@@ -1716,14 +1718,7 @@ class MediaPreviewMenu(QMenu):
         self.preview.setStyleSheet("background: #202020; padding: 4px;")
 
 
-        # 縮圖驗證與產生期間使用的載入圖片
-        if getattr(sys, "frozen", False):
-            resource_dir = Path(sys._MEIPASS)  # type: ignore
-
-        else:
-            resource_dir = ROOT_DIR
-
-        self.loading_pixmap = QPixmap(str(resource_dir / "loading.jpg"))
+        self.loading_pixmap = QPixmap(LOADING_IMAGE_PATH)
 
         if self.loading_pixmap.isNull():
 
