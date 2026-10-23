@@ -5,7 +5,7 @@
 """
 
 import ast
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 import ctypes
 import logging
 import multiprocessing
@@ -16,7 +16,6 @@ import subprocess
 import tempfile
 import threading
 import time
-from typing import ClassVar
 import unittest
 from unittest import mock
 
@@ -29,7 +28,21 @@ VLC_DIR = ROOT / "VLC-lite"
 FFMPEG = shutil.which("ffmpeg")
 
 
-def load_video_thumbnail_functions(vlc) -> dict:
+def run_ffmpeg(*args, timeout: int = 30) -> subprocess.CompletedProcess:
+    """以共用選項執行 FFmpeg, 保留輸出供編碼器檢查使用"""
+
+    if FFMPEG is None:
+        raise unittest.SkipTest("需要 ffmpeg")
+
+    return subprocess.run(
+        [FFMPEG, "-hide_banner", "-loglevel", "error", "-y", *map(str, args)],
+        check=True, capture_output=True, timeout=timeout,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+
+
+@contextmanager
+def video_thumbnail_environment():
     """
     只載入影片縮圖函式, 避免執行主程式的初始化流程
     """
@@ -42,22 +55,35 @@ def load_video_thumbnail_functions(vlc) -> dict:
         if isinstance(node, ast.FunctionDef) and node.name in names
     ]
 
-    namespace = {
-        "ctypes": ctypes,
-        "logger": logging.getLogger("video_thumbnail_tests"),
-        "Path": Path,
-        "QImage": QImage,
-        "Qt": Qt,
-        "threading": threading,
-        "time": time,
-        "vlc": vlc,
-    }
+    with os.add_dll_directory(str(VLC_DIR)), mock.patch.dict(os.environ, {
+        "PYTHON_VLC_LIB_PATH": str(VLC_DIR / "libvlc.dll"),
+        "PYTHON_VLC_MODULE_PATH": str(VLC_DIR),
+    }):
 
-    module = ast.Module(body=nodes, type_ignores=[])
-    code = compile(module, str(source_path), "exec")
-    exec(code, namespace)
+        ctypes.CDLL(str(VLC_DIR / "libvlccore.dll"))
+        ctypes.CDLL(str(VLC_DIR / "libvlc.dll"))
+        import vlc
 
-    return namespace
+        logger = logging.getLogger("video_thumbnail_tests")
+        logger.addHandler(logging.NullHandler())
+        logger.propagate = False
+
+        namespace = {
+            "ctypes": ctypes,
+            "logger": logger,
+            "Path": Path,
+            "QImage": QImage,
+            "Qt": Qt,
+            "threading": threading,
+            "time": time,
+            "vlc": vlc,
+        }
+
+        module = ast.Module(body=nodes, type_ignores=[])
+        code = compile(module, str(source_path), "exec")
+        exec(code, namespace)
+
+        yield namespace
 
 
 def thumbnail_probe(path: str, mode: str, connection) -> None:
@@ -68,18 +94,9 @@ def thumbnail_probe(path: str, mode: str, connection) -> None:
     cancelled = threading.Event()
     callback_refs = []
 
-    with os.add_dll_directory(str(VLC_DIR)), mock.patch.dict(os.environ, {
-        "PYTHON_VLC_LIB_PATH": str(VLC_DIR / "libvlc.dll"),
-        "PYTHON_VLC_MODULE_PATH": str(VLC_DIR),
-    }):
+    with video_thumbnail_environment() as namespace:
 
-        ctypes.CDLL(str(VLC_DIR / "libvlccore.dll"))
-        ctypes.CDLL(str(VLC_DIR / "libvlc.dll"))
-        import vlc
-
-        namespace = load_video_thumbnail_functions(vlc)
-        namespace["logger"].addHandler(logging.NullHandler())
-        namespace["logger"].propagate = False
+        vlc = namespace["vlc"]
         original_set_callbacks = vlc.MediaPlayer.video_set_format_callbacks
 
         def cancel_after_setup(player, setup, cleanup):
@@ -121,7 +138,7 @@ def thumbnail_probe(path: str, mode: str, connection) -> None:
             color = image.pixelColor(image.width() // 2, image.height() // 2)
             connection.send({
                 "size": (image.width(), image.height()),
-                "color": (color.red(), color.green(), color.blue()),
+                "color": color.getRgb()[:3],
             })
 
         except Exception as error:
@@ -141,106 +158,57 @@ def thumbnail_probe(path: str, mode: str, connection) -> None:
 )
 class VideoThumbnailTests(unittest.TestCase):
 
-    ffmpeg: ClassVar[str]
-
-
     @classmethod
     def setUpClass(cls):
 
-        ffmpeg = FFMPEG
-
-        if ffmpeg is None:
-            raise unittest.SkipTest("需要 ffmpeg")
-
-        cls.ffmpeg = ffmpeg
-
-        dll_directory = os.add_dll_directory(str(VLC_DIR))
-        cls.addClassCleanup(dll_directory.close)
-        environment = mock.patch.dict(os.environ, {
-            "PYTHON_VLC_LIB_PATH": str(VLC_DIR / "libvlc.dll"),
-            "PYTHON_VLC_MODULE_PATH": str(VLC_DIR),
-        })
-        environment.start()
-        cls.addClassCleanup(environment.stop)
-        ctypes.CDLL(str(VLC_DIR / "libvlccore.dll"))
-        ctypes.CDLL(str(VLC_DIR / "libvlc.dll"))
-        import vlc
-
-        cls.namespace = load_video_thumbnail_functions(vlc)
-
-        temporary = tempfile.TemporaryDirectory()
-        cls.addClassCleanup(temporary.cleanup)
+        cls.namespace = cls.enterClassContext(video_thumbnail_environment())
+        cls.directory = Path(cls.enterClassContext(tempfile.TemporaryDirectory()))
+        cls.has_av1_encoder = b"libaom-av1" in run_ffmpeg("-encoders", timeout=10).stdout
         cls.media = {}
 
         for sar in (1, 2):
 
-            path = Path(temporary.name) / f"sar-{sar}.mp4"
-            subprocess.run(
-                [
-                    ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-                    "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30",
-                    "-t", "3", "-vf", f"setsar={sar}/1",
-                    "-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", str(path),
-                ],
-                check=True, capture_output=True, timeout=30,
-                creationflags=subprocess.CREATE_NO_WINDOW,
+            path = cls.directory / f"sar-{sar}.mp4"
+            run_ffmpeg(
+                "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30",
+                "-t", "3", "-vf", f"setsar={sar}/1",
+                "-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", path,
             )
             cls.media[sar] = path
 
         # 四個象限使用不同顏色, 同時驗證旋轉後的尺寸及實際像素方向
-        quadrants = Path(temporary.name) / "quadrants.mp4"
-        subprocess.run(
-            [
-                ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-                "-f", "lavfi", "-i",
-                "color=c=red:s=320x180:r=30,"
-                "drawbox=x=160:y=0:w=160:h=90:color=lime:t=fill,"
-                "drawbox=x=0:y=90:w=160:h=90:color=blue:t=fill,"
-                "drawbox=x=160:y=90:w=160:h=90:color=yellow:t=fill",
-                "-t", "3", "-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", str(quadrants),
-            ],
-            check=True, capture_output=True, timeout=30,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+        quadrants = cls.directory / "quadrants.mp4"
+        run_ffmpeg(
+            "-f", "lavfi", "-i",
+            "color=c=red:s=320x180:r=30,"
+            "drawbox=x=160:y=0:w=160:h=90:color=lime:t=fill,"
+            "drawbox=x=0:y=90:w=160:h=90:color=blue:t=fill,"
+            "drawbox=x=160:y=90:w=160:h=90:color=yellow:t=fill",
+            "-t", "3", "-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", quadrants,
         )
         cls.rotated_media = {}
 
         for rotation in (90, 180, 270):
 
-            path = Path(temporary.name) / f"rotated-{rotation}.mp4"
-            subprocess.run(
-                [
-                    ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-                    "-display_rotation:v:0", str(rotation), "-i", str(quadrants),
-                    "-c", "copy", str(path),
-                ],
-                check=True, capture_output=True, timeout=30,
-                creationflags=subprocess.CREATE_NO_WINDOW,
+            path = cls.directory / f"rotated-{rotation}.mp4"
+            run_ffmpeg(
+                "-display_rotation:v:0", rotation, "-i", quadrants,
+                "-c", "copy", path,
             )
             cls.rotated_media[rotation] = path
 
 
     def require_av1_encoder(self) -> None:
 
-        result = subprocess.run(
-            [self.ffmpeg, "-hide_banner", "-encoders"],
-            check=True, capture_output=True, timeout=10,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-
-        if b"libaom-av1" not in result.stdout:
+        if not self.has_av1_encoder:
             self.skipTest("目前 FFmpeg 不支援測試使用的 AV1 編碼器")
 
 
     def create_av1_video(self, path: Path) -> None:
 
-        subprocess.run(
-            [
-                self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-                "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30",
-                "-t", "2", "-c:v", "libaom-av1", "-cpu-used", "8", "-threads", "1", str(path),
-            ],
-            check=True, capture_output=True, timeout=30,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+        run_ffmpeg(
+            "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30",
+            "-t", "2", "-c:v", "libaom-av1", "-cpu-used", "8", "-threads", "1", path,
         )
 
 
@@ -277,78 +245,75 @@ class VideoThumbnailTests(unittest.TestCase):
 
         self.require_av1_encoder()
 
-        with tempfile.TemporaryDirectory() as directory:
+        for extension in ("mp4", "mkv"):
 
-            for extension in ("mp4", "mkv"):
+            with self.subTest(extension=extension):
 
-                with self.subTest(extension=extension):
+                path = self.directory / f"av1.{extension}"
+                self.create_av1_video(path)
+                result = self.isolated_thumbnail(path)
 
-                    path = Path(directory) / f"av1.{extension}"
-                    self.create_av1_video(path)
-                    result = self.isolated_thumbnail(path)
-
-                    self.assertNotIn("error", result)
-                    self.assertEqual(result["size"], (300, 169))
+                self.assertNotIn("error", result)
+                self.assertEqual(result["size"], (300, 169))
 
 
-    def test_default_av1_video_track_determines_size_and_pixels(self):
+    def test_default_video_track_determines_size_and_pixels(self):
 
-        self.require_av1_encoder()
+        for codec in ("libx264", "libaom-av1"):
 
-        with tempfile.TemporaryDirectory() as directory:
+            with self.subTest(codec=codec):
 
-            for selected, height, color in (
-                (0, 169, (255, 0, 0)),
-                (1, 533, (0, 255, 0)),
-            ):
+                if codec == "libaom-av1":
+                    self.require_av1_encoder()
 
-                with self.subTest(default_video_track=selected):
+                encoder_options = ("-cpu-used", "8") if codec == "libaom-av1" else ()
 
-                    path = Path(directory) / f"av1-default-{selected}.mkv"
-                    subprocess.run(
-                        [
-                            self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                for selected, height, color in (
+                    (0, 169, (255, 0, 0)),
+                    (1, 533, (0, 255, 0)),
+                ):
+
+                    with self.subTest(default_video_track=selected):
+
+                        path = self.directory / f"default-{codec}-{selected}.mkv"
+                        # 音訊放在第一軌, 避免把影像軌 ID 誤當成影像軌索引
+                        run_ffmpeg(
                             "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
                             "-f", "lavfi", "-i", "color=red:s=320x180:r=30",
                             "-f", "lavfi", "-i", "color=lime:s=180x320:r=30",
                             "-t", "2", "-map", "0:a", "-map", "1:v", "-map", "2:v",
-                            "-c:a", "aac", "-c:v", "libaom-av1", "-cpu-used", "8", "-threads", "1",
+                            "-c:a", "aac", "-c:v", codec, *encoder_options, "-threads", "1",
                             "-disposition:v:0", "default" if selected == 0 else "0",
                             "-disposition:v:1", "default" if selected == 1 else "0",
-                            str(path),
-                        ],
-                        check=True, capture_output=True, timeout=30,
-                        creationflags=subprocess.CREATE_NO_WINDOW,
-                    )
-                    result = self.isolated_thumbnail(path)
+                            path,
+                        )
+                        result = self.isolated_thumbnail(path)
 
-                    self.assertNotIn("error", result)
-                    self.assertEqual(result["size"], (300, height))
+                        self.assertNotIn("error", result)
+                        self.assertEqual(result["size"], (300, height))
 
-                    for actual, expected in zip(result["color"], color):
-                        self.assertLessEqual(abs(actual - expected), 30)
+                        for actual, expected in zip(result["color"], color):
+                            self.assertLessEqual(abs(actual - expected), 30)
 
 
     def test_av1_cancellation_and_setup_failure_finish(self):
 
         self.require_av1_encoder()
 
-        with tempfile.TemporaryDirectory() as directory:
+        path = self.directory / "av1-errors.mp4"
+        self.create_av1_video(path)
 
-            path = Path(directory) / "av1.mp4"
-            self.create_av1_video(path)
+        for mode, error in (
+            ("cancel", "InterruptedError"),
+            ("setup_failure", "RuntimeError"),
+        ):
 
-            for mode, error in (
-                ("cancel", "InterruptedError"),
-                ("setup_failure", "RuntimeError"),
-            ):
+            with self.subTest(mode=mode):
 
-                with self.subTest(mode=mode):
+                result = self.isolated_thumbnail(path, mode)
 
-                    result = self.isolated_thumbnail(path, mode)
-
-                    self.assertEqual(result.get("error"), error)
-                    self.assertEqual(result["cancelled"], mode == "cancel")
+                self.assertEqual(result.get("error"), error)
+                self.assertEqual(result["cancelled"], mode == "cancel")
 
 
     def test_visible_height_excludes_decoder_padding(self):
@@ -365,49 +330,6 @@ class VideoThumbnailTests(unittest.TestCase):
 
         self.assertFalse(image.isNull())
         self.assertEqual((image.width(), image.height()), (300, 84))
-
-
-    def test_default_video_track_determines_size_and_pixels(self):
-
-        ffmpeg = FFMPEG
-
-        if ffmpeg is None:
-            raise unittest.SkipTest("需要 ffmpeg")
-
-        with tempfile.TemporaryDirectory() as directory:
-
-            for selected, height, color in (
-                (0, 169, (255, 0, 0)),
-                (1, 533, (0, 255, 0)),
-            ):
-
-                with self.subTest(default_video_track=selected):
-
-                    path = Path(directory) / f"default-{selected}.mkv"
-                    # 音訊放在第一軌, 避免把影像軌 ID 誤當成影像軌索引
-                    subprocess.run(
-                        [
-                            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-                            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
-                            "-f", "lavfi", "-i", "color=red:s=320x180:r=30",
-                            "-f", "lavfi", "-i", "color=lime:s=180x320:r=30",
-                            "-t", "1", "-map", "0:a", "-map", "1:v", "-map", "2:v",
-                            "-c:a", "aac", "-c:v", "libx264", "-threads", "1",
-                            "-disposition:v:0", "default" if selected == 0 else "0",
-                            "-disposition:v:1", "default" if selected == 1 else "0",
-                            str(path),
-                        ],
-                        check=True, capture_output=True, timeout=30,
-                        creationflags=subprocess.CREATE_NO_WINDOW,
-                    )
-                    image = self.namespace["create_video_thumbnail"](path, lambda: False)
-
-                    self.assertFalse(image.isNull())
-                    self.assertEqual((image.width(), image.height()), (300, height))
-                    pixel = image.pixelColor(image.width() // 2, image.height() // 2)
-
-                    for actual, expected in zip((pixel.red(), pixel.green(), pixel.blue()), color):
-                        self.assertLessEqual(abs(actual - expected), 30)
 
 
     def test_cancellation_stops_media_parsing(self):
