@@ -1394,6 +1394,16 @@ class Tray:
         exit_action = QAction(tr("exit"), menu)
 
 
+        for action, state in (
+            (play_action, "play"),
+            (pause_action, "pause"),
+            (stop_action, "stop"),
+        ):
+            action.setCheckable(True)
+            menu.aboutToShow.connect(
+                lambda a=action, s=state: a.setChecked(self.wallpaper.play_state == s)
+            )
+
         menu.aboutToShow.connect(
             lambda: pause_action.setEnabled(
                 bool(self.wallpaper.current_media)
