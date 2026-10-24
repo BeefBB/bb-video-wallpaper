@@ -7,6 +7,7 @@ import json
 import locale
 import logging
 import os
+from configparser import ConfigParser, Error as ConfigParserError
 from pathlib import Path
 
 
@@ -62,14 +63,28 @@ class ConfigStore:
                 config[key] = default
 
 
-        # 未指定語言時使用系統語言, 不支援時使用繁體中文
+        # 未指定語言時優先使用安裝語言, 再使用系統語言與繁體中文
         if "language" not in config:
 
-            try:
-                language = str(locale.getdefaultlocale()[0]).replace("_", "-")
+            installer_config = ConfigParser(interpolation=None)
 
-            except (ValueError, TypeError):
-                language = "zh-TW"
+            try:
+                installer_config.read(
+                    self.lang_dir.parent / "install-language.ini",
+                    encoding="utf-8-sig",
+                )
+                language = installer_config.get("Setup", "Language", fallback="")
+
+            except (OSError, UnicodeError, ConfigParserError):
+                language = ""
+
+            if language not in SUPPORTED_LANGUAGES.values():
+
+                try:
+                    language = str(locale.getdefaultlocale()[0]).replace("_", "-")
+
+                except (ValueError, TypeError):
+                    language = "zh-TW"
 
             if language not in SUPPORTED_LANGUAGES.values():
                 language = "zh-TW"

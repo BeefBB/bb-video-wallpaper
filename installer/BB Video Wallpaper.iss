@@ -54,6 +54,10 @@ english.ShortcutName={#MyAppName}
 chinesetraditional.ShortcutName={#MyAppNameC}
 chinesesimplified.ShortcutName={#MyAppNameCN}
 japanese.ShortcutName={#MyAppNameJA}
+english.AppLanguage=en-US
+chinesetraditional.AppLanguage=zh-TW
+chinesesimplified.AppLanguage=zh-CN
+japanese.AppLanguage=ja-JP
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -61,6 +65,12 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 Source: "{#ProjectDir}\dist\BB Video Wallpaper\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
+
+[INI]
+Filename: "{app}\install-language.ini"; Section: "Setup"; Key: "Language"; String: "{cm:AppLanguage}"
+
+[UninstallDelete]
+Type: files; Name: "{app}\install-language.ini"
 
 [InstallDelete]
 ; Remove only known shortcut names so upgrades can switch languages cleanly.
