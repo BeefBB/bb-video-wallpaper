@@ -69,6 +69,10 @@ Source: "{#ProjectDir}\dist\BB Video Wallpaper\*"; DestDir: "{app}"; Flags: igno
 [INI]
 Filename: "{app}\install-language.ini"; Section: "Setup"; Key: "Language"; String: "{cm:AppLanguage}"
 
+[UninstallRun]
+; Remove the startup task before deleting the installed files.
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""BBVideoWallpaper"" /F"; Flags: runhidden waituntilterminated; RunOnceId: "DeleteStartupTask"
+
 [UninstallDelete]
 Type: files; Name: "{app}\install-language.ini"
 
