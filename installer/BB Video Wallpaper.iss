@@ -4,6 +4,8 @@
 #define ProjectDir ".."
 #define MyAppName "BB Video Wallpaper"
 #define MyAppNameC "BB 影片桌布"
+#define MyAppNameCN "BB 视频壁纸"
+#define MyAppNameJA "BB 動画壁紙"
 #define MyAppVersion "1.13.0"
 #define MyAppPublisher "BeefBB"
 #define MyAppExeName "BB Video Wallpaper.exe"
@@ -36,9 +38,22 @@ OutputBaseFilename=bb-video-wallpaper-{#StringChange(MyAppVersion, ".", "-")}-se
 SolidCompression=yes
 WizardStyle=modern dark
 SetupIconFile={#ProjectDir}\icon\bb-video-wallpaper.ico
+LanguageDetectionMethod=uilanguage
+ShowLanguageDialog=yes
+UsePreviousLanguage=yes
 
 [Languages]
+; English is the fallback when the Windows UI language is not supported.
+Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "chinesetraditional"; MessagesFile: "compiler:Languages\ChineseTraditional.isl"
+Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+Name: "japanese"; MessagesFile: "compiler:Languages\Japanese.isl"
+
+[CustomMessages]
+english.ShortcutName={#MyAppName}
+chinesetraditional.ShortcutName={#MyAppNameC}
+chinesesimplified.ShortcutName={#MyAppNameCN}
+japanese.ShortcutName={#MyAppNameJA}
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -47,9 +62,20 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#ProjectDir}\dist\BB Video Wallpaper\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
+[InstallDelete]
+; Remove only known shortcut names so upgrades can switch languages cleanly.
+Type: files; Name: "{autoprograms}\{#MyAppName}.lnk"
+Type: files; Name: "{autoprograms}\{#MyAppNameC}.lnk"
+Type: files; Name: "{autoprograms}\{#MyAppNameCN}.lnk"
+Type: files; Name: "{autoprograms}\{#MyAppNameJA}.lnk"
+Type: files; Name: "{autodesktop}\{#MyAppName}.lnk"
+Type: files; Name: "{autodesktop}\{#MyAppNameC}.lnk"
+Type: files; Name: "{autodesktop}\{#MyAppNameCN}.lnk"
+Type: files; Name: "{autodesktop}\{#MyAppNameJA}.lnk"
+
 [Icons]
-Name: "{autoprograms}\{#MyAppNameC}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\{#MyAppNameC}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autoprograms}\{cm:ShortcutName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{autodesktop}\{cm:ShortcutName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 ;[Run]
 ;Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
