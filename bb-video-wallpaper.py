@@ -1394,6 +1394,14 @@ class Tray:
         exit_action = QAction(tr("exit"), menu)
 
 
+        menu.aboutToShow.connect(
+            lambda: pause_action.setEnabled(
+                bool(self.wallpaper.current_media)
+                and self.wallpaper.current_media.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
+            )
+        )
+
+
         self.add_media_action = QAction(tr("add_media"), menu)
         self.add_media_action.triggered.connect(self.add_media)
 
