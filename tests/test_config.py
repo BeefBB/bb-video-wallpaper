@@ -3,70 +3,23 @@
 只在暫存資料夾操作, 不啟動桌布或修改使用者設定
 """
 
-import ast
 import json
 import locale
-import logging
 import os
+import sys
 from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
 
 
-SOURCE_PATH = Path(__file__).resolve().parents[1] / "bb-video-wallpaper.py"
-SOURCE = SOURCE_PATH.read_text(encoding="utf-8")
-NAMES = {
-    "CONFIG_DEFAULTS",
-    "SUPPORTED_LANGUAGES",
-    "validate_config",
-    "load_config",
-    "save_config",
-    "load_language",
-}
+ROOT = Path(__file__).resolve().parents[1]
 
+# 直接執行測試檔時, 將專案根目錄加入模組搜尋路徑
+if __name__ == "__main__":
+    sys.path.insert(0, str(ROOT))
 
-def load_config_functions() -> dict:
-    """
-    只載入設定相關函式與常數, 避免主程式匯入時初始化日誌和 VLC
-    """
-
-    tree = ast.parse(SOURCE)
-    nodes = []
-
-    for node in tree.body:
-
-        if isinstance(node, ast.FunctionDef) and node.name in NAMES:
-            nodes.append(node)
-
-        elif isinstance(node, ast.Assign):
-
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id in NAMES:
-                    nodes.append(node)
-                    break
-
-
-    logger = logging.getLogger("config_tests")
-    logger.addHandler(logging.NullHandler())
-    logger.propagate = False
-
-    namespace = {
-        "json": json,
-        "locale": locale,
-        "logger": logger,
-        "os": os,
-        "Path": Path,
-    }
-
-    module = ast.Module(body=nodes, type_ignores=[])
-    code = compile(module, str(SOURCE_PATH), "exec")
-    exec(code, namespace)
-
-    return namespace
-
-
-namespace = load_config_functions()
+from config import CONFIG_DEFAULTS, SUPPORTED_LANGUAGES, ConfigStore
 
 
 class ConfigTests(unittest.TestCase):
@@ -80,11 +33,8 @@ class ConfigTests(unittest.TestCase):
         self.media_dir = Path(self.temp_dir.name) / "video"
         self.media_dir.mkdir()
 
-        namespace.update(
-            CONFIG_PATH=self.config_path,
-            MEDIA_DIR=self.media_dir,
-            LANG_DIR=SOURCE_PATH.parent / "lang"
-        )
+        self.store = ConfigStore(self.config_path, self.media_dir, ROOT / "lang")
+        self.enterContext(mock.patch("config.logger"))
 
         patcher = mock.patch.object(
             locale,
@@ -97,14 +47,19 @@ class ConfigTests(unittest.TestCase):
 
     def test_source_compiles(self):
 
-        compile(SOURCE, str(SOURCE_PATH), "exec")
+        for name in ("bb-video-wallpaper.py", "config.py", "thumbnails.py"):
+
+            source_path = ROOT / name
+
+            with self.subTest(module=name):
+                compile(source_path.read_text(encoding="utf-8"), str(source_path), "exec")
 
 
     def test_missing_file_uses_defaults_without_writing(self):
 
-        config = namespace["load_config"]()
+        config = self.store.load()
         expected = {
-            **namespace["CONFIG_DEFAULTS"],
+            **CONFIG_DEFAULTS,
             "language": "en-US",
             "recentVideo": [],
         }
@@ -124,13 +79,13 @@ class ConfigTests(unittest.TestCase):
             "futureOption": {"enabled": True},
         }
 
-        for key, default in namespace["CONFIG_DEFAULTS"].items():
+        for key, default in CONFIG_DEFAULTS.items():
 
             for invalid in (None, 0, 1, "false", [], {}):
 
                 with self.subTest(key=key, value=invalid):
                     raw = {**baseline, key: invalid}
-                    result = namespace["validate_config"](raw)
+                    result = self.store.validate(raw)
 
                     self.assertEqual(result, {**baseline, key: default})
                     self.assertEqual(raw[key], invalid)
@@ -138,14 +93,14 @@ class ConfigTests(unittest.TestCase):
 
     def test_language_validation(self):
 
-        for language in namespace["SUPPORTED_LANGUAGES"].values():
-            result = namespace["validate_config"]({"language": language})
+        for language in SUPPORTED_LANGUAGES.values():
+            result = self.store.validate({"language": language})
             self.assertEqual(result["language"], language)
 
         for invalid in (None, False, 1, [], {}, "", "xx-XX", "../other"):
 
             with self.subTest(value=invalid):
-                result = namespace["validate_config"]({"language": invalid})
+                result = self.store.validate({"language": invalid})
                 self.assertEqual(result["language"], "zh-TW")
 
 
@@ -158,23 +113,23 @@ class ConfigTests(unittest.TestCase):
                 "getdefaultlocale",
                 return_value=(system_locale, None)
             ):
-                result = namespace["validate_config"]({})
+                result = self.store.validate({})
                 self.assertEqual(result["language"], "zh-TW")
 
         with mock.patch.object(locale, "getdefaultlocale", side_effect=ValueError):
-            result = namespace["validate_config"]({})
+            result = self.store.validate({})
             self.assertEqual(result["language"], "zh-TW")
 
 
     def test_legacy_recent_video_and_invalid_types(self):
 
-        result = namespace["validate_config"]({"recentVideo": "video/old.mp4"})
+        result = self.store.validate({"recentVideo": "video/old.mp4"})
         self.assertEqual(result["recentVideo"], ["video/old.mp4"])
 
         for invalid in (None, False, 123, {}):
 
             with self.subTest(value=invalid):
-                result = namespace["validate_config"]({"recentVideo": invalid})
+                result = self.store.validate({"recentVideo": invalid})
                 self.assertEqual(result["recentVideo"], [])
 
 
@@ -201,7 +156,7 @@ class ConfigTests(unittest.TestCase):
                 "\\\\server\\share\\file.mp4",
             ])
 
-        result = namespace["validate_config"]({"recentVideo": recent})
+        result = self.store.validate({"recentVideo": recent})
         self.assertEqual(result["recentVideo"], ["video/first.mp4", "missing.mp4"])
 
 
@@ -212,13 +167,13 @@ class ConfigTests(unittest.TestCase):
         if os.name == "nt":
             recent.insert(1, "FIRST.mp4")
 
-        result = namespace["validate_config"]({"recentVideo": recent})
+        result = self.store.validate({"recentVideo": recent})
         self.assertEqual(
             result["recentVideo"],
             ["first.mp4", "0.mp4", "1.mp4", "2.mp4", "3.mp4"]
         )
 
-        result = namespace["validate_config"]({})
+        result = self.store.validate({})
         self.assertEqual(result["recentVideo"], [])
 
 
@@ -229,8 +184,8 @@ class ConfigTests(unittest.TestCase):
             with self.subTest(contents=contents):
                 self.config_path.write_bytes(contents)
 
-                result = namespace["load_config"]()
-                expected = namespace["validate_config"]({})
+                result = self.store.load()
+                expected = self.store.validate({})
 
                 self.assertEqual(result, expected)
                 self.assertEqual(self.config_path.read_bytes(), contents)
@@ -246,7 +201,7 @@ class ConfigTests(unittest.TestCase):
         })
         self.config_path.write_text(contents, encoding="utf-8")
 
-        result = namespace["load_config"]()
+        result = self.store.load()
 
         self.assertIs(result["autoPauseIfFullscreen"], True)
         self.assertIs(result["autoPauseIfOnBattery"], True)
@@ -257,35 +212,35 @@ class ConfigTests(unittest.TestCase):
 
     def test_read_error_uses_defaults(self):
 
-        with mock.patch.dict(namespace, {"open": mock.Mock(side_effect=PermissionError)}):
-            result = namespace["load_config"]()
-            expected = namespace["validate_config"]({})
+        with mock.patch("builtins.open", side_effect=PermissionError):
+            result = self.store.load()
+            expected = self.store.validate({})
             self.assertEqual(result, expected)
 
 
     def test_language_load_uses_validated_config(self):
 
-        path = namespace["LANG_DIR"] / "en-US.json"
+        path = self.store.lang_dir / "en-US.json"
         expected = json.loads(path.read_text(encoding="utf-8"))
-        self.assertEqual(namespace["load_language"](), expected)
+        self.assertEqual(self.store.load_language(), expected)
 
         self.config_path.write_text('{"language": []}', encoding="utf-8")
 
-        path = namespace["LANG_DIR"] / "zh-TW.json"
+        path = self.store.lang_dir / "zh-TW.json"
         expected = json.loads(path.read_text(encoding="utf-8"))
-        self.assertEqual(namespace["load_language"](), expected)
+        self.assertEqual(self.store.load_language(), expected)
 
 
     def test_save_round_trip_and_replace_failure(self):
 
-        original = namespace["validate_config"]({"language": "zh-TW"})
-        namespace["save_config"](original)
-        self.assertEqual(namespace["load_config"](), original)
+        original = self.store.validate({"language": "zh-TW"})
+        self.store.save(original)
+        self.assertEqual(self.store.load(), original)
 
         before = self.config_path.read_bytes()
 
         with mock.patch.object(os, "replace", side_effect=PermissionError):
-            namespace["save_config"]({"language": "ja-JP"})
+            self.store.save({"language": "ja-JP"})
 
         self.assertEqual(self.config_path.read_bytes(), before)
         self.assertFalse(self.config_path.with_suffix(".tmp").exists())

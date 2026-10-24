@@ -3,71 +3,26 @@
 只在暫存資料夾操作, 不啟動桌布或初始化 VLC
 """
 
-import ast
 import hashlib
-import logging
 import os
+import sys
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QImage, QImageReader
+from PySide6.QtGui import QImage
 
 
-SOURCE_PATH = Path(__file__).resolve().parents[1] / "bb-video-wallpaper.py"
-SOURCE = SOURCE_PATH.read_text(encoding="utf-8")
-NAMES = {
-    "SUPPORTED_VIDEO_EXTENSIONS",
-    "SUPPORTED_IMAGE_EXTENSIONS",
-    "SUPPORTED_MEDIA_EXTENSIONS",
-    "fast_hash",
-    "ensure_thumbnail",
-}
+ROOT = Path(__file__).resolve().parents[1]
 
+# 直接執行測試檔時, 將專案根目錄加入模組搜尋路徑
+if __name__ == "__main__":
+    sys.path.insert(0, str(ROOT))
 
-def load_thumbnail_functions() -> dict:
-    """
-    只載入縮圖相關函式與常數, 避免主程式匯入時初始化日誌和 VLC
-    """
-
-    tree = ast.parse(SOURCE)
-    nodes = []
-
-    for node in tree.body:
-
-        if isinstance(node, ast.FunctionDef) and node.name in NAMES:
-            nodes.append(node)
-
-        elif isinstance(node, ast.Assign):
-
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id in NAMES:
-                    nodes.append(node)
-                    break
-
-
-    logger = logging.getLogger("thumbnail_tests")
-    logger.addHandler(logging.NullHandler())
-    logger.propagate = False
-
-    namespace = {
-        "hashlib": hashlib,
-        "logger": logger,
-        "os": os,
-        "Path": Path,
-        "tempfile": tempfile,
-        "Qt": Qt,
-        "QImage": QImage,
-        "QImageReader": QImageReader,
-    }
-
-    module = ast.Module(body=nodes, type_ignores=[])
-    code = compile(module, str(SOURCE_PATH), "exec")
-    exec(code, namespace)
-
-    return namespace
+from thumbnails import ThumbnailThread, ensure_thumbnail
 
 
 class ThumbnailTests(unittest.TestCase):
@@ -80,12 +35,6 @@ class ThumbnailTests(unittest.TestCase):
         self.media_dir = Path(self.temp_dir.name) / "media"
         self.media_dir.mkdir()
         self.thumbnail_dir = Path(self.temp_dir.name) / "thumbnails"
-        self.namespace = load_thumbnail_functions()
-
-        self.namespace.update(
-            MEDIA_DIR=self.media_dir,
-            THUMBNAIL_DIR=self.thumbnail_dir
-        )
 
 
     def save_image(self, path: Path, color) -> None:
@@ -96,7 +45,47 @@ class ThumbnailTests(unittest.TestCase):
 
 
     def thumbnail(self, path: Path) -> Path:
-        return self.namespace["ensure_thumbnail"](path, lambda: False)
+
+        return ensure_thumbnail(
+            path,
+            lambda: False,
+            media_dir=self.media_dir,
+            thumbnail_dir=self.thumbnail_dir,
+        )
+
+
+    def test_background_worker_uses_supplied_directories(self):
+
+        source = self.media_dir / "nested" / "sample.bmp"
+        source.parent.mkdir()
+        self.save_image(source, Qt.GlobalColor.red)
+
+
+        ready = threading.Event()
+        results = []
+        worker = ThumbnailThread(self.media_dir, self.thumbnail_dir)
+
+        def receive(media_path, image):
+
+            results.append((media_path, image))
+            ready.set()
+
+
+        worker.thumbnail_ready.connect(receive, Qt.ConnectionType.DirectConnection)
+
+        try:
+            worker.request(source)
+            self.assertTrue(ready.wait(5), "背景縮圖工作未回傳結果")
+
+        finally:
+            worker.stop()
+
+
+        self.assertFalse(worker.isRunning())
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0][0], str(source))
+        self.assertEqual(results[0][1].width(), 300)
+        self.assertEqual(len(list((self.thumbnail_dir / "nested").glob("*.jpg"))), 1)
 
 
     def test_long_names_with_same_content_have_independent_caches(self):
