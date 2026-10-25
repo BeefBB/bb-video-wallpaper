@@ -4,26 +4,29 @@
 需要 Windows, 專案內的 VLC-lite 與 PATH 中的 ffmpeg; 缺少時跳過
 """
 
-import ast
 from contextlib import contextmanager, nullcontext
 import ctypes
-import logging
 import multiprocessing
 import os
+import sys
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import threading
-import time
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QImage
-
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# 直接執行測試檔時, 將專案根目錄加入模組搜尋路徑
+if __name__ == "__main__":
+    sys.path.insert(0, str(ROOT))
+
+from thumbnails import create_video_thumbnail, get_video_thumbnail_sizes
+
+
 VLC_DIR = ROOT / "VLC-lite"
 FFMPEG = shutil.which("ffmpeg")
 
@@ -44,46 +47,19 @@ def run_ffmpeg(*args, timeout: int = 30) -> subprocess.CompletedProcess:
 @contextmanager
 def video_thumbnail_environment():
     """
-    只載入影片縮圖函式, 避免執行主程式的初始化流程
+    設定測試用 VLC 路徑, 直接測試縮圖模組
     """
-
-    names = {"get_video_thumbnail_sizes", "create_video_thumbnail"}
-    source_path = ROOT / "bb-video-wallpaper.py"
-    tree = ast.parse(source_path.read_text(encoding="utf-8"))
-    nodes: list[ast.stmt] = [
-        node for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name in names
-    ]
 
     with os.add_dll_directory(str(VLC_DIR)), mock.patch.dict(os.environ, {
         "PYTHON_VLC_LIB_PATH": str(VLC_DIR / "libvlc.dll"),
         "PYTHON_VLC_MODULE_PATH": str(VLC_DIR),
-    }):
+    }), mock.patch("thumbnails.logger"):
 
         ctypes.CDLL(str(VLC_DIR / "libvlccore.dll"))
         ctypes.CDLL(str(VLC_DIR / "libvlc.dll"))
         import vlc
 
-        logger = logging.getLogger("video_thumbnail_tests")
-        logger.addHandler(logging.NullHandler())
-        logger.propagate = False
-
-        namespace = {
-            "ctypes": ctypes,
-            "logger": logger,
-            "Path": Path,
-            "QImage": QImage,
-            "Qt": Qt,
-            "threading": threading,
-            "time": time,
-            "vlc": vlc,
-        }
-
-        module = ast.Module(body=nodes, type_ignores=[])
-        code = compile(module, str(source_path), "exec")
-        exec(code, namespace)
-
-        yield namespace
+        yield vlc
 
 
 def thumbnail_probe(path: str, mode: str, connection) -> None:
@@ -94,9 +70,8 @@ def thumbnail_probe(path: str, mode: str, connection) -> None:
     cancelled = threading.Event()
     callback_refs = []
 
-    with video_thumbnail_environment() as namespace:
+    with video_thumbnail_environment() as vlc:
 
-        vlc = namespace["vlc"]
         original_set_callbacks = vlc.MediaPlayer.video_set_format_callbacks
 
         def cancel_after_setup(player, setup, cleanup):
@@ -133,12 +108,12 @@ def thumbnail_probe(path: str, mode: str, connection) -> None:
         try:
 
             with patch:
-                image = namespace["create_video_thumbnail"](Path(path), cancelled.is_set)
+                image = create_video_thumbnail(Path(path), cancelled.is_set)
 
             color = image.pixelColor(image.width() // 2, image.height() // 2)
             connection.send({
                 "size": (image.width(), image.height()),
-                "color": color.getRgb()[:3],
+                "color": (color.red(), color.green(), color.blue()),
             })
 
         except Exception as error:
@@ -161,7 +136,7 @@ class VideoThumbnailTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
 
-        cls.namespace = cls.enterClassContext(video_thumbnail_environment())
+        cls.enterClassContext(video_thumbnail_environment())
         cls.directory = Path(cls.enterClassContext(tempfile.TemporaryDirectory()))
         cls.has_av1_encoder = b"libaom-av1" in run_ffmpeg("-encoders", timeout=10).stdout
         cls.media = {}
@@ -318,7 +293,7 @@ class VideoThumbnailTests(unittest.TestCase):
 
     def test_visible_height_excludes_decoder_padding(self):
 
-        image = self.namespace["create_video_thumbnail"](self.media[1], lambda: False)
+        image = create_video_thumbnail(self.media[1], lambda: False)
 
         self.assertFalse(image.isNull())
         self.assertEqual((image.width(), image.height()), (300, 169))
@@ -326,7 +301,7 @@ class VideoThumbnailTests(unittest.TestCase):
 
     def test_non_square_pixels_use_display_aspect_ratio(self):
 
-        image = self.namespace["create_video_thumbnail"](self.media[2], lambda: False)
+        image = create_video_thumbnail(self.media[2], lambda: False)
 
         self.assertFalse(image.isNull())
         self.assertEqual((image.width(), image.height()), (300, 84))
@@ -340,7 +315,7 @@ class VideoThumbnailTests(unittest.TestCase):
         cancelled = mock.Mock(side_effect=[False, True])
 
         with self.assertRaises(InterruptedError):
-            self.namespace["get_video_thumbnail_sizes"](media, cancelled)
+            get_video_thumbnail_sizes(media, cancelled)
 
         media.parse_stop.assert_called_once_with()
 
@@ -358,7 +333,7 @@ class VideoThumbnailTests(unittest.TestCase):
 
             with self.subTest(rotation=rotation):
 
-                image = self.namespace["create_video_thumbnail"](self.rotated_media[rotation], lambda: False)
+                image = create_video_thumbnail(self.rotated_media[rotation], lambda: False)
                 self.assertFalse(image.isNull())
                 self.assertEqual((image.width(), image.height()), (300, height))
 

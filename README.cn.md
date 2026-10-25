@@ -55,6 +55,8 @@ bb-video-wallpaper/
  │   ├─ libvlccore.dll
  │   └─ ...
  ├─ bb-video-wallpaper.py
+ ├─ config.py
+ ├─ thumbnails.py
  ├─ libvlc.dll
  └─ requirements.txt
 ```
