@@ -467,7 +467,17 @@ def import_media(source: Path) -> Path:
                 return destination
 
             except FileExistsError:
-                destination = import_dir / f"{source.stem}({index}){source.suffix}"
+                suffix = f"({index}){source.suffix}"
+                stem = source.stem
+                encoded_stem = stem.encode("utf-16-le")
+                # Windows 檔名上限以 UTF-16 單位計算
+                max_stem_units = 255 - len(suffix.encode("utf-16-le")) // 2
+
+                if len(encoded_stem) // 2 > max_stem_units:
+                    # 截斷時額外預留 4 個單位, 並避免留下不完整的雙單位字元
+                    stem = encoded_stem[:(max_stem_units - 4) * 2].decode("utf-16-le", errors="ignore")
+
+                destination = import_dir / f"{stem}{suffix}"
                 index += 1
 
     finally:

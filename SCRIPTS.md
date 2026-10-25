@@ -205,6 +205,7 @@ ISCC.exe '.\installer\BB Video Wallpaper.iss'
 
 ```powershell
 .\.venv\Scripts\python.exe .\tests\test_config.py
+.\.venv\Scripts\python.exe .\tests\test_media_import.py
 .\.venv\Scripts\python.exe .\tests\test_thumbnails.py
 .\.venv\Scripts\python.exe .\tests\test_video_thumbnails.py
 ```
@@ -212,6 +213,7 @@ ISCC.exe '.\installer\BB Video Wallpaper.iss'
 測試腳本                                                     | 檢查內容                                                         | 額外需求
 ---                                                          | ---                                                              | ---
 [test_config.py](./tests/test_config.py)                     | 預設設定, 無效欄位, 路徑與紀錄驗證, 語言載入, 儲存失敗時保留原檔 | 不需初始化 VLC
+[test_media_import.py](./tests/test_media_import.py)         | 同名匯入, 長檔名截斷與預留空間, 中文及 emoji, 編號進位, 內容去重 | Windows, 不需初始化 VLC
 [test_thumbnails.py](./tests/test_thumbnails.py)             | 長檔名, 獨立快取, 舊快取替換, 清理範圍與儲存失敗處理             | PySide6, 不需初始化 VLC
 [test_video_thumbnails.py](./tests/test_video_thumbnails.py) | 影片縮圖比例, 旋轉方向, 多影像軌, 取消及錯誤處理                 | Windows, 專案內的 VLC-lite, PATH 中可找到的 FFmpeg
 
