@@ -78,7 +78,7 @@ if __name__ == "__main__":
     already_running, mutex = is_already_running()
 
 
-APPDATA_DIR = (Path(os.getenv("LOCALAPPDATA")) / "BB" / "BB Video Wallpaper")  # type: ignore
+APPDATA_DIR = Path(os.environ["LOCALAPPDATA"]) / "BB" / "BB Video Wallpaper"
 APPDATA_DIR.mkdir(parents=True, exist_ok=True)
 
 MEDIA_DIR = APPDATA_DIR / "video"
@@ -163,7 +163,7 @@ def show_already_running_toast():
     tray.showMessage(
         tr("app_name"),
         tr("already_running_message"),
-        QSystemTrayIcon.Information,  # type: ignore
+        QSystemTrayIcon.MessageIcon.Information,
         3000
     )
 
@@ -814,13 +814,13 @@ class Wallpaper(QWidget):
 
         # 建立視窗
         self.setWindowFlags(
-            Qt.FramelessWindowHint |     # type: ignore
-            Qt.Tool |                    # type: ignore
-            Qt.WindowDoesNotAcceptFocus  # type: ignore
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.Tool |
+            Qt.WindowType.WindowDoesNotAcceptFocus
         )
 
         # 不接受滑鼠事件
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)  # type: ignore
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         # 設成螢幕大小
         screen = QApplication.primaryScreen()
@@ -998,12 +998,12 @@ class Wallpaper(QWidget):
             self.setGeometry(screen.geometry())
 
             self.setWindowFlags(
-                Qt.FramelessWindowHint |     # type: ignore
-                Qt.Tool |                    # type: ignore
-                Qt.WindowDoesNotAcceptFocus  # type: ignore
+                Qt.WindowType.FramelessWindowHint |
+                Qt.WindowType.Tool |
+                Qt.WindowType.WindowDoesNotAcceptFocus
             )
 
-            self.setAttribute(Qt.WA_TransparentForMouseEvents, True)  # type: ignore
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             self.show()
 
 
