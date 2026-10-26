@@ -20,7 +20,7 @@ from ctypes import wintypes
 import psutil
 
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog, QLabel
-from PySide6.QtCore import Qt, QTimer, QThread, Slot
+from PySide6.QtCore import Qt, QTimer, QThread, Slot, Signal
 from PySide6.QtGui import QAction, QIcon, QFont, QPixmap, QCursor, QImage
 
 from comtypes import GUID as ComGUID, HRESULT, IUnknown, COMMETHOD
@@ -780,6 +780,9 @@ def is_any_fullscreen(wallpaper_hwnd) -> bool:
 
 class Wallpaper(QWidget):
 
+    playback_started = Signal()
+
+
     def __init__(self):
 
         super().__init__()
@@ -842,6 +845,18 @@ class Wallpaper(QWidget):
 
         self.enable_auto_pause = True
         self.play_state = "stop"  # "play", "pause", "stop"
+
+
+        # VLC 回呼只發送訊號, 播放器操作回到 Qt 主執行緒處理
+        self.playback_started.connect(
+            self.apply_pending_pause,
+            Qt.ConnectionType.QueuedConnection
+        )
+        self.player_events = self.player.event_manager()
+        self.player_events.event_attach(
+            vlc.EventType.MediaPlayerPlaying,  # type: ignore
+            lambda event: self.playback_started.emit()
+        )
 
 
         self.fullscreen_detection_ready = False
@@ -927,8 +942,16 @@ class Wallpaper(QWidget):
 
     def media_pause(self) -> None:
 
-        self.player.pause()
         self.play_state = "pause"
+        self.apply_pending_pause()
+
+
+    @Slot()
+    def apply_pending_pause(self) -> None:
+
+        # 載入完成後依最新狀態補套暫停, 不覆蓋後續的播放或停止要求
+        if not self.is_exiting and self.play_state == "pause":
+            self.player.set_pause(1)
 
 
     def media_stop(self) -> None:
@@ -1744,6 +1767,7 @@ class Tray:
             self.wallpaper.is_exiting = True
 
             self.wallpaper.unregister_power_notification()
+            self.wallpaper.player_events.event_detach(vlc.EventType.MediaPlayerPlaying)  # type: ignore
 
             self.wallpaper.media_stop()
 
