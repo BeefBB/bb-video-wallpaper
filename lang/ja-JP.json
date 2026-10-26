@@ -9,6 +9,7 @@
   "media_files": "動画と画像",
   "adding_media": "動画を追加中…",
   "media_add_failed": "動画を追加できませんでした：{error}",
+  "media_insufficient_space": "ディスクの空き容量が不足しています\n必要な空き容量は {required:,} MB、現在の空き容量は {available:,} MB です",
   "open_video_folder": "動画フォルダーを開く",
   "select_video": "動画を選択",
   "clear_recent_videos": "履歴をクリア",

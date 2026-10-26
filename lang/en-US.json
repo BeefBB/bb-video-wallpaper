@@ -9,6 +9,7 @@
   "media_files": "Videos and images",
   "adding_media": "Adding video…",
   "media_add_failed": "Could not add video: {error}",
+  "media_insufficient_space": "Not enough disk space\n{required:,} MB required, {available:,} MB available",
   "open_video_folder": "Open Video Folder",
   "select_video": "Select Video",
   "clear_recent_videos": "Clear History",

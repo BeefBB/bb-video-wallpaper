@@ -9,6 +9,7 @@
   "media_files": "影片與圖片",
   "adding_media": "正在新增影片…",
   "media_add_failed": "新增影片失敗：{error}",
+  "media_insufficient_space": "磁碟空間不足\n需要 {required:,} MB, 目前可用 {available:,} MB",
   "open_video_folder": "開啟影片資料夾",
   "select_video": "選擇影片",
   "clear_recent_videos": "清除紀錄",

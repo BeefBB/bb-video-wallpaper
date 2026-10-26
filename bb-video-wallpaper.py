@@ -51,6 +51,7 @@ else:
 
 
 TASK_NAME = "BBVideoWallpaper"
+IMPORT_RESERVE_BYTES = 100 * 1024 * 1024
 
 
 # 唯一的 Mutex 名稱
@@ -440,6 +441,20 @@ def import_media(source: Path) -> Path:
 
         if calculate_sha256(candidate) == source_hash:
             return candidate
+
+
+    # 重複檔案不需額外容量; 確定要複製時才檢查並預留 100 MB
+    free_space = shutil.disk_usage(import_dir).free
+    required_space = source_size + IMPORT_RESERVE_BYTES
+
+    if free_space < required_space:
+        megabyte = 1024 * 1024
+        raise OSError(
+            tr("media_insufficient_space").format(
+                required=(source_size + megabyte - 1) // megabyte,
+                available=max(0, free_space - IMPORT_RESERVE_BYTES) // megabyte,
+            )
+        )
 
 
     # 暫存檔不會出現在媒體清單, 完成複製後才改成正式檔名
@@ -1732,7 +1747,8 @@ class Tray:
             self.tray.showMessage(
                 tr("app_name"),
                 tr("media_add_failed").format(error=worker.error),
-                QSystemTrayIcon.MessageIcon.Warning,
+                QSystemTrayIcon.MessageIcon.Information,
+                3000
             )
 
 
