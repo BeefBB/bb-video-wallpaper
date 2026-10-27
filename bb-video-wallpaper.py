@@ -414,7 +414,7 @@ def calculate_sha256(path: Path, cancelled=lambda: False) -> bytes:
 
 def import_media(source: Path, *, progress=None, cancelled=lambda: False) -> Path:
     """
-    比對重複內容後分塊複製至 video/video, 支援進度回報與取消
+    比對重複內容後分塊複製至 video/_imports, 支援進度回報與取消
     """
 
     check_import_cancelled(cancelled)
@@ -427,7 +427,7 @@ def import_media(source: Path, *, progress=None, cancelled=lambda: False) -> Pat
         raise ValueError(source.name)
 
 
-    import_dir = MEDIA_DIR / "video"
+    import_dir = MEDIA_DIR / "_imports"
     import_dir.mkdir(parents=True, exist_ok=True)
 
     source_size = source.stat().st_size

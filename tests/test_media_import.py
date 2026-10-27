@@ -58,7 +58,7 @@ class MediaImportTests(unittest.TestCase):
         self.source_dir = Path(self.temp_dir.name) / "source"
         self.source_dir.mkdir()
         self.media_dir = Path(self.temp_dir.name) / "media"
-        self.import_dir = self.media_dir / "video"
+        self.import_dir = self.media_dir / "_imports"
         self.import_dir.mkdir(parents=True)
 
         disk_usage_patch = mock.patch.object(shutil, "disk_usage")
