@@ -14,6 +14,9 @@
 將 Python 程式打包成執行檔     | [build.bat](./build.bat)                                         | 產生 `dist/BB Video Wallpaper/`
 將打包結果製作成安裝程式       | [BB Video Wallpaper.iss](./installer/BB%20Video%20Wallpaper.iss) | 在 `installer/` 產生安裝檔
 檢查設定檔處理                 | [test_config.py](./tests/test_config.py)                         | 執行設定檔相關測試
+檢查媒體匯入                   | [test_media_import.py](./tests/test_media_import.py)             | 檢查容量, 去重, 命名, 進度與取消
+檢查匯入選單                   | [test_import_menu.py](./tests/test_import_menu.py)               | 檢查選單排列, 進度訊號, 取消與結束狀態
+檢查播放與暫停狀態             | [test_playback_state.py](./tests/test_playback_state.py)         | 檢查載入時序, 延遲事件與桌布重掛
 檢查縮圖快取                   | [test_thumbnails.py](./tests/test_thumbnails.py)                 | 執行快取相關測試
 檢查實際影片縮圖比例           | [test_video_thumbnails.py](./tests/test_video_thumbnails.py)     | 使用 VLC-lite 解碼合成影片並檢查結果
 
@@ -88,7 +91,7 @@ Python 與 VLC 的架構需要相容, 例如搭配使用 64 位元版本. 只有
 路徑          | 用途
 ---           | ---
 `config.json` | 語言, 自動暫停選項與最近使用紀錄
-`video/`      | 媒體資料夾, 匯入的檔案放在其下的 `video/` 子目錄
+`video/`      | 媒體資料夾, 匯入的檔案放在其下的 `_imports/` 子目錄
 `thumbnails/` | 縮圖快取
 `log/log.log` | 日誌, 達到上限後輪替
 
@@ -206,6 +209,8 @@ ISCC.exe '.\installer\BB Video Wallpaper.iss'
 ```powershell
 .\.venv\Scripts\python.exe .\tests\test_config.py
 .\.venv\Scripts\python.exe .\tests\test_media_import.py
+.\.venv\Scripts\python.exe .\tests\test_import_menu.py
+.\.venv\Scripts\python.exe .\tests\test_playback_state.py
 .\.venv\Scripts\python.exe .\tests\test_thumbnails.py
 .\.venv\Scripts\python.exe .\tests\test_video_thumbnails.py
 ```
@@ -213,7 +218,9 @@ ISCC.exe '.\installer\BB Video Wallpaper.iss'
 測試腳本                                                     | 檢查內容                                                         | 額外需求
 ---                                                          | ---                                                              | ---
 [test_config.py](./tests/test_config.py)                     | 預設設定, 無效欄位, 路徑與紀錄驗證, 語言載入, 儲存失敗時保留原檔 | 不需初始化 VLC
-[test_media_import.py](./tests/test_media_import.py)         | 同名匯入, 長檔名截斷與預留空間, 中文及 emoji, 編號進位, 內容去重 | Windows, 不需初始化 VLC
+[test_media_import.py](./tests/test_media_import.py)         | 同名匯入, 長檔名, 內容去重, 磁碟容量, 進度與取消後清理         | Windows, 不需初始化 VLC
+[test_import_menu.py](./tests/test_import_menu.py)           | 匯入前後選單排列, 主執行緒進度更新, 取消, 錯誤與退出處理        | PySide6, 不顯示系統匣或初始化 VLC
+[test_playback_state.py](./tests/test_playback_state.py)     | 載入期間暫停, 後續播放或停止, Qt 執行緒, 退出及重掛後狀態      | PySide6, 不需初始化 VLC
 [test_thumbnails.py](./tests/test_thumbnails.py)             | 長檔名, 獨立快取, 舊快取替換, 清理範圍與儲存失敗處理             | PySide6, 不需初始化 VLC
 [test_video_thumbnails.py](./tests/test_video_thumbnails.py) | 影片縮圖比例, 旋轉方向, 多影像軌, 取消及錯誤處理                 | Windows, 專案內的 VLC-lite, PATH 中可找到的 FFmpeg
 

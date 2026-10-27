@@ -20,7 +20,7 @@ from ctypes import wintypes
 import psutil
 
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog, QLabel
-from PySide6.QtCore import Qt, QTimer, QThread, Slot
+from PySide6.QtCore import Qt, QTimer, QThread, Slot, Signal
 from PySide6.QtGui import QAction, QIcon, QFont, QPixmap, QCursor, QImage
 
 from comtypes import GUID as ComGUID, HRESULT, IUnknown, COMMETHOD
@@ -51,6 +51,7 @@ else:
 
 
 TASK_NAME = "BBVideoWallpaper"
+IMPORT_RESERVE_BYTES = 100 * 1024 * 1024
 
 
 # 唯一的 Mutex 名稱
@@ -78,7 +79,7 @@ if __name__ == "__main__":
     already_running, mutex = is_already_running()
 
 
-APPDATA_DIR = (Path(os.getenv("LOCALAPPDATA")) / "BB" / "BB Video Wallpaper")  # type: ignore
+APPDATA_DIR = Path(os.environ["LOCALAPPDATA"]) / "BB" / "BB Video Wallpaper"
 APPDATA_DIR.mkdir(parents=True, exist_ok=True)
 
 MEDIA_DIR = APPDATA_DIR / "video"
@@ -163,7 +164,7 @@ def show_already_running_toast():
     tray.showMessage(
         tr("app_name"),
         tr("already_running_message"),
-        QSystemTrayIcon.Information,  # type: ignore
+        QSystemTrayIcon.MessageIcon.Information,
         3000
     )
 
@@ -378,7 +379,17 @@ def get_media() -> list[Path]:
     ]
 
 
-def calculate_sha256(path: Path) -> bytes:
+class MediaImportCancelled(Exception):
+    """使用者取消媒體匯入"""
+
+
+def check_import_cancelled(cancelled) -> None:
+
+    if cancelled():
+        raise MediaImportCancelled()
+
+
+def calculate_sha256(path: Path, cancelled=lambda: False) -> bytes:
     """
     分塊讀取檔案並計算 SHA-256
     """
@@ -389,6 +400,7 @@ def calculate_sha256(path: Path) -> bytes:
 
         while True:
 
+            check_import_cancelled(cancelled)
             chunk = file.read(1024 * 1024)
 
             if not chunk:
@@ -400,11 +412,12 @@ def calculate_sha256(path: Path) -> bytes:
     return digest.digest()
 
 
-def import_media(source: Path) -> Path:
+def import_media(source: Path, *, progress=None, cancelled=lambda: False) -> Path:
     """
-    複製檔案至 video/video 資料夾; 重複時回傳現有檔案, 否則複製
+    比對重複內容後分塊複製至 video/_imports, 支援進度回報與取消
     """
 
+    check_import_cancelled(cancelled)
     source = source.resolve(strict=True)
 
     if (
@@ -414,7 +427,7 @@ def import_media(source: Path) -> Path:
         raise ValueError(source.name)
 
 
-    import_dir = MEDIA_DIR / "video"
+    import_dir = MEDIA_DIR / "_imports"
     import_dir.mkdir(parents=True, exist_ok=True)
 
     source_size = source.stat().st_size
@@ -422,6 +435,8 @@ def import_media(source: Path) -> Path:
 
 
     for candidate in sorted(import_dir.iterdir()):
+
+        check_import_cancelled(cancelled)
 
         if (
             not candidate.is_file() or
@@ -436,10 +451,26 @@ def import_media(source: Path) -> Path:
             continue
 
         if source_hash is None:
-            source_hash = calculate_sha256(source)
+            source_hash = calculate_sha256(source, cancelled)
 
-        if calculate_sha256(candidate) == source_hash:
+        if calculate_sha256(candidate, cancelled) == source_hash:
             return candidate
+
+
+    # 重複檔案不需額外空間; 確定要複製時才檢查並預留
+    # 可用空間是給使用者看的, 是扣除預留空間後的數值, 也就是說會比真實可用空間小一些
+    check_import_cancelled(cancelled)
+    free_space = shutil.disk_usage(import_dir).free
+    required_space = source_size + IMPORT_RESERVE_BYTES
+
+    if free_space < required_space:
+        megabyte = 1024 * 1024
+        raise OSError(
+            tr("media_insufficient_space").format(
+                required=(source_size + megabyte - 1) // megabyte,
+                available=max(0, free_space - IMPORT_RESERVE_BYTES) // megabyte,
+            )
+        )
 
 
     # 暫存檔不會出現在媒體清單, 完成複製後才改成正式檔名
@@ -454,16 +485,45 @@ def import_media(source: Path) -> Path:
 
     try:
 
-        shutil.copyfile(source, temp_path)
+        copied = 0
+        last_percent = 0
+
+        if progress is not None:
+            progress(0)
+
+        with source.open("rb") as source_file, temp_path.open("wb") as destination_file:
+
+            while True:
+
+                check_import_cancelled(cancelled)
+                chunk = source_file.read(1024 * 1024)
+
+                if not chunk:
+                    break
+
+                destination_file.write(chunk)
+                copied += len(chunk)
+                # 正式檔名建立後才回報 100%, 包含關閉檔案時的寫入失敗
+                percent = min(99, copied * 100 // max(1, source_size))
+
+                if progress is not None and percent != last_percent:
+                    progress(percent)
+                    last_percent = percent
 
         destination = import_dir / source.name
         index = 1
 
         while True:
 
+            check_import_cancelled(cancelled)
+
             try:
                 # Windows 的 rename 不會覆蓋已存在的檔案
                 temp_path.rename(destination)
+
+                if progress is not None:
+                    progress(100)
+
                 return destination
 
             except FileExistsError:
@@ -486,6 +546,8 @@ def import_media(source: Path) -> Path:
 
 class MediaImportThread(QThread):
 
+    progress = Signal(int)
+
     def __init__(self, source: Path):
 
         super().__init__()
@@ -494,16 +556,25 @@ class MediaImportThread(QThread):
         self.source = source
         self.destination: Path | None = None
         self.error = ""
+        self.cancelled = False
 
 
     def run(self) -> None:
 
         try:
-            self.destination = import_media(self.source)
+            self.destination = import_media(
+                self.source,
+                progress=self.progress.emit,
+                cancelled=self.isInterruptionRequested,
+            )
 
-        except Exception as exc:
+        except MediaImportCancelled:
+            self.cancelled = True
+            logger.info("已取消新增媒體 - %s", self.source)
+
+        except Exception as e:
             logger.exception("新增媒體失敗 - %s", self.source)
-            self.error = str(exc)
+            self.error = str(e)
 
 
 def create_workerw(parent_hwnd):
@@ -780,6 +851,9 @@ def is_any_fullscreen(wallpaper_hwnd) -> bool:
 
 class Wallpaper(QWidget):
 
+    playback_started = Signal()
+
+
     def __init__(self):
 
         super().__init__()
@@ -811,13 +885,13 @@ class Wallpaper(QWidget):
 
         # 建立視窗
         self.setWindowFlags(
-            Qt.FramelessWindowHint |     # type: ignore
-            Qt.Tool |                    # type: ignore
-            Qt.WindowDoesNotAcceptFocus  # type: ignore
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.Tool |
+            Qt.WindowType.WindowDoesNotAcceptFocus
         )
 
         # 不接受滑鼠事件
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)  # type: ignore
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         # 設成螢幕大小
         screen = QApplication.primaryScreen()
@@ -842,6 +916,18 @@ class Wallpaper(QWidget):
 
         self.enable_auto_pause = True
         self.play_state = "stop"  # "play", "pause", "stop"
+
+
+        # VLC 回呼只發送訊號, 播放器操作回到 Qt 主執行緒處理
+        self.playback_started.connect(
+            self.apply_pending_pause,
+            Qt.ConnectionType.QueuedConnection
+        )
+        self.player_events = self.player.event_manager()
+        self.player_events.event_attach(
+            vlc.EventType.MediaPlayerPlaying,  # type: ignore
+            lambda event: self.playback_started.emit()
+        )
 
 
         self.fullscreen_detection_ready = False
@@ -927,8 +1013,16 @@ class Wallpaper(QWidget):
 
     def media_pause(self) -> None:
 
-        self.player.pause()
         self.play_state = "pause"
+        self.apply_pending_pause()
+
+
+    @Slot()
+    def apply_pending_pause(self) -> None:
+
+        # 載入完成後依最新狀態補套暫停, 不覆蓋後續的播放或停止要求
+        if not self.is_exiting and self.play_state == "pause":
+            self.player.set_pause(1)
 
 
     def media_stop(self) -> None:
@@ -975,12 +1069,12 @@ class Wallpaper(QWidget):
             self.setGeometry(screen.geometry())
 
             self.setWindowFlags(
-                Qt.FramelessWindowHint |     # type: ignore
-                Qt.Tool |                    # type: ignore
-                Qt.WindowDoesNotAcceptFocus  # type: ignore
+                Qt.WindowType.FramelessWindowHint |
+                Qt.WindowType.Tool |
+                Qt.WindowType.WindowDoesNotAcceptFocus
             )
 
-            self.setAttribute(Qt.WA_TransparentForMouseEvents, True)  # type: ignore
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             self.show()
 
 
@@ -1425,6 +1519,10 @@ class Tray:
         self.add_media_action = QAction(tr("add_media"), menu)
         self.add_media_action.triggered.connect(self.add_media)
 
+        self.cancel_import_action = QAction(tr("cancel_media_import"), menu)
+        self.cancel_import_action.triggered.connect(self.cancel_import)
+        self.cancel_import_action.setVisible(False)
+
         open_media_action = QAction(tr("open_video_folder"), menu)
         open_media_action.triggered.connect(self.open_media_folder)
 
@@ -1499,6 +1597,7 @@ class Tray:
         )
 
         menu.addAction(self.add_media_action)
+        menu.addAction(self.cancel_import_action)
         menu.addAction(open_media_action)
 
 
@@ -1676,11 +1775,27 @@ class Tray:
             self.add_media_action.setEnabled(True)
             return
 
-        self.add_media_action.setText(tr("adding_media"))
+        self.add_media_action.setText(tr("comparing_media"))
+        self.cancel_import_action.setEnabled(True)
+        self.cancel_import_action.setVisible(True)
 
         self.import_thread = MediaImportThread(Path(filename))
+        self.import_thread.progress.connect(self.update_import_progress, Qt.ConnectionType.QueuedConnection)
         self.import_thread.finished.connect(self.finish_import)
         self.import_thread.start()
+
+
+    def update_import_progress(self, percent: int) -> None:
+
+        if self.import_thread is not None and not self.import_thread.isInterruptionRequested():
+            self.add_media_action.setText(tr("importing_media").format(percent=percent))
+
+
+    def cancel_import(self) -> None:
+
+        if self.import_thread is not None and self.import_thread.isRunning():
+            self.import_thread.requestInterruption()
+            self.cancel_import_action.setEnabled(False)
 
 
     def finish_import(self) -> None:
@@ -1695,8 +1810,9 @@ class Tray:
 
         self.add_media_action.setText(tr("add_media"))
         self.add_media_action.setEnabled(True)
+        self.cancel_import_action.setVisible(False)
 
-        if self.wallpaper.is_exiting:
+        if self.wallpaper.is_exiting or worker.cancelled:
             return
 
         if worker.destination is not None:
@@ -1709,13 +1825,15 @@ class Tray:
             self.tray.showMessage(
                 tr("app_name"),
                 tr("media_add_failed").format(error=worker.error),
-                QSystemTrayIcon.MessageIcon.Warning,
+                QSystemTrayIcon.MessageIcon.Information,
+                3000
             )
 
 
     def wait_for_import(self) -> None:
 
         if self.import_thread is not None:
+            self.import_thread.requestInterruption()
             self.import_thread.wait()
 
 
@@ -1744,6 +1862,7 @@ class Tray:
             self.wallpaper.is_exiting = True
 
             self.wallpaper.unregister_power_notification()
+            self.wallpaper.player_events.event_detach(vlc.EventType.MediaPlayerPlaying)  # type: ignore
 
             self.wallpaper.media_stop()
 

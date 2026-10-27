@@ -5,6 +5,7 @@ venv/
 .venv/
 __pycache__/
 
+vlc-and-test-media/
 installer/Previous Versions/
 video/
 VLC/
