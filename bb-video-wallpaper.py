@@ -457,7 +457,8 @@ def import_media(source: Path, *, progress=None, cancelled=lambda: False) -> Pat
             return candidate
 
 
-    # 重複檔案不需額外容量; 確定要複製時才檢查並預留 100 MB
+    # 重複檔案不需額外空間; 確定要複製時才檢查並預留
+    # 可用空間是給使用者看的, 是扣除預留空間後的數值, 也就是說會比真實可用空間小一些
     check_import_cancelled(cancelled)
     free_space = shutil.disk_usage(import_dir).free
     required_space = source_size + IMPORT_RESERVE_BYTES
