@@ -6,7 +6,7 @@
 #define MyAppNameC "BB 影片桌布"
 #define MyAppNameCN "BB 视频壁纸"
 #define MyAppNameJA "BB 動画壁紙"
-#define MyAppVersion "1.14.0"
+#define MyAppVersion "1.15.0"
 #define MyAppPublisher "BeefBB"
 #define MyAppExeName "BB Video Wallpaper.exe"
 
