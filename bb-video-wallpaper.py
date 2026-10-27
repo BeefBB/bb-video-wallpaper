@@ -379,7 +379,17 @@ def get_media() -> list[Path]:
     ]
 
 
-def calculate_sha256(path: Path) -> bytes:
+class MediaImportCancelled(Exception):
+    """使用者取消媒體匯入"""
+
+
+def check_import_cancelled(cancelled) -> None:
+
+    if cancelled():
+        raise MediaImportCancelled()
+
+
+def calculate_sha256(path: Path, cancelled=lambda: False) -> bytes:
     """
     分塊讀取檔案並計算 SHA-256
     """
@@ -390,6 +400,7 @@ def calculate_sha256(path: Path) -> bytes:
 
         while True:
 
+            check_import_cancelled(cancelled)
             chunk = file.read(1024 * 1024)
 
             if not chunk:
@@ -401,11 +412,12 @@ def calculate_sha256(path: Path) -> bytes:
     return digest.digest()
 
 
-def import_media(source: Path) -> Path:
+def import_media(source: Path, *, progress=None, cancelled=lambda: False) -> Path:
     """
-    複製檔案至 video/video 資料夾; 重複時回傳現有檔案, 否則複製
+    比對重複內容後分塊複製至 video/video, 支援進度回報與取消
     """
 
+    check_import_cancelled(cancelled)
     source = source.resolve(strict=True)
 
     if (
@@ -424,6 +436,8 @@ def import_media(source: Path) -> Path:
 
     for candidate in sorted(import_dir.iterdir()):
 
+        check_import_cancelled(cancelled)
+
         if (
             not candidate.is_file() or
             candidate.suffix.lower() not in SUPPORTED_MEDIA_EXTENSIONS
@@ -437,13 +451,14 @@ def import_media(source: Path) -> Path:
             continue
 
         if source_hash is None:
-            source_hash = calculate_sha256(source)
+            source_hash = calculate_sha256(source, cancelled)
 
-        if calculate_sha256(candidate) == source_hash:
+        if calculate_sha256(candidate, cancelled) == source_hash:
             return candidate
 
 
     # 重複檔案不需額外容量; 確定要複製時才檢查並預留 100 MB
+    check_import_cancelled(cancelled)
     free_space = shutil.disk_usage(import_dir).free
     required_space = source_size + IMPORT_RESERVE_BYTES
 
@@ -469,16 +484,45 @@ def import_media(source: Path) -> Path:
 
     try:
 
-        shutil.copyfile(source, temp_path)
+        copied = 0
+        last_percent = 0
+
+        if progress is not None:
+            progress(0)
+
+        with source.open("rb") as source_file, temp_path.open("wb") as destination_file:
+
+            while True:
+
+                check_import_cancelled(cancelled)
+                chunk = source_file.read(1024 * 1024)
+
+                if not chunk:
+                    break
+
+                destination_file.write(chunk)
+                copied += len(chunk)
+                # 正式檔名建立後才回報 100%, 包含關閉檔案時的寫入失敗
+                percent = min(99, copied * 100 // max(1, source_size))
+
+                if progress is not None and percent != last_percent:
+                    progress(percent)
+                    last_percent = percent
 
         destination = import_dir / source.name
         index = 1
 
         while True:
 
+            check_import_cancelled(cancelled)
+
             try:
                 # Windows 的 rename 不會覆蓋已存在的檔案
                 temp_path.rename(destination)
+
+                if progress is not None:
+                    progress(100)
+
                 return destination
 
             except FileExistsError:
@@ -501,6 +545,8 @@ def import_media(source: Path) -> Path:
 
 class MediaImportThread(QThread):
 
+    progress = Signal(int)
+
     def __init__(self, source: Path):
 
         super().__init__()
@@ -509,16 +555,25 @@ class MediaImportThread(QThread):
         self.source = source
         self.destination: Path | None = None
         self.error = ""
+        self.cancelled = False
 
 
     def run(self) -> None:
 
         try:
-            self.destination = import_media(self.source)
+            self.destination = import_media(
+                self.source,
+                progress=self.progress.emit,
+                cancelled=self.isInterruptionRequested,
+            )
 
-        except Exception as exc:
+        except MediaImportCancelled:
+            self.cancelled = True
+            logger.info("已取消新增媒體 - %s", self.source)
+
+        except Exception as e:
             logger.exception("新增媒體失敗 - %s", self.source)
-            self.error = str(exc)
+            self.error = str(e)
 
 
 def create_workerw(parent_hwnd):
@@ -1463,6 +1518,10 @@ class Tray:
         self.add_media_action = QAction(tr("add_media"), menu)
         self.add_media_action.triggered.connect(self.add_media)
 
+        self.cancel_import_action = QAction(tr("cancel_media_import"), menu)
+        self.cancel_import_action.triggered.connect(self.cancel_import)
+        self.cancel_import_action.setVisible(False)
+
         open_media_action = QAction(tr("open_video_folder"), menu)
         open_media_action.triggered.connect(self.open_media_folder)
 
@@ -1537,6 +1596,7 @@ class Tray:
         )
 
         menu.addAction(self.add_media_action)
+        menu.addAction(self.cancel_import_action)
         menu.addAction(open_media_action)
 
 
@@ -1714,11 +1774,27 @@ class Tray:
             self.add_media_action.setEnabled(True)
             return
 
-        self.add_media_action.setText(tr("adding_media"))
+        self.add_media_action.setText(tr("comparing_media"))
+        self.cancel_import_action.setEnabled(True)
+        self.cancel_import_action.setVisible(True)
 
         self.import_thread = MediaImportThread(Path(filename))
+        self.import_thread.progress.connect(self.update_import_progress, Qt.ConnectionType.QueuedConnection)
         self.import_thread.finished.connect(self.finish_import)
         self.import_thread.start()
+
+
+    def update_import_progress(self, percent: int) -> None:
+
+        if self.import_thread is not None and not self.import_thread.isInterruptionRequested():
+            self.add_media_action.setText(tr("importing_media").format(percent=percent))
+
+
+    def cancel_import(self) -> None:
+
+        if self.import_thread is not None and self.import_thread.isRunning():
+            self.import_thread.requestInterruption()
+            self.cancel_import_action.setEnabled(False)
 
 
     def finish_import(self) -> None:
@@ -1733,8 +1809,9 @@ class Tray:
 
         self.add_media_action.setText(tr("add_media"))
         self.add_media_action.setEnabled(True)
+        self.cancel_import_action.setVisible(False)
 
-        if self.wallpaper.is_exiting:
+        if self.wallpaper.is_exiting or worker.cancelled:
             return
 
         if worker.destination is not None:
@@ -1755,6 +1832,7 @@ class Tray:
     def wait_for_import(self) -> None:
 
         if self.import_thread is not None:
+            self.import_thread.requestInterruption()
             self.import_thread.wait()
 
 
