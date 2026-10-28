@@ -615,9 +615,9 @@ def create_workerw(parent_hwnd):
     return hwnd
 
 
-def set_windows_as_wallpaper(hwnd) -> None:
+def set_windows_as_wallpaper(hwnd: int) -> None:
     """
-    將視窗放到桌布
+    將視窗掛載到 Windows 桌布層
     """
 
     progman = win32gui.FindWindow("Progman", "Program Manager")
@@ -629,63 +629,49 @@ def set_windows_as_wallpaper(hwnd) -> None:
         raise RuntimeError("找不到 Progman 視窗")
 
 
-    # 發送舊版 0x052C 訊息讓桌面分裂
-    # 把本來黏在一起的 "桌面圖示" 與 "背景桌布" 分離開來, 希望在中間炸出一個獨立的 WorkerW 視窗
+    # 發送桌面分裂訊息, 讓桌布與桌面圖示分屬不同的 WorkerW
     win32gui.SendMessageTimeout(progman, 0x052C, 0, None, 0, 0x03E8)
     win32gui.SendMessageTimeout(progman, 0x052C, 0xD, None, 0, 0x03E8)
     win32gui.SendMessageTimeout(progman, 0x052C, 0xD, 1, 0, 0x03E8)
 
 
-    WorkerW_top = None
-    SHELLDLL_DefView = None
-    WorkerW_first = None
-    WorkerW_old = None
+    workerw_top = 0
+    icon_layer = 0
+    workerw_old = 0
 
-
-    # 嘗試搜尋舊版分裂產生的 WorkerW
     while True:
 
-        WorkerW_top = win32gui.FindWindowEx(None, WorkerW_top, "WorkerW", None)
-        if WorkerW_top == WorkerW_first:
-            # 直到找不到分裂的桌面圖示層
+        workerw_top = win32gui.FindWindowEx(None, workerw_top, "WorkerW", None)
+
+        if not workerw_top:
             break
 
-        if WorkerW_first is None:
-            WorkerW_first = WorkerW_top
+        icon_layer = win32gui.FindWindowEx(workerw_top, None, "SHELLDLL_DefView", None)
 
-        if not WorkerW_top:
+        if not icon_layer:
             continue
 
-        SHELLDLL_DefView = win32gui.FindWindowEx(WorkerW_top, None, "SHELLDLL_DefView", None)
-        if not SHELLDLL_DefView:
-            continue
-
-        WorkerW_old = win32gui.FindWindowEx(None, WorkerW_top, "WorkerW", None)
+        workerw_old = win32gui.FindWindowEx(None, workerw_top, "WorkerW", None)
         break
 
 
-    # 判斷使用新版或舊版機制
-    if not WorkerW_old:
+    if not workerw_old:
 
-        # 新版 Windows 11: 直接在 Progman 底下找尋或創建 WorkerW
-        new_workerw = win32gui.FindWindowEx(progman, None, "WorkerW", None)
-        if not new_workerw:
-            new_workerw = create_workerw(progman)
+        # 新版 Windows 11: 在 Progman 底下找尋或建立 WorkerW
+        workerw = win32gui.FindWindowEx(progman, None, "WorkerW", None)
 
-        ctypes.windll.user32.SetParent(hwnd, new_workerw)
+        if not workerw:
+            workerw = create_workerw(progman)
+
+        win32gui.SetParent(hwnd, workerw)
 
     else:
 
-        # 舊版: 直接掛載到分裂後的 WorkerW
-        ctypes.windll.user32.SetParent(hwnd, WorkerW_old)
-        ctypes.windll.user32.SetWindowPos(
-            hwnd,
-
-            SHELLDLL_DefView,
-
-            0, 0, 0, 0,
-
-            0x0001 | 0x0002
+        # 舊版: 掛載到桌面圖示層後方的 WorkerW
+        win32gui.SetParent(hwnd, workerw_old)
+        win32gui.SetWindowPos(
+            hwnd, icon_layer, 0, 0, 0, 0,
+            win32con.SWP_NOSIZE | win32con.SWP_NOMOVE,
         )
 
 
