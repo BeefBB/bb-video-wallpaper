@@ -1,5 +1,5 @@
 """
-設定檔驗證, 讀寫與語言載入
+設定檔初始化, 驗證, 讀寫與語言載入
 路徑由主程式提供
 """
 
@@ -150,6 +150,21 @@ class ConfigStore:
 
 
         return config
+
+
+    def initialize_if_missing(self) -> None:
+        """
+        設定檔不存在時寫入完整預設值, 保留既有檔案
+        """
+
+        try:
+            self.config_path.stat()
+
+        except FileNotFoundError:
+            self.save(self.validate({}))
+
+        except OSError:
+            logger.exception("檢查 config 是否存在時發生錯誤")
 
 
     def load(self) -> dict:

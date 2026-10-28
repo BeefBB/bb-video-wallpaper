@@ -139,8 +139,13 @@ else:
 import vlc
 
 
-# 設定與語言
+# 設定檔
 config_store = ConfigStore(CONFIG_PATH, MEDIA_DIR, ROOT_DIR / "lang")
+
+if __name__ == "__main__" and not already_running:
+    config_store.initialize_if_missing()
+
+
 LANG = config_store.load_language()
 
 def tr(key: str) -> str:

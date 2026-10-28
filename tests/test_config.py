@@ -1,5 +1,5 @@
 """
-測試設定檔的讀取, 驗證與儲存
+測試設定檔的初始化, 讀取, 驗證與儲存
 只在暫存資料夾操作, 不啟動桌布或修改使用者設定
 """
 
@@ -66,6 +66,98 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(config, expected)
         self.assertFalse(self.config_path.exists())
+
+
+    def test_initialization_creates_complete_defaults(self):
+
+        self.store.initialize_if_missing()
+
+        expected = {
+            **CONFIG_DEFAULTS,
+            "language": "en-US",
+            "recentVideo": [],
+        }
+
+        self.assertEqual(
+            json.loads(self.config_path.read_text(encoding="utf-8")),
+            expected
+        )
+        self.assertEqual(self.store.load(), expected)
+        self.assertFalse(self.config_path.with_suffix(".tmp").exists())
+
+
+    def test_initialization_preserves_existing_files(self):
+
+        existing = json.dumps({
+            "autoPauseIfFullscreen": False,
+            "language": "ja-JP",
+            "recentVideo": ["custom.mp4"],
+            "futureOption": 9,
+        }).encode("utf-8")
+
+        for contents in (existing, b"", b"{broken", b"\xff", b"[]", b"null"):
+
+            with self.subTest(contents=contents):
+                self.config_path.write_bytes(contents)
+
+                with mock.patch.object(self.store, "save") as save:
+                    self.store.initialize_if_missing()
+                    self.store.initialize_if_missing()
+
+                save.assert_not_called()
+                self.assertEqual(self.config_path.read_bytes(), contents)
+
+
+    def test_initialization_uses_installer_language(self):
+
+        lang_dir = Path(self.temp_dir.name) / "lang"
+        lang_dir.mkdir()
+        (lang_dir.parent / "install-language.ini").write_text(
+            "[Setup]\nLanguage=ja-JP\n",
+            encoding="utf-8-sig"
+        )
+        store = ConfigStore(self.config_path, self.media_dir, lang_dir)
+
+        store.initialize_if_missing()
+
+        config = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertEqual(config["language"], "ja-JP")
+
+
+    def test_initialization_skips_inaccessible_path(self):
+
+        with (
+            mock.patch.object(Path, "stat", side_effect=PermissionError),
+            mock.patch.object(self.store, "save") as save,
+        ):
+            self.store.initialize_if_missing()
+
+        save.assert_not_called()
+        self.assertFalse(self.config_path.exists())
+
+
+    def test_initialization_write_failure_keeps_defaults_available(self):
+
+        expected = {
+            **CONFIG_DEFAULTS,
+            "language": "en-US",
+            "recentVideo": [],
+        }
+        language = json.loads(
+            (self.store.lang_dir / "en-US.json").read_text(encoding="utf-8")
+        )
+
+        for target in ("builtins.open", "config.os.replace"):
+
+            with self.subTest(target=target):
+
+                with mock.patch(target, side_effect=PermissionError):
+                    self.store.initialize_if_missing()
+
+                self.assertFalse(self.config_path.exists())
+                self.assertFalse(self.config_path.with_suffix(".tmp").exists())
+                self.assertEqual(self.store.load(), expected)
+                self.assertEqual(self.store.load_language(), language)
 
 
     def test_only_invalid_boolean_is_replaced(self):

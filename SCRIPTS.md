@@ -73,7 +73,7 @@ Python 與 VLC 的架構需要相容, 例如搭配使用 64 位元版本. 只有
 
 另有三個由主程式使用的模組:
 
-- [config.py](./config.py): `ConfigStore` 負責設定驗證, 讀寫與語言檔載入, 所需路徑由主程式傳入
+- [config.py](./config.py): `ConfigStore` 負責設定初始化, 驗證, 讀寫與語言檔載入, 所需路徑由主程式傳入
 - [bb_image_display.py](./bb_image_display.py): 共用主程式的 `QApplication`, 以 `Instance` 接收桌布 HWND 並顯示圖片; 主程式管理桌布掛載與媒體切換, 模組管理圖片及內部子視窗
 - [thumbnails.py](./thumbnails.py): 負責支援的媒體格式, 縮圖產生, 快取驗證與背景排隊; 主程式將媒體與快取目錄傳給 `ThumbnailThread`
 
@@ -219,15 +219,15 @@ ISCC.exe '.\installer\BB Video Wallpaper.iss'
 .\.venv\Scripts\python.exe .\tests\test_video_thumbnails.py
 ```
 
-測試腳本                                                     | 檢查內容                                                         | 額外需求
----                                                          | ---                                                              | ---
-[test_config.py](./tests/test_config.py)                     | 預設設定, 無效欄位, 路徑與紀錄驗證, 語言載入, 儲存失敗時保留原檔 | 不需初始化 VLC
-[test_media_import.py](./tests/test_media_import.py)         | 同名匯入, 長檔名, 內容去重, 磁碟容量, 進度與取消後清理           | Windows, 不需初始化 VLC
-[test_import_menu.py](./tests/test_import_menu.py)           | 匯入前後選單排列, 主執行緒進度更新, 取消, 錯誤與退出處理         | PySide6, 不顯示系統匣或初始化 VLC
-[test_playback_state.py](./tests/test_playback_state.py)     | 圖片與影片切換, 讀取失敗, 載入期間暫停, Qt 執行緒及重掛後狀態    | PySide6, 不需初始化 VLC
-[test_image_display.py](./tests/test_image_display.py)       | 圖片讀取失敗保留畫面, 原生子視窗, 隱藏後再顯示, 重綁與釋放       | Windows, PySide6, 使用隱藏的目標視窗
-[test_thumbnails.py](./tests/test_thumbnails.py)             | 長檔名, 獨立快取, 舊快取替換, 清理範圍與儲存失敗處理             | PySide6, 不需初始化 VLC
-[test_video_thumbnails.py](./tests/test_video_thumbnails.py) | 影片縮圖比例, 旋轉方向, 多影像軌, 取消及錯誤處理                 | Windows, 專案內的 VLC-lite, PATH 中可找到的 FFmpeg
+測試腳本                                                     | 檢查內容                                                               | 額外需求
+---                                                          | ---                                                                    | ---
+[test_config.py](./tests/test_config.py)                     | 缺檔初始化, 預設設定, 無效欄位, 路徑與紀錄驗證, 語言載入, 寫入失敗處理 | 不需初始化 VLC
+[test_media_import.py](./tests/test_media_import.py)         | 同名匯入, 長檔名, 內容去重, 磁碟容量, 進度與取消後清理                 | Windows, 不需初始化 VLC
+[test_import_menu.py](./tests/test_import_menu.py)           | 匯入前後選單排列, 主執行緒進度更新, 取消, 錯誤與退出處理               | PySide6, 不顯示系統匣或初始化 VLC
+[test_playback_state.py](./tests/test_playback_state.py)     | 圖片與影片切換, 讀取失敗, 載入期間暫停, Qt 執行緒及重掛後狀態          | PySide6, 不需初始化 VLC
+[test_image_display.py](./tests/test_image_display.py)       | 圖片讀取失敗保留畫面, 原生子視窗, 隱藏後再顯示, 重綁與釋放             | Windows, PySide6, 使用隱藏的目標視窗
+[test_thumbnails.py](./tests/test_thumbnails.py)             | 長檔名, 獨立快取, 舊快取替換, 清理範圍與儲存失敗處理                   | PySide6, 不需初始化 VLC
+[test_video_thumbnails.py](./tests/test_video_thumbnails.py) | 影片縮圖比例, 旋轉方向, 多影像軌, 取消及錯誤處理                       | Windows, 專案內的 VLC-lite, PATH 中可找到的 FFmpeg
 
 測試會在暫存目錄操作, 不會啟動桌布或改寫使用者設定. 圖片顯示測試建立隱藏的 Qt 目標視窗, 驗證實際 Windows 子視窗生命週期. 影片測試會呼叫 FFmpeg 產生短片, 再用 VLC-lite 擷取縮圖; FFmpeg 是測試工具, 主程式的影片播放與影片縮圖仍使用 VLC
 
