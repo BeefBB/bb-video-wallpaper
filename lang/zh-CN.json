@@ -11,6 +11,7 @@
   "importing_media": "导入中 {percent}%",
   "cancel_media_import": "取消导入",
   "media_add_failed": "添加视频失败：{error}",
+  "media_load_failed": "加载壁纸失败：{error}",
   "media_insufficient_space": "磁盘空间不足\n需要 {required:,} MB, 当前可用 {available:,} MB",
   "open_video_folder": "打开视频文件夹",
   "select_video": "选择视频",

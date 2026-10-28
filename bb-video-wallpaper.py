@@ -26,6 +26,7 @@ from PySide6.QtGui import QAction, QIcon, QFont, QPixmap, QCursor, QImage
 from comtypes import GUID as ComGUID, HRESULT, IUnknown, COMMETHOD
 from comtypes.client import CreateObject
 
+import bb_image_display
 from config import ConfigStore, SUPPORTED_LANGUAGES
 from thumbnails import (
     SUPPORTED_VIDEO_EXTENSIONS,
@@ -852,6 +853,7 @@ class Wallpaper(QWidget):
 
 
         self.current_media: Path | None = None
+        initial_media: Path | None = None
         media_files = get_media()
 
 
@@ -863,10 +865,10 @@ class Wallpaper(QWidget):
             recent_path = MEDIA_DIR / recent[0]
 
             if recent_path.is_file():
-                self.current_media = recent_path
+                initial_media = recent_path
 
-        if not self.current_media and media_files:
-            self.current_media = media_files[0]
+        if not initial_media and media_files:
+            initial_media = media_files[0]
 
 
         # 建立視窗
@@ -898,6 +900,10 @@ class Wallpaper(QWidget):
 
         # 建立 VLC 播放器物件
         self.player = self.instance.media_player_new()  # type: ignore
+
+
+        # 圖片共用主程式的 QApplication 與桌布 HWND
+        self.image_display = bb_image_display.Instance()
 
 
         self.enable_auto_pause = True
@@ -936,12 +942,16 @@ class Wallpaper(QWidget):
 
 
         # 播放
-        if self.current_media:
+        if initial_media:
 
-            self.set_play_media(self.current_media)
+            try:
 
-            self.media_play()
-            logger.info("init - play")
+                self.set_play_media(initial_media)
+                self.media_play()
+                logger.info("init - play")
+
+            except Exception:
+                logger.exception("載入初始桌布時發生錯誤 - %s", initial_media)
 
 
         self.timer = QTimer(self)
@@ -991,13 +1001,32 @@ class Wallpaper(QWidget):
         return super().nativeEvent(eventType, message)  # type: ignore
 
 
+    def is_image(self) -> bool:
+
+        return bool(
+            self.current_media and
+            self.current_media.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS
+        )
+
+
     def media_play(self) -> None:
 
-        self.player.play()
+        if not self.current_media or self.is_exiting:
+            return
+
+        if self.is_image():
+            self.image_display.show()
+
+        else:
+            self.player.play()
+
         self.play_state = "play"
 
 
     def media_pause(self) -> None:
+
+        if not self.current_media or self.is_image():
+            return
 
         self.play_state = "pause"
         self.apply_pending_pause()
@@ -1007,13 +1036,18 @@ class Wallpaper(QWidget):
     def apply_pending_pause(self) -> None:
 
         # 載入完成後依最新狀態補套暫停, 不覆蓋後續的播放或停止要求
-        if not self.is_exiting and self.play_state == "pause":
+        if not self.is_exiting and not self.is_image() and self.play_state == "pause":
             self.player.set_pause(1)
 
 
     def media_stop(self) -> None:
 
-        self.player.stop()
+        if self.is_image():
+            self.image_display.hide()
+
+        else:
+            self.player.stop()
+
         self.play_state = "stop"
 
 
@@ -1037,10 +1071,11 @@ class Wallpaper(QWidget):
 
 
             # 紀錄當前播放時間進度
-            curr_time = self.player.get_time()
+            curr_time = self.player.get_time() if not self.is_image() else -1
 
 
             self.unregister_power_notification()
+            self.image_display.set_hwnd(0)
             self.hide()
 
 
@@ -1071,10 +1106,17 @@ class Wallpaper(QWidget):
             # 恢復播放與時間進度
             if self.current_media:
 
-                self.set_play_media(self.current_media)
+                if self.is_image():
 
-                if curr_time > 0:
-                    self.player.set_time(curr_time)
+                    if self.play_state == "play":
+                        self.media_play()
+
+                else:
+
+                    self.set_play_media(self.current_media)
+
+                    if curr_time > 0:
+                        self.player.set_time(curr_time)
 
 
             logger.info("reattach_to_desktop - finish")
@@ -1113,51 +1155,69 @@ class Wallpaper(QWidget):
 
     def set_play_media(self, path: Path) -> None:
         """
-        把媒體檔案給VLC
+        圖片交給 Qt 顯示, 影片交給 VLC, 保留原本的播放或停止狀態
         """
 
-        self.current_media = path
-
-        config = config_store.load()
         media_path = path.relative_to(MEDIA_DIR).as_posix()
-        recent = config.get("recentVideo", [])
-        config["recentVideo"] = [media_path] + [
-            item for item in recent if item != media_path
-        ][:4]
-        config_store.save(config)
-
-
         previous_play_state = self.play_state
+        is_image = path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS
+
+        # 先讀取圖片, 失敗時保留原本的輸出, 播放狀態與最近紀錄
+        if is_image:
+            self.image_display.set_image(path)
 
 
         self.media_stop()
         logger.debug("set_play_media - stop")
 
 
-        media = self.instance.media_new(str(path))  # type: ignore
-        self.player.set_media(media)
-        media.release()
+        if not is_image:
+
+            media = self.instance.media_new(str(path))  # type: ignore
+
+            try:
+                self.player.set_media(media)
+
+            finally:
+                media.release()
+
+            # 裁切填滿螢幕, 並釋放已不再使用的圖片
+            self.player.video_set_crop_geometry(self.get_screen_aspect_ratio())
+            self.image_display.close()
+
+
+        self.current_media = path
         logger.info("set_play_media - %s", path)
 
-        # 裁切填滿螢幕
-        self.player.video_set_crop_geometry(self.get_screen_aspect_ratio())
+        if is_image:
+
+            # 圖片沒有暫停狀態, 從暫停中的影片切換時直接顯示
+            if previous_play_state != "stop":
+                self.media_play()
+
+        else:
+
+            # 讓影片畫面出現後再回復原本的狀態
+            self.media_play()
+            logger.debug("set_play_media - play")
+
+            if previous_play_state == "pause":
+
+                self.media_pause()
+                logger.debug("set_play_media - pause")
+
+            elif previous_play_state == "stop":
+
+                self.media_stop()
+                logger.debug("set_play_media - stop")
 
 
-        # 讓畫面跑出來
-        self.media_play()
-        logger.debug("set_play_media - play")
-
-
-        # 回復原樣
-        if previous_play_state == "pause":
-
-            self.media_pause()
-            logger.debug("set_play_media - pause")
-
-        elif previous_play_state == "stop":
-
-            self.media_stop()
-            logger.debug("set_play_media - stop")
+        config = config_store.load()
+        recent = config.get("recentVideo", [])
+        config["recentVideo"] = [media_path] + [
+            item for item in recent if item != media_path
+        ][:4]
+        config_store.save(config)
 
 
     def attach_to_desktop(self) -> None:
@@ -1171,8 +1231,9 @@ class Wallpaper(QWidget):
         set_windows_as_wallpaper(hwnd)
 
 
-        # 重新設定 HWND 給 VLC 指向
+        # 重新設定圖片與影片輸出的目標 HWND
         self.player.set_hwnd(hwnd)
+        self.image_display.set_hwnd(hwnd)
 
 
         self.power_notify = ctypes.windll.user32.RegisterPowerSettingNotification(
@@ -1218,7 +1279,7 @@ class Wallpaper(QWidget):
             return
 
         # 圖片不需要暫停
-        if self.current_media and self.current_media.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
+        if self.is_image():
             return
 
 
@@ -1730,10 +1791,24 @@ class Tray:
         logger.info("set_language - %s", language_code)
 
 
-    def play_from_menu(self, path: Path):
+    def play_from_menu(self, path: Path) -> None:
 
-        self.wallpaper.set_play_media(path)
-        self.wallpaper.media_play()
+        try:
+
+            self.wallpaper.set_play_media(path)
+            self.wallpaper.media_play()
+
+        except Exception as error:
+
+            logger.exception("載入桌布時發生錯誤 - %s", path)
+            self.tray.showMessage(
+                tr("app_name"),
+                tr("media_load_failed").format(error=error),
+                QSystemTrayIcon.MessageIcon.Information,
+                3000
+            )
+            return
+
         self.wallpaper.enable_auto_pause = True
         logger.info("play_from_menu - play")
 
@@ -1851,6 +1926,7 @@ class Tray:
             self.wallpaper.player_events.event_detach(vlc.EventType.MediaPlayerPlaying)  # type: ignore
 
             self.wallpaper.media_stop()
+            self.wallpaper.image_display.close()
 
             self.wallpaper.player.release()
             self.wallpaper.instance.release()

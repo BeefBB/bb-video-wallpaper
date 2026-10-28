@@ -1,6 +1,6 @@
 """
-測試影片載入與延遲播放事件之間的暫停狀態
-使用真正的 Qt 訊號佇列與模擬播放器, 不啟動桌布或修改使用者設定
+測試圖片與影片切換, 桌布重掛及延遲播放事件之間的狀態
+使用真正的 Qt 訊號佇列與模擬輸出, 不啟動桌布或修改使用者設定
 """
 
 import ast
@@ -57,6 +57,7 @@ class DeferredPlayer:
         self.events.event_detach.side_effect = self.callbacks.pop
 
         self.video_set_crop_geometry = mock.Mock()
+        self.set_hwnd = mock.Mock()
 
 
     def event_manager(self) -> mock.Mock:
@@ -117,6 +118,50 @@ class DeferredPlayer:
         self.state = "released"
 
 
+class ImageDisplay:
+    """
+    記錄圖片的載入, 顯示與目標視窗, 不建立原生視窗
+    """
+
+    def __init__(self):
+
+        self.current_image: Path | None = None
+        self.visible = False
+        self.hwnd = 0
+
+
+    def set_image(self, path: Path) -> None:
+
+        self.current_image = path
+
+
+    def show(self) -> None:
+
+        if self.current_image is None:
+            raise RuntimeError("尚未設定圖片")
+
+        self.visible = True
+
+
+    def hide(self) -> None:
+
+        self.visible = False
+
+
+    def set_hwnd(self, hwnd: int) -> None:
+
+        if hwnd != self.hwnd:
+            self.visible = False
+
+        self.hwnd = hwnd
+
+
+    def close(self) -> None:
+
+        self.visible = False
+        self.current_image = None
+
+
 class PlaybackStateTests(unittest.TestCase):
 
     @classmethod
@@ -141,6 +186,11 @@ class PlaybackStateTests(unittest.TestCase):
     def setUp(self) -> None:
 
         self.player = DeferredPlayer()
+        self.image_output = ImageDisplay()
+        self.image_display = mock.Mock(wraps=self.image_output)
+        image_module = mock.Mock()
+        image_module.Instance.return_value = self.image_display
+
         instance = mock.Mock()
         instance.media_player_new.return_value = self.player
 
@@ -165,6 +215,7 @@ class PlaybackStateTests(unittest.TestCase):
             "QApplication": application,
             "QTimer": mock.Mock(),
             "vlc": vlc,
+            "bb_image_display": image_module,
             "config_store": config_store,
             "get_media": mock.Mock(return_value=[]),
             "MEDIA_DIR": ROOT / "test-media",
@@ -172,12 +223,17 @@ class PlaybackStateTests(unittest.TestCase):
             "SUPPORTED_VIDEO_EXTENSIONS": {".mp4"},
             "is_on_battery": mock.Mock(return_value=False),
             "is_any_fullscreen": mock.Mock(return_value=False),
+            "set_windows_as_wallpaper": mock.Mock(),
+            "ctypes": mock.Mock(),
+            "GUID_CONSOLE_DISPLAY_STATE": mock.sentinel.power_guid,
+            "DEVICE_NOTIFY_WINDOW_HANDLE": 0,
             "logger": mock.Mock(),
         }
         exec(self.playback_code, self.namespace)
 
 
         wallpaper_class = self.namespace["Wallpaper"]
+        self.attach_to_desktop = wallpaper_class.attach_to_desktop
 
         for name in ("attach_to_desktop", "unregister_power_notification"):
             self.enterContext(mock.patch.object(wallpaper_class, name))
@@ -190,6 +246,7 @@ class PlaybackStateTests(unittest.TestCase):
         self.tray.wallpaper = self.wallpaper
         self.tray.app = mock.Mock()
         self.media_path = self.namespace["MEDIA_DIR"] / "sample.mp4"
+        self.image_path = self.namespace["MEDIA_DIR"] / "sample.PNG"
 
 
     def dispose_wallpaper(self) -> None:
@@ -375,6 +432,222 @@ class PlaybackStateTests(unittest.TestCase):
         self.assertEqual(self.wallpaper.play_state, "pause")
         self.assertEqual(self.player.state, "paused")
         self.assertFalse(self.wallpaper.enable_auto_pause)
+
+
+    def test_image_uses_qt_and_stop_then_play_reuses_loaded_image(self):
+
+        self.wallpaper.set_play_media(self.image_path)
+        self.tray.play()
+
+        self.assertTrue(self.image_output.visible)
+        self.assertEqual(self.wallpaper.play_state, "play")
+        self.assertEqual(self.player.state, "stopped")
+        self.namespace["vlc"].Instance.return_value.media_new.assert_not_called()
+        self.player.video_set_crop_geometry.assert_not_called()
+
+        self.tray.stop()
+        self.assertFalse(self.image_output.visible)
+        self.assertEqual(self.wallpaper.play_state, "stop")
+        self.assertEqual(self.image_output.current_image, self.image_path)
+
+        self.tray.play()
+        self.assertTrue(self.image_output.visible)
+        self.assertEqual(self.wallpaper.play_state, "play")
+        self.image_display.set_image.assert_called_once_with(self.image_path)
+
+
+    def test_switching_video_image_video_stops_previous_output(self):
+
+        self.start_loading()
+        self.player.finish_loading()
+        self.app.processEvents()
+
+        self.wallpaper.set_play_media(self.image_path)
+        self.assertEqual(self.player.state, "stopped")
+        self.assertTrue(self.image_output.visible)
+        self.assertEqual(self.wallpaper.current_media, self.image_path)
+
+        self.wallpaper.set_play_media(self.media_path)
+        self.assertFalse(self.image_output.visible)
+        self.assertIsNone(self.image_output.current_image)
+        self.assertEqual(self.player.state, "opening")
+        self.assertEqual(self.wallpaper.current_media, self.media_path)
+
+
+    def test_image_switch_while_stopped_stays_hidden_until_play(self):
+
+        self.wallpaper.set_play_media(self.image_path)
+        self.assertEqual(self.wallpaper.play_state, "stop")
+        self.assertFalse(self.image_output.visible)
+
+        self.wallpaper.set_play_media(self.media_path)
+        self.assertEqual(self.player.state, "stopped")
+        self.assertEqual(self.wallpaper.play_state, "stop")
+
+
+    def test_paused_video_switches_to_visible_image_and_ignores_old_event(self):
+
+        self.start_loading()
+        self.tray.pause()
+        self.player.finish_loading()
+        pause_calls = list(self.player.pause_calls)
+
+        self.wallpaper.set_play_media(self.image_path)
+        self.app.processEvents()
+
+        self.assertEqual(self.wallpaper.play_state, "play")
+        self.assertTrue(self.image_output.visible)
+        self.assertEqual(self.player.state, "stopped")
+        self.assertEqual(self.player.pause_calls, pause_calls)
+
+        self.player.finish_loading()
+        self.app.processEvents()
+        self.assertEqual(self.player.pause_calls, pause_calls)
+
+
+    def test_images_ignore_manual_and_auto_pause(self):
+
+        self.wallpaper.set_play_media(self.image_path)
+        self.tray.play()
+        self.wallpaper.media_pause()
+        self.wallpaper.screen_off = True
+        self.wallpaper.check_auto_pause()
+
+        self.assertTrue(self.image_output.visible)
+        self.assertEqual(self.wallpaper.play_state, "play")
+        self.assertEqual(self.player.pause_calls, [])
+        self.namespace["is_on_battery"].assert_not_called()
+        self.namespace["is_any_fullscreen"].assert_not_called()
+
+
+    def test_bad_image_preserves_previous_output_state_and_history(self):
+
+        for previous_media in (self.media_path, self.image_path):
+            for command in ("play", "pause", "stop"):
+                if previous_media == self.image_path and command == "pause":
+                    continue
+
+                with self.subTest(media=previous_media, state=command):
+                    self.image_display.set_image.side_effect = None
+                    self.wallpaper.set_play_media(previous_media)
+                    self.tray.play()
+                    getattr(self.tray, command)()
+
+                    previous_state = self.player.state
+                    previous_image = self.image_output.current_image
+                    previous_visible = self.image_output.visible
+                    self.namespace["config_store"].save.reset_mock()
+                    self.image_display.set_image.side_effect = RuntimeError("bad image")
+
+                    with self.assertRaisesRegex(RuntimeError, "bad image"):
+                        self.wallpaper.set_play_media(self.image_path.with_name("bad.png"))
+
+                    self.assertEqual(self.wallpaper.current_media, previous_media)
+                    self.assertEqual(self.wallpaper.play_state, command)
+                    self.assertEqual(self.player.state, previous_state)
+                    self.assertEqual(self.image_output.current_image, previous_image)
+                    self.assertEqual(self.image_output.visible, previous_visible)
+                    self.namespace["config_store"].save.assert_not_called()
+
+
+    def test_successful_image_is_saved_in_recent_history(self):
+
+        self.namespace["config_store"].load.return_value = {
+            "recentVideo": ["sample.mp4", "sample.PNG", "other.png"],
+        }
+        self.wallpaper.set_play_media(self.image_path)
+
+        saved = self.namespace["config_store"].save.call_args.args[0]
+        self.assertEqual(saved["recentVideo"], ["sample.PNG", "sample.mp4", "other.png"])
+
+
+    def test_attach_binds_both_outputs_to_same_hwnd(self):
+
+        self.attach_to_desktop(self.wallpaper)
+
+        self.namespace["set_windows_as_wallpaper"].assert_called_once_with(1)
+        self.player.set_hwnd.assert_called_once_with(1)
+        self.image_display.set_hwnd.assert_called_once_with(1)
+
+
+    def test_image_reattach_rebinds_without_reload_or_vlc_seek(self):
+
+        for command in ("play", "stop"):
+            with self.subTest(state=command):
+                self.wallpaper.set_play_media(self.image_path)
+                self.tray.play()
+                getattr(self.tray, command)()
+                self.image_display.reset_mock()
+                self.namespace["config_store"].save.reset_mock()
+                self.wallpaper.winId.return_value = 2
+                self.wallpaper.attach_to_desktop.side_effect = (
+                    lambda: self.attach_to_desktop(self.wallpaper)
+                )
+
+                operations = mock.Mock()
+                operations.attach_mock(self.image_display.set_hwnd, "image_hwnd")
+                operations.attach_mock(self.wallpaper.destroy, "destroy")
+
+                with (
+                    mock.patch.object(self.player, "get_time", side_effect=AssertionError("image seek")),
+                    mock.patch.object(self.player, "set_time", side_effect=AssertionError("image seek")),
+                ):
+                    self.wallpaper.reattach_to_desktop()
+
+                self.assertEqual(operations.mock_calls, [
+                    mock.call.image_hwnd(0),
+                    mock.call.destroy(True, True),
+                    mock.call.image_hwnd(2),
+                ])
+                self.assertEqual(self.image_output.hwnd, 2)
+                self.assertEqual(self.image_output.visible, command == "play")
+                self.assertEqual(self.wallpaper.play_state, command)
+                self.assertEqual(self.player.state, "stopped")
+                self.image_display.set_image.assert_not_called()
+                self.namespace["config_store"].save.assert_not_called()
+                self.namespace["logger"].exception.assert_not_called()
+
+
+    def test_image_exit_releases_image_and_vlc(self):
+
+        self.wallpaper.set_play_media(self.image_path)
+        self.tray.play()
+        self.image_display.close.reset_mock()
+        self.tray.exit()
+
+        self.assertFalse(self.image_output.visible)
+        self.assertIsNone(self.image_output.current_image)
+        self.image_display.close.assert_called_once_with()
+        self.assertEqual(self.player.state, "released")
+        self.tray.app.quit.assert_called_once_with()
+        self.namespace["logger"].exception.assert_not_called()
+
+
+    def test_startup_displays_initial_image(self):
+
+        self.namespace["get_media"].return_value = [self.image_path]
+        wallpaper = self.namespace["Wallpaper"]()
+        self.addCleanup(wallpaper.deleteLater)
+
+        self.assertEqual(wallpaper.current_media, self.image_path)
+        self.assertEqual(wallpaper.play_state, "play")
+        self.assertTrue(self.image_output.visible)
+        self.assertEqual(self.player.state, "stopped")
+
+
+    def test_bad_startup_image_keeps_app_available(self):
+
+        self.namespace["get_media"].return_value = [self.image_path]
+        self.image_display.set_image.side_effect = RuntimeError("bad image")
+        wallpaper = self.namespace["Wallpaper"]()
+        self.addCleanup(wallpaper.deleteLater)
+
+        self.assertIsNone(wallpaper.current_media)
+        self.assertEqual(wallpaper.play_state, "stop")
+        self.assertFalse(self.image_output.visible)
+        self.namespace["config_store"].save.assert_not_called()
+        self.namespace["logger"].exception.assert_called_once()
+        wallpaper.timer.start.assert_called_with(500)
 
 
 if __name__ == "__main__":

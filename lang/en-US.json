@@ -11,6 +11,7 @@
   "importing_media": "Importing {percent}%",
   "cancel_media_import": "Cancel Import",
   "media_add_failed": "Could not add video: {error}",
+  "media_load_failed": "Could not load wallpaper: {error}",
   "media_insufficient_space": "Not enough disk space\n{required:,} MB required, {available:,} MB available",
   "open_video_folder": "Open Video Folder",
   "select_video": "Select Video",

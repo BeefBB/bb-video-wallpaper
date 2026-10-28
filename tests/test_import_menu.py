@@ -253,6 +253,25 @@ class ImportMenuTests(unittest.TestCase):
         self.assertIn("disk full", self.tray.tray.showMessage.call_args.args[1])
 
 
+    def test_bad_wallpaper_shows_localized_error_without_starting_playback(self):
+
+        self.tray.wallpaper.set_play_media.side_effect = RuntimeError("bad image")
+        self.tray.wallpaper.enable_auto_pause = False
+
+        for language_path in (ROOT / "lang").glob("*.json"):
+            with self.subTest(language=language_path.name):
+                self.namespace["LANG"] = json.loads(language_path.read_text(encoding="utf-8"))
+                self.tray.tray.showMessage.reset_mock()
+                self.namespace["Tray"].play_from_menu(self.tray, self.source)
+
+                self.tray.wallpaper.media_play.assert_not_called()
+                self.assertFalse(self.tray.wallpaper.enable_auto_pause)
+                self.assertEqual(
+                    self.tray.tray.showMessage.call_args.args[1],
+                    self.namespace["LANG"]["media_load_failed"].format(error="bad image"),
+                )
+
+
     def test_quitting_requests_cancellation_before_waiting(self):
 
         def wait_for_cancel(source, *, progress, cancelled):
