@@ -892,18 +892,18 @@ class Wallpaper(QWidget):
 
 
         # VLC
-        self.instance = vlc.Instance(
+        self.instance_vlc = vlc.Instance(
             "--no-video-title-show",
             "--input-repeat=65535",
             "--no-audio"
         )
 
         # 建立 VLC 播放器物件
-        self.player = self.instance.media_player_new()  # type: ignore
+        self.player = self.instance_vlc.media_player_new()  # type: ignore
 
 
         # 圖片共用主程式的 QApplication 與桌布 HWND
-        self.image_display = bb_image_display.Instance()
+        self.instance_image = bb_image_display.Instance()
 
 
         self.enable_auto_pause = True
@@ -1015,7 +1015,7 @@ class Wallpaper(QWidget):
             return
 
         if self.is_image():
-            self.image_display.show()
+            self.instance_image.show()
 
         else:
             self.player.play()
@@ -1043,7 +1043,7 @@ class Wallpaper(QWidget):
     def media_stop(self) -> None:
 
         if self.is_image():
-            self.image_display.hide()
+            self.instance_image.hide()
 
         else:
             self.player.stop()
@@ -1075,7 +1075,7 @@ class Wallpaper(QWidget):
 
 
             self.unregister_power_notification()
-            self.image_display.set_hwnd(0)
+            self.instance_image.set_hwnd(0)
             self.hide()
 
 
@@ -1164,7 +1164,7 @@ class Wallpaper(QWidget):
 
         # 先讀取圖片, 失敗時保留原本的輸出, 播放狀態與最近紀錄
         if is_image:
-            self.image_display.set_image(path)
+            self.instance_image.set_image(path)
 
 
         self.media_stop()
@@ -1173,7 +1173,7 @@ class Wallpaper(QWidget):
 
         if not is_image:
 
-            media = self.instance.media_new(str(path))  # type: ignore
+            media = self.instance_vlc.media_new(str(path))  # type: ignore
 
             try:
                 self.player.set_media(media)
@@ -1183,7 +1183,7 @@ class Wallpaper(QWidget):
 
             # 裁切填滿螢幕, 並釋放已不再使用的圖片
             self.player.video_set_crop_geometry(self.get_screen_aspect_ratio())
-            self.image_display.close()
+            self.instance_image.close()
 
 
         self.current_media = path
@@ -1233,7 +1233,7 @@ class Wallpaper(QWidget):
 
         # 重新設定圖片與影片輸出的目標 HWND
         self.player.set_hwnd(hwnd)
-        self.image_display.set_hwnd(hwnd)
+        self.instance_image.set_hwnd(hwnd)
 
 
         self.power_notify = ctypes.windll.user32.RegisterPowerSettingNotification(
@@ -1926,10 +1926,10 @@ class Tray:
             self.wallpaper.player_events.event_detach(vlc.EventType.MediaPlayerPlaying)  # type: ignore
 
             self.wallpaper.media_stop()
-            self.wallpaper.image_display.close()
+            self.wallpaper.instance_image.close()
 
             self.wallpaper.player.release()
-            self.wallpaper.instance.release()
+            self.wallpaper.instance_vlc.release()
 
         except Exception:
             logger.exception("退出時發生錯誤")

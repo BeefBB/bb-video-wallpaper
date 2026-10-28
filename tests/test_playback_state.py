@@ -187,9 +187,9 @@ class PlaybackStateTests(unittest.TestCase):
 
         self.player = DeferredPlayer()
         self.image_output = ImageDisplay()
-        self.image_display = mock.Mock(wraps=self.image_output)
+        self.instance_image = mock.Mock(wraps=self.image_output)
         image_module = mock.Mock()
-        image_module.Instance.return_value = self.image_display
+        image_module.Instance.return_value = self.instance_image
 
         instance = mock.Mock()
         instance.media_player_new.return_value = self.player
@@ -453,7 +453,7 @@ class PlaybackStateTests(unittest.TestCase):
         self.tray.play()
         self.assertTrue(self.image_output.visible)
         self.assertEqual(self.wallpaper.play_state, "play")
-        self.image_display.set_image.assert_called_once_with(self.image_path)
+        self.instance_image.set_image.assert_called_once_with(self.image_path)
 
 
     def test_switching_video_image_video_stops_previous_output(self):
@@ -528,7 +528,7 @@ class PlaybackStateTests(unittest.TestCase):
                     continue
 
                 with self.subTest(media=previous_media, state=command):
-                    self.image_display.set_image.side_effect = None
+                    self.instance_image.set_image.side_effect = None
                     self.wallpaper.set_play_media(previous_media)
                     self.tray.play()
                     getattr(self.tray, command)()
@@ -537,7 +537,7 @@ class PlaybackStateTests(unittest.TestCase):
                     previous_image = self.image_output.current_image
                     previous_visible = self.image_output.visible
                     self.namespace["config_store"].save.reset_mock()
-                    self.image_display.set_image.side_effect = RuntimeError("bad image")
+                    self.instance_image.set_image.side_effect = RuntimeError("bad image")
 
                     with self.assertRaisesRegex(RuntimeError, "bad image"):
                         self.wallpaper.set_play_media(self.image_path.with_name("bad.png"))
@@ -567,7 +567,7 @@ class PlaybackStateTests(unittest.TestCase):
 
         self.namespace["set_windows_as_wallpaper"].assert_called_once_with(1)
         self.player.set_hwnd.assert_called_once_with(1)
-        self.image_display.set_hwnd.assert_called_once_with(1)
+        self.instance_image.set_hwnd.assert_called_once_with(1)
 
 
     def test_image_reattach_rebinds_without_reload_or_vlc_seek(self):
@@ -577,7 +577,7 @@ class PlaybackStateTests(unittest.TestCase):
                 self.wallpaper.set_play_media(self.image_path)
                 self.tray.play()
                 getattr(self.tray, command)()
-                self.image_display.reset_mock()
+                self.instance_image.reset_mock()
                 self.namespace["config_store"].save.reset_mock()
                 self.wallpaper.winId.return_value = 2
                 self.wallpaper.attach_to_desktop.side_effect = (
@@ -585,7 +585,7 @@ class PlaybackStateTests(unittest.TestCase):
                 )
 
                 operations = mock.Mock()
-                operations.attach_mock(self.image_display.set_hwnd, "image_hwnd")
+                operations.attach_mock(self.instance_image.set_hwnd, "image_hwnd")
                 operations.attach_mock(self.wallpaper.destroy, "destroy")
 
                 with (
@@ -603,7 +603,7 @@ class PlaybackStateTests(unittest.TestCase):
                 self.assertEqual(self.image_output.visible, command == "play")
                 self.assertEqual(self.wallpaper.play_state, command)
                 self.assertEqual(self.player.state, "stopped")
-                self.image_display.set_image.assert_not_called()
+                self.instance_image.set_image.assert_not_called()
                 self.namespace["config_store"].save.assert_not_called()
                 self.namespace["logger"].exception.assert_not_called()
 
@@ -612,12 +612,12 @@ class PlaybackStateTests(unittest.TestCase):
 
         self.wallpaper.set_play_media(self.image_path)
         self.tray.play()
-        self.image_display.close.reset_mock()
+        self.instance_image.close.reset_mock()
         self.tray.exit()
 
         self.assertFalse(self.image_output.visible)
         self.assertIsNone(self.image_output.current_image)
-        self.image_display.close.assert_called_once_with()
+        self.instance_image.close.assert_called_once_with()
         self.assertEqual(self.player.state, "released")
         self.tray.app.quit.assert_called_once_with()
         self.namespace["logger"].exception.assert_not_called()
@@ -638,7 +638,7 @@ class PlaybackStateTests(unittest.TestCase):
     def test_bad_startup_image_keeps_app_available(self):
 
         self.namespace["get_media"].return_value = [self.image_path]
-        self.image_display.set_image.side_effect = RuntimeError("bad image")
+        self.instance_image.set_image.side_effect = RuntimeError("bad image")
         wallpaper = self.namespace["Wallpaper"]()
         self.addCleanup(wallpaper.deleteLater)
 
