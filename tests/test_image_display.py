@@ -155,13 +155,13 @@ class ImageDisplayTests(unittest.TestCase):
 
         win32gui.SetWindowPos(
             int(self.target.winId()), 0, 0, 0, 320, 180,
-            win32con.SWP_NOMOVE | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE,
+            win32con.SWP_NOMOVE | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE
         )
         self.app.processEvents()
 
         self.assertEqual(
             win32gui.GetClientRect(window._host_hwnd),
-            win32gui.GetClientRect(int(self.target.winId())),
+            win32gui.GetClientRect(int(self.target.winId()))
         )
 
 

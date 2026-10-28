@@ -1,9 +1,11 @@
+import ctypes
 import sys
 import os
 import subprocess
 import hashlib
 import shutil
 import tempfile
+from ctypes import wintypes
 from pathlib import Path
 import time
 import logging
@@ -15,8 +17,6 @@ import win32api
 import win32event
 import winerror
 
-import ctypes
-from ctypes import wintypes
 import psutil
 
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog, QLabel
@@ -58,7 +58,7 @@ IMPORT_RESERVE_BYTES = 100 * 1024 * 1024
 # 唯一的 Mutex 名稱
 MUTEX_NAME = "Global\\BBVideoWallpaper_SingleInstance_Mutex"
 
-def is_already_running():
+def is_already_running() -> tuple[bool, object]:
     """
     檢查程式是否已經在執行中
     """
@@ -99,14 +99,14 @@ if not already_running:
         LOG_DIR / "log.log",
         maxBytes=2 * 1024 * 1024,  # 每份最多約 2 MB
         backupCount=3,             # 額外保留 3 份舊日誌
-        encoding="utf-8",
+        encoding="utf-8"
     )
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[handler],
+        handlers=[handler]
     )
 
 logger = logging.getLogger(__name__)
@@ -156,7 +156,7 @@ def tr(key: str) -> str:
     return LANG.get(key, key)
 
 
-def show_already_running_toast():
+def show_already_running_toast() -> None:
     """
     跳出 Windows 系統右下角通知並退出
     """
@@ -265,9 +265,9 @@ def check_desktop_ready() -> bool:
         return False
 
 
-    for proc in psutil.process_iter(['name']):
+    for proc in psutil.process_iter(["name"]):
         try:
-            if proc.info['name'] and proc.info['name'].lower() == 'explorer.exe':
+            if proc.info["name"] and proc.info["name"].lower() == "explorer.exe":
                 return True
 
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
@@ -474,7 +474,7 @@ def import_media(source: Path, *, progress=None, cancelled=lambda: False) -> Pat
         raise OSError(
             tr("media_insufficient_space").format(
                 required=(source_size + megabyte - 1) // megabyte,
-                available=max(0, free_space - IMPORT_RESERVE_BYTES) // megabyte,
+                available=max(0, free_space - IMPORT_RESERVE_BYTES) // megabyte
             )
         )
 
@@ -554,7 +554,7 @@ class MediaImportThread(QThread):
 
     progress = Signal(int)
 
-    def __init__(self, source: Path):
+    def __init__(self, source: Path) -> None:
 
         super().__init__()
 
@@ -571,7 +571,7 @@ class MediaImportThread(QThread):
             self.destination = import_media(
                 self.source,
                 progress=self.progress.emit,
-                cancelled=self.isInterruptionRequested,
+                cancelled=self.isInterruptionRequested
             )
 
         except MediaImportCancelled:
@@ -583,7 +583,7 @@ class MediaImportThread(QThread):
             self.error = str(e)
 
 
-def create_workerw(parent_hwnd):
+def create_workerw(parent_hwnd) -> int:
     """
     手動創建一個 WorkerW 視窗
     """
@@ -677,7 +677,7 @@ def set_windows_as_wallpaper(hwnd: int) -> None:
         win32gui.SetParent(hwnd, workerw_old)
         win32gui.SetWindowPos(
             hwnd, icon_layer, 0, 0, 0, 0,
-            win32con.SWP_NOSIZE | win32con.SWP_NOMOVE,
+            win32con.SWP_NOSIZE | win32con.SWP_NOMOVE
         )
 
 
@@ -694,7 +694,7 @@ class IVirtualDesktopManager(IUnknown):
             HRESULT,
             "IsWindowOnCurrentVirtualDesktop",
             (["in"], wintypes.HWND, "top_level_window"),
-            (["out"], ctypes.POINTER(wintypes.BOOL), "on_current_desktop"),
+            (["out"], ctypes.POINTER(wintypes.BOOL), "on_current_desktop")
         ),
     ]
 
@@ -715,7 +715,7 @@ def is_on_current_desktop(hwnd: int) -> bool:
 
             _virtual_desktop_manager = CreateObject(
                 CLSID_VIRTUAL_DESKTOP_MANAGER,
-                interface=IVirtualDesktopManager,
+                interface=IVirtualDesktopManager
             )
 
         return bool(_virtual_desktop_manager.IsWindowOnCurrentVirtualDesktop(hwnd))  # type: ignore
@@ -759,7 +759,7 @@ def is_any_fullscreen(wallpaper_hwnd) -> bool:
 
     has_fullscreen = False
 
-    def enum_windows_callback(hwnd, _):
+    def enum_windows_callback(hwnd, _) -> bool:
 
         nonlocal has_fullscreen
 
@@ -846,7 +846,7 @@ class Wallpaper(QWidget):
     playback_started = Signal()
 
 
-    def __init__(self):
+    def __init__(self) -> None:
 
         super().__init__()
 
@@ -964,7 +964,7 @@ class Wallpaper(QWidget):
         self.timer.start(500)
 
 
-    def nativeEvent(self, eventType, message):
+    def nativeEvent(self, eventType, message) -> tuple[bool, int]:
         """
         處理原生 Windows 訊息迴圈
         """
@@ -1330,7 +1330,7 @@ class MediaPreviewMenu(QMenu):
     桌布選單的懸停預覽, 在背景驗證並載入對應縮圖
     """
 
-    def __init__(self, title: str, parent=None):
+    def __init__(self, title: str, parent=None) -> None:
 
         super().__init__(title, parent)
         self.setMouseTracking(True)
@@ -1377,7 +1377,7 @@ class MediaPreviewMenu(QMenu):
         self.reset_timer.timeout.connect(self.reset_preview)
 
 
-    def mouseMoveEvent(self, event):
+    def mouseMoveEvent(self, event) -> None:
 
         super().mouseMoveEvent(event)
         action = self.actionAt(event.position().toPoint())
@@ -1406,13 +1406,13 @@ class MediaPreviewMenu(QMenu):
             self.preview_timer.start()
 
 
-    def leaveEvent(self, event):
+    def leaveEvent(self, event) -> None:
 
         self.leave_preview()
         super().leaveEvent(event)
 
 
-    def hideEvent(self, event):
+    def hideEvent(self, event) -> None:
 
         self.reset_preview()
         super().hideEvent(event)
@@ -1522,7 +1522,7 @@ class MediaPreviewMenu(QMenu):
 
 class Tray:
 
-    def __init__(self, app, wallpaper):
+    def __init__(self, app, wallpaper) -> None:
 
         self.app = app
         self.wallpaper = wallpaper
@@ -1562,8 +1562,8 @@ class Tray:
 
         menu.aboutToShow.connect(
             lambda: pause_action.setEnabled(
-                bool(self.wallpaper.current_media)
-                and self.wallpaper.current_media.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
+                bool(self.wallpaper.current_media) and
+                self.wallpaper.current_media.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
             )
         )
 
@@ -1612,21 +1612,21 @@ class Tray:
             lambda checked: self.set_auto_pause_option(
                 "autoPauseIfFullscreen",
                 "auto_pause_if_fullscreen",
-                checked,
+                checked
             )
         )
         auto_pause_if_screen_off_action.triggered.connect(
             lambda checked: self.set_auto_pause_option(
                 "autoPauseIfScreenOff",
                 "auto_pause_if_screen_off",
-                checked,
+                checked
             )
         )
         auto_pause_if_on_battery_action.triggered.connect(
             lambda checked: self.set_auto_pause_option(
                 "autoPauseIfOnBattery",
                 "auto_pause_if_on_battery",
-                checked,
+                checked
             )
         )
 
@@ -1686,6 +1686,7 @@ class Tray:
 
 
     def play(self) -> None:
+
         if self.wallpaper.current_media:
 
             self.wallpaper.media_play()
@@ -1694,6 +1695,7 @@ class Tray:
 
 
     def pause(self) -> None:
+
         if self.wallpaper.current_media:
 
             if self.wallpaper.current_media.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS:
@@ -1785,7 +1787,7 @@ class Tray:
         self.media_menu.addAction(action)
 
 
-    def set_language(self, language_code: str):
+    def set_language(self, language_code: str) -> None:
 
         if language_code == self.current_language_code:
             return
@@ -1834,7 +1836,7 @@ class Tray:
             None,
             tr("add_media"),
             "",
-            f'{tr("media_files")} ({patterns})',
+            f'{tr("media_files")} ({patterns})'
         )
 
         if not filename:
@@ -1904,6 +1906,7 @@ class Tray:
 
 
     def open_media_folder(self) -> None:
+
         os.startfile(str(MEDIA_DIR))
 
 
@@ -1917,6 +1920,7 @@ class Tray:
 
 
     def toggle_startup(self, checked) -> None:
+
         if checked:
             create_task()
         else:
@@ -1924,6 +1928,7 @@ class Tray:
 
 
     def exit(self) -> None:
+
         try:
             self.wallpaper.is_exiting = True
 

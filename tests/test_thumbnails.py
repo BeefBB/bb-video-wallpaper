@@ -50,7 +50,7 @@ class ThumbnailTests(unittest.TestCase):
             path,
             lambda: False,
             media_dir=self.media_dir,
-            thumbnail_dir=self.thumbnail_dir,
+            thumbnail_dir=self.thumbnail_dir
         )
 
 

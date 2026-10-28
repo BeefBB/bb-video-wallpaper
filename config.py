@@ -33,7 +33,7 @@ class ConfigStore:
     管理設定與語言檔, 建立物件時不讀寫檔案
     """
 
-    def __init__(self, config_path: Path, media_dir: Path, lang_dir: Path):
+    def __init__(self, config_path: Path, media_dir: Path, lang_dir: Path) -> None:
 
         self.config_path = config_path
         self.media_dir = media_dir
@@ -71,7 +71,7 @@ class ConfigStore:
             try:
                 installer_config.read(
                     self.lang_dir.parent / "install-language.ini",
-                    encoding="utf-8-sig",
+                    encoding="utf-8-sig"
                 )
                 language = installer_config.get("Setup", "Language", fallback="")
 

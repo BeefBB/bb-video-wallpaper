@@ -127,7 +127,7 @@ class ImageWallpaper(QRasterWindow):
                 self._target_hwnd,
                 None,
                 win32api.GetModuleHandle(None),
-                None,
+                None
             )
 
             parent = win32gui.GetAncestor(self._host_hwnd, win32con.GA_PARENT)
@@ -173,7 +173,7 @@ class ImageWallpaper(QRasterWindow):
 
         win32gui.SetWindowPos(
             self._host_hwnd, 0, 0, 0, width, height,
-            win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE,
+            win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE
         )
 
         ratio = self.devicePixelRatio()
@@ -225,7 +225,7 @@ class ImageWallpaper(QRasterWindow):
             win32gui.SetWindowLong(
                 hwnd,
                 win32con.GWL_STYLE,
-                (style & ~win32con.WS_POPUP) | win32con.WS_CHILD,
+                (style & ~win32con.WS_POPUP) | win32con.WS_CHILD
             )
             win32gui.SetWindowPos(
                 hwnd, 0, 0, 0, 0, 0,
@@ -233,7 +233,7 @@ class ImageWallpaper(QRasterWindow):
                 win32con.SWP_NOMOVE |
                 win32con.SWP_NOSIZE |
                 win32con.SWP_NOZORDER |
-                win32con.SWP_NOACTIVATE,
+                win32con.SWP_NOACTIVATE
             )
 
             win32gui.ShowWindow(self._host_hwnd, win32con.SW_SHOWNOACTIVATE)
@@ -319,7 +319,7 @@ class ImageWallpaper(QRasterWindow):
         # 等比例置中裁切填滿, 僅在 Qt 要求重繪時繪製
         scale = max(
             self.width() / self.image.width(),
-            self.height() / self.image.height(),
+            self.height() / self.image.height()
         )
         width = self.width() / scale
         height = self.height() / scale
@@ -328,7 +328,7 @@ class ImageWallpaper(QRasterWindow):
             (self.image.width() - width) / 2,
             (self.image.height() - height) / 2,
             width,
-            height,
+            height
         )
 
 

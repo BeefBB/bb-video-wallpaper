@@ -162,7 +162,7 @@ def create_video_thumbnail(path: Path, cancelled) -> QImage:
         uint_pointer,
         uint_pointer
     )
-    def setup(opaque, chroma, width, height, pitches, lines):
+    def setup(opaque, chroma, width, height, pitches, lines) -> int:
 
         try:
 
@@ -199,14 +199,14 @@ def create_video_thumbnail(path: Path, cancelled) -> QImage:
 
 
     @vlc.CallbackDecorators.VideoLockCb
-    def lock(opaque, planes):
+    def lock(opaque, planes) -> None:
 
         planes[0] = frame["address"]
         return None
 
 
     @vlc.CallbackDecorators.VideoUnlockCb
-    def unlock(opaque, picture, planes):
+    def unlock(opaque, picture, planes) -> None:
 
         if not ready.is_set():
 
@@ -446,7 +446,7 @@ class ThumbnailThread(QThread):
     thumbnail_ready = Signal(str, QImage)
 
 
-    def __init__(self, media_dir: Path, thumbnail_dir: Path, parent=None):
+    def __init__(self, media_dir: Path, thumbnail_dir: Path, parent=None) -> None:
 
         super().__init__(parent)
 
@@ -494,7 +494,7 @@ class ThumbnailThread(QThread):
                     path,
                     self.isInterruptionRequested,
                     media_dir=self.media_dir,
-                    thumbnail_dir=self.thumbnail_dir,
+                    thumbnail_dir=self.thumbnail_dir
                 )
                 image = QImage(str(thumbnail_path))
 

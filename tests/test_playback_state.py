@@ -175,10 +175,10 @@ class PlaybackStateTests(unittest.TestCase):
         classes = ast.Module(
             body=[
                 node for node in tree.body
-                if isinstance(node, ast.ClassDef)
-                and node.name in {"Wallpaper", "Tray"}
+                if isinstance(node, ast.ClassDef) and
+                node.name in {"Wallpaper", "Tray"}
             ],
-            type_ignores=[],
+            type_ignores=[]
         )
         cls.playback_code = compile(classes, str(source_path), "exec")
 
@@ -314,7 +314,7 @@ class PlaybackStateTests(unittest.TestCase):
 
                 with self.subTest(
                     command=command,
-                    event_already_queued=event_already_queued,
+                    event_already_queued=event_already_queued
                 ):
                     self.tray.stop()
                     self.start_loading()

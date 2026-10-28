@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class PreviewMenu(QMenu):
 
     def __init__(self, title, parent):
+
         super().__init__(title, parent)
         self.thumbnail_thread = mock.Mock()
 
@@ -43,13 +44,13 @@ class ImportMenuTests(unittest.TestCase):
             body=[
                 node for node in tree.body
                 if (
-                    isinstance(node, ast.ClassDef)
-                    and node.name in {"MediaImportCancelled", "MediaImportThread", "Tray"}
+                    isinstance(node, ast.ClassDef) and
+                    node.name in {"MediaImportCancelled", "MediaImportThread", "Tray"}
                 ) or (
                     isinstance(node, ast.FunctionDef) and node.name == "tr"
                 )
             ],
-            type_ignores=[],
+            type_ignores=[]
         )
         cls.menu_code = compile(nodes, str(source_path), "exec")
 
@@ -113,6 +114,7 @@ class ImportMenuTests(unittest.TestCase):
 
 
     def visible_labels(self):
+
         return [
             "-" if action.isSeparator() else action.text()
             for action in self.menu.actions() if action.isVisible()
@@ -202,10 +204,12 @@ class ImportMenuTests(unittest.TestCase):
         update_progress = self.tray.update_import_progress
 
         def record_progress(percent):
+
             updated_on.append(threading.get_ident())
             update_progress(percent)
 
         def copy_with_progress(source, *, progress, cancelled):
+
             worker_threads.append(threading.get_ident())
             progress(42)
             return self.blocked_import(source, progress=progress, cancelled=cancelled)
@@ -268,13 +272,14 @@ class ImportMenuTests(unittest.TestCase):
                 self.assertFalse(self.tray.wallpaper.enable_auto_pause)
                 self.assertEqual(
                     self.tray.tray.showMessage.call_args.args[1],
-                    self.namespace["LANG"]["media_load_failed"].format(error="bad image"),
+                    self.namespace["LANG"]["media_load_failed"].format(error="bad image")
                 )
 
 
     def test_quitting_requests_cancellation_before_waiting(self):
 
         def wait_for_cancel(source, *, progress, cancelled):
+
             self.started.set()
             deadline = time.monotonic() + 5
 

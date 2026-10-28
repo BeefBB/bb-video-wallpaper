@@ -40,7 +40,7 @@ def run_ffmpeg(*args, timeout: int = 30) -> subprocess.CompletedProcess:
     return subprocess.run(
         [FFMPEG, "-hide_banner", "-loglevel", "error", "-y", *map(str, args)],
         check=True, capture_output=True, timeout=timeout,
-        creationflags=subprocess.CREATE_NO_WINDOW,
+        creationflags=subprocess.CREATE_NO_WINDOW
     )
 
 
@@ -129,7 +129,7 @@ def thumbnail_probe(path: str, mode: str, connection) -> None:
 
 @unittest.skipUnless(
     os.name == "nt" and FFMPEG and (VLC_DIR / "libvlc.dll").is_file(),
-    "需要 Windows, VLC-lite 與 ffmpeg",
+    "需要 Windows, VLC-lite 與 ffmpeg"
 )
 class VideoThumbnailTests(unittest.TestCase):
 
@@ -147,7 +147,7 @@ class VideoThumbnailTests(unittest.TestCase):
             run_ffmpeg(
                 "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30",
                 "-t", "3", "-vf", f"setsar={sar}/1",
-                "-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", path,
+                "-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", path
             )
             cls.media[sar] = path
 
@@ -159,7 +159,7 @@ class VideoThumbnailTests(unittest.TestCase):
             "drawbox=x=160:y=0:w=160:h=90:color=lime:t=fill,"
             "drawbox=x=0:y=90:w=160:h=90:color=blue:t=fill,"
             "drawbox=x=160:y=90:w=160:h=90:color=yellow:t=fill",
-            "-t", "3", "-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", quadrants,
+            "-t", "3", "-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", quadrants
         )
         cls.rotated_media = {}
 
@@ -168,7 +168,7 @@ class VideoThumbnailTests(unittest.TestCase):
             path = cls.directory / f"rotated-{rotation}.mp4"
             run_ffmpeg(
                 "-display_rotation:v:0", rotation, "-i", quadrants,
-                "-c", "copy", path,
+                "-c", "copy", path
             )
             cls.rotated_media[rotation] = path
 
@@ -183,7 +183,7 @@ class VideoThumbnailTests(unittest.TestCase):
 
         run_ffmpeg(
             "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30",
-            "-t", "2", "-c:v", "libaom-av1", "-cpu-used", "8", "-threads", "1", path,
+            "-t", "2", "-c:v", "libaom-av1", "-cpu-used", "8", "-threads", "1", path
         )
 
 
@@ -260,7 +260,7 @@ class VideoThumbnailTests(unittest.TestCase):
                             "-c:a", "aac", "-c:v", codec, *encoder_options, "-threads", "1",
                             "-disposition:v:0", "default" if selected == 0 else "0",
                             "-disposition:v:1", "default" if selected == 1 else "0",
-                            path,
+                            path
                         )
                         result = self.isolated_thumbnail(path)
 

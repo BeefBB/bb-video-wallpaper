@@ -33,20 +33,20 @@ class MediaImportTests(unittest.TestCase):
             body=[
                 node for node in tree.body
                 if (
-                    isinstance(node, ast.FunctionDef)
-                    and node.name in {"tr", "check_import_cancelled", "calculate_sha256", "import_media"}
+                    isinstance(node, ast.FunctionDef) and
+                    node.name in {"tr", "check_import_cancelled", "calculate_sha256", "import_media"}
                 ) or (
-                    isinstance(node, ast.ClassDef)
-                    and node.name == "MediaImportCancelled"
+                    isinstance(node, ast.ClassDef) and
+                    node.name == "MediaImportCancelled"
                 ) or (
-                    isinstance(node, ast.Assign)
-                    and any(
+                    isinstance(node, ast.Assign) and
+                    any(
                         isinstance(target, ast.Name) and target.id == "IMPORT_RESERVE_BYTES"
                         for target in node.targets
                     )
                 )
             ],
-            type_ignores=[],
+            type_ignores=[]
         )
         cls.import_code = compile(functions, str(source_path), "exec")
 
@@ -186,6 +186,7 @@ class MediaImportTests(unittest.TestCase):
                 if mode == "wb" and file_path.name.startswith(".import-"):
 
                     def write_until_full(chunk):
+
                         file.write(chunk[:3])
                         raise OSError(errno.ENOSPC, "No space left on device")
 
@@ -217,6 +218,7 @@ class MediaImportTests(unittest.TestCase):
         updates = []
 
         def report(percent):
+
             updates.append(percent)
 
             if percent == 100:
@@ -276,6 +278,7 @@ class MediaImportTests(unittest.TestCase):
                 progress = mock.Mock()
 
                 def new_digest():
+
                     nonlocal hash_count
                     hash_count += 1
                     digest = real_sha256()
@@ -283,6 +286,7 @@ class MediaImportTests(unittest.TestCase):
                     if hash_count == cancel_hash_number:
 
                         def update_and_cancel(chunk):
+
                             nonlocal cancelled
                             digest.update(chunk)
                             cancelled = True
@@ -318,6 +322,7 @@ class MediaImportTests(unittest.TestCase):
                 updates = []
 
                 def report(percent):
+
                     nonlocal cancelled
                     updates.append(percent)
 
