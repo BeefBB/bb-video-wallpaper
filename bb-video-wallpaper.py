@@ -19,7 +19,7 @@ import winerror
 
 import psutil
 
-from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog, QLabel
+from PySide6.QtWidgets import QApplication, QMessageBox, QWidget, QSystemTrayIcon, QMenu, QFileDialog, QLabel
 from PySide6.QtCore import Qt, QTimer, QThread, Slot, Signal
 from PySide6.QtGui import QAction, QIcon, QFont, QPixmap, QCursor, QImage
 
@@ -982,9 +982,9 @@ class Wallpaper(QWidget):
 
         QTimer.singleShot(10000, self.enable_fullscreen_detection)
 
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.check_auto_pause)
-        self.timer.start(500)
+        self.check_auto_pause_timer = QTimer(self)
+        self.check_auto_pause_timer.timeout.connect(self.check_auto_pause)
+        self.check_auto_pause_timer.start(500)
 
 
     def nativeEvent(self, eventType, message) -> tuple[bool, int]:
@@ -1030,6 +1030,9 @@ class Wallpaper(QWidget):
 
 
     def is_image(self) -> bool:
+        """
+        目前播放的媒體是否為圖片
+        """
 
         return bool(
             self.current_media and
@@ -1038,6 +1041,9 @@ class Wallpaper(QWidget):
 
 
     def media_play(self) -> None:
+        """
+        播放
+        """
 
         if not self.current_media or self.is_exiting:
             return
@@ -1052,12 +1058,29 @@ class Wallpaper(QWidget):
 
 
     def media_pause(self) -> None:
+        """
+        暫停播放
+        """
 
         if not self.current_media or self.is_image():
             return
 
         self.play_state = "pause"
         self.apply_pending_pause()
+
+
+    def media_stop(self) -> None:
+        """
+        停止播放
+        """
+
+        if self.is_image():
+            self.instance_image.hide()
+
+        else:
+            self.instance_vlc_player.stop()
+
+        self.play_state = "stop"
 
 
     @Slot()
@@ -1069,17 +1092,6 @@ class Wallpaper(QWidget):
         # 載入完成後依最新狀態補套暫停, 不覆蓋後續的播放或停止要求
         if not self.is_exiting and not self.is_image() and self.play_state == "pause":
             self.instance_vlc_player.set_pause(1)
-
-
-    def media_stop(self) -> None:
-
-        if self.is_image():
-            self.instance_image.hide()
-
-        else:
-            self.instance_vlc_player.stop()
-
-        self.play_state = "stop"
 
 
     def reattach_to_desktop(self) -> None:
@@ -1110,7 +1122,7 @@ class Wallpaper(QWidget):
             self.hide()
 
 
-            # 銷毀失效的 HWND , 重新向 Windows 申請新的 HWND
+            # 銷毀失效的 HWND, 重新向 Windows 申請新的 HWND
             self.destroy(True, True)
             self.create()
 
@@ -1278,6 +1290,9 @@ class Wallpaper(QWidget):
 
 
     def get_screen_aspect_ratio(self) -> str:
+        """
+        取得螢幕解析度的寬高比
+        """
 
         screen = QApplication.primaryScreen()
         geometry = screen.geometry()
@@ -1302,7 +1317,6 @@ class Wallpaper(QWidget):
         檢查是否需要自動暫停
         """
 
-        # 若正在重建視窗則跳過
         if self.is_recreating:
             return
 
@@ -1552,23 +1566,24 @@ class Tray:
 
         self.app = app
         self.wallpaper = wallpaper
-        self.import_thread: MediaImportThread | None = None
-        self.app.aboutToQuit.connect(self.wait_for_import)
 
-
-        config = config_store.load()
-
-
-        self.current_language_code = config.get("language", "zh-TW")
-
-
+        # 系統匣圖示與選單
         self.tray = QSystemTrayIcon()
         self.tray.setIcon(QIcon(str(ICON_PATH)))
         self.tray.setToolTip(tr("app_name"))
 
+        # 匯入媒體的背景執行緒
+        self.import_thread: MediaImportThread | None = None
+        self.app.aboutToQuit.connect(self.wait_for_import)
+
+        # 設定檔
+        config = config_store.load()
+
+        # 語言代碼
+        self.current_language_code = config.get("language", "zh-TW")
+
 
         menu = QMenu()
-
 
         play_action = QAction(tr("play"), menu)
         pause_action = QAction(tr("pause"), menu)
@@ -1582,16 +1597,24 @@ class Tray:
             (stop_action, "stop"),
         ):
             action.setCheckable(True)
+
             menu.aboutToShow.connect(
                 lambda a=action, s=state: a.setChecked(self.wallpaper.play_state == s)
             )
 
+        # 播放圖片時停用暫停按鈕
         menu.aboutToShow.connect(
             lambda: pause_action.setEnabled(
                 bool(self.wallpaper.current_media) and
                 self.wallpaper.current_media.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
             )
         )
+
+
+        self.media_menu = MediaPreviewMenu(tr("select_video"), menu)
+        self.media_menu.aboutToShow.connect(self.refresh_media_menu)
+
+        self.app.aboutToQuit.connect(self.media_menu.thumbnail_thread.stop)
 
 
         self.add_media_action = QAction(tr("add_media"), menu)
@@ -1659,31 +1682,31 @@ class Tray:
         startup_action.triggered.connect(self.toggle_startup)
 
 
+        # 主要選單
+        # ################
         menu.addAction(play_action)
         menu.addAction(pause_action)
         menu.addAction(stop_action)
 
-
         menu.addSeparator()
 
-
-        self.media_menu = MediaPreviewMenu(tr("select_video"), menu)
-        self.app.aboutToQuit.connect(self.media_menu.thumbnail_thread.stop)
         menu.addMenu(self.media_menu)
-        self.media_menu.aboutToShow.connect(
-            self.refresh_media_menu
-        )
-
         menu.addAction(self.add_media_action)
         menu.addAction(self.cancel_import_action)
         menu.addAction(open_media_action)
 
-
         menu.addSeparator()
-
 
         self.options_menu = menu.addMenu(tr("options"))
 
+        menu.addSeparator()
+
+        menu.addAction(exit_action)
+        # ################
+
+
+        # 選項子選單
+        # ################
         self.options_menu.addAction(auto_pause_if_fullscreen_action)
         self.options_menu.addAction(auto_pause_if_screen_off_action)
         self.options_menu.addAction(auto_pause_if_on_battery_action)
@@ -1691,23 +1714,17 @@ class Tray:
         self.options_menu.addSeparator()
 
         self.options_language_menu = self.options_menu.addMenu(tr("language"))
-        self.options_language_menu.aboutToShow.connect(
-            self.refresh_language_menu
-        )
 
         self.options_menu.addSeparator()
 
         self.options_menu.addAction(startup_action)
+        # ################
 
 
-        menu.addSeparator()
-
-
-        menu.addAction(exit_action)
-
+        # 每次開啟選單時, 重新建立語言選單
+        self.options_language_menu.aboutToShow.connect(self.refresh_language_menu)
 
         self.tray.setContextMenu(menu)
-
         self.tray.show()
 
 
@@ -1742,6 +1759,9 @@ class Tray:
 
 
     def refresh_language_menu(self) -> None:
+        """
+        重新建立語言選單
+        """
 
         self.options_language_menu.clear()
 
@@ -1760,6 +1780,9 @@ class Tray:
 
 
     def refresh_media_menu(self) -> None:
+        """
+        重新建立媒體選單
+        """
 
         self.media_menu.reset_preview()
         self.media_menu.clear()
@@ -1789,6 +1812,9 @@ class Tray:
 
 
     def clear_recent_media(self) -> None:
+        """
+        清除最近播放的媒體清單, 只保留目前播放的
+        """
 
         config = config_store.load()
         config["recentVideo"] = config.get("recentVideo", [])[:1]
@@ -1798,6 +1824,9 @@ class Tray:
 
 
     def add_media_menu_action(self, media_path: Path) -> None:
+        """
+        新增媒體選單項目
+        """
 
         action = QAction(media_path.name, self.media_menu)
         action.setData(str(media_path))
@@ -1925,6 +1954,9 @@ class Tray:
 
 
     def wait_for_import(self) -> None:
+        """
+        等待匯入媒體的背景執行緒結束
+        """
 
         if self.import_thread is not None:
             self.import_thread.requestInterruption()

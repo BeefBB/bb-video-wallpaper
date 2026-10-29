@@ -647,7 +647,7 @@ class PlaybackStateTests(unittest.TestCase):
         self.assertFalse(self.image_output.visible)
         self.namespace["config_store"].save.assert_not_called()
         self.namespace["logger"].exception.assert_called_once()
-        wallpaper.timer.start.assert_called_with(500)
+        wallpaper.check_auto_pause_timer.start.assert_called_with(500)
 
 
 if __name__ == "__main__":
