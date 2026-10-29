@@ -3,15 +3,16 @@
 只在暫存資料夾操作, 不啟動桌布或修改使用者設定
 """
 
-import ast
 from contextlib import contextmanager
 import errno
+from functools import partial
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -20,36 +21,15 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 
 
+# 直接執行測試檔時, 將專案根目錄加入模組搜尋路徑
+if __name__ == "__main__":
+    sys.path.insert(0, str(ROOT))
+
+from media_import import MediaImportCancelled, import_media
+
+
 @unittest.skipUnless(os.name == "nt", "需要 Windows 的 rename 不覆寫語意")
 class MediaImportTests(unittest.TestCase):
-
-    @classmethod
-    def setUpClass(cls) -> None:
-
-        # 僅載入匯入所需函式與常數, 避免主程式初始化使用者目錄, 日誌與 VLC
-        source_path = ROOT / "bb-video-wallpaper.py"
-        tree = ast.parse(source_path.read_text(encoding="utf-8"))
-        functions = ast.Module(
-            body=[
-                node for node in tree.body
-                if (
-                    isinstance(node, ast.FunctionDef) and
-                    node.name in {"tr", "check_import_cancelled", "calculate_sha256", "import_media"}
-                ) or (
-                    isinstance(node, ast.ClassDef) and
-                    node.name == "MediaImportCancelled"
-                ) or (
-                    isinstance(node, ast.Assign) and
-                    any(
-                        isinstance(target, ast.Name) and target.id == "IMPORT_RESERVE_BYTES"
-                        for target in node.targets
-                    )
-                )
-            ],
-            type_ignores=[]
-        )
-        cls.import_code = compile(functions, str(source_path), "exec")
-
 
     def setUp(self) -> None:
 
@@ -66,19 +46,12 @@ class MediaImportTests(unittest.TestCase):
         self.addCleanup(disk_usage_patch.stop)
         self.disk_usage.return_value.free = 1024 * 1024 * 1024
 
-        namespace = {
-            "Path": Path,
-            "hashlib": hashlib,
-            "shutil": shutil,
-            "tempfile": tempfile,
-            "MEDIA_DIR": self.media_dir,
-            "SINGLE_IMPORT_DIR": self.import_dir,
-            "SUPPORTED_MEDIA_EXTENSIONS": {".mp4", ".jpeg"},
-            "LANG": json.loads((ROOT / "lang" / "zh-TW.json").read_text(encoding="utf-8")),
-        }
-        exec(self.import_code, namespace)
-        self.namespace = namespace
-        self.import_media = namespace["import_media"]
+        self.language = json.loads((ROOT / "lang" / "zh-TW.json").read_text(encoding="utf-8"))
+        self.import_media = partial(
+            import_media,
+            import_dir=self.import_dir,
+            translate=lambda key: self.language.get(key, key)
+        )
 
 
     def test_insufficient_space_is_rejected_before_creating_or_copying_a_file(self):
@@ -255,7 +228,7 @@ class MediaImportTests(unittest.TestCase):
         source.write_bytes(b"new contents")
         progress = mock.Mock()
 
-        with self.assertRaises(self.namespace["MediaImportCancelled"]):
+        with self.assertRaises(MediaImportCancelled):
             self.import_media(source, progress=progress, cancelled=lambda: True)
 
         progress.assert_not_called()
@@ -299,7 +272,7 @@ class MediaImportTests(unittest.TestCase):
                     return digest
 
                 with mock.patch.object(hashlib, "sha256", side_effect=new_digest):
-                    with self.assertRaises(self.namespace["MediaImportCancelled"]):
+                    with self.assertRaises(MediaImportCancelled):
                         self.import_media(source, progress=progress, cancelled=lambda: cancelled)
 
                 progress.assert_not_called()
@@ -331,7 +304,7 @@ class MediaImportTests(unittest.TestCase):
                         self.assertTrue(list(self.import_dir.glob(".import-*.tmp")))
                         cancelled = True
 
-                with self.assertRaises(self.namespace["MediaImportCancelled"]):
+                with self.assertRaises(MediaImportCancelled):
                     self.import_media(source, progress=report, cancelled=lambda: cancelled)
 
                 self.assertNotIn(100, updates)
@@ -348,7 +321,7 @@ class MediaImportTests(unittest.TestCase):
             file.truncate(2 * 1024 * 1024 + 1)
 
         for language in ("zh-TW", "zh-CN", "en-US", "ja-JP"):
-            self.namespace["LANG"] = json.loads(
+            self.language = json.loads(
                 (ROOT / "lang" / f"{language}.json").read_text(encoding="utf-8")
             )
 

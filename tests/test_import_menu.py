@@ -6,6 +6,7 @@
 import ast
 import json
 from pathlib import Path
+import sys
 import threading
 import time
 import unittest
@@ -17,6 +18,13 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+# 直接執行測試檔時, 將專案根目錄加入模組搜尋路徑
+if __name__ == "__main__":
+    sys.path.insert(0, str(ROOT))
+
+from media_import import MediaImportCancelled
 
 
 class PreviewMenu(QMenu):
@@ -45,7 +53,7 @@ class ImportMenuTests(unittest.TestCase):
                 node for node in tree.body
                 if (
                     isinstance(node, ast.ClassDef) and
-                    node.name in {"MediaImportCancelled", "MediaImportThread", "Tray"}
+                    node.name in {"MediaImportThread", "Tray"}
                 ) or (
                     isinstance(node, ast.FunctionDef) and node.name == "tr"
                 )
@@ -74,7 +82,9 @@ class ImportMenuTests(unittest.TestCase):
             "QFileDialog": mock.Mock(),
             "QSystemTrayIcon": mock.Mock(),
             "MediaPreviewMenu": PreviewMenu,
+            "MediaImportCancelled": MediaImportCancelled,
             "ICON_PATH": ROOT / "icon" / "bb-video-wallpaper.ico",
+            "SINGLE_IMPORT_DIR": ROOT / "video" / "_imports",
             "LANG": self.language,
             "SUPPORTED_MEDIA_EXTENSIONS": {".mp4", ".png"},
             "SUPPORTED_VIDEO_EXTENSIONS": {".mp4"},
@@ -138,7 +148,7 @@ class ImportMenuTests(unittest.TestCase):
         self.assertIsNone(self.tray.import_thread)
 
 
-    def blocked_import(self, source, *, progress, cancelled):
+    def blocked_import(self, source, import_dir, *, translate, progress, cancelled):
 
         self.started.set()
 
@@ -208,11 +218,11 @@ class ImportMenuTests(unittest.TestCase):
             updated_on.append(threading.get_ident())
             update_progress(percent)
 
-        def copy_with_progress(source, *, progress, cancelled):
+        def copy_with_progress(source, import_dir, *, translate, progress, cancelled):
 
             worker_threads.append(threading.get_ident())
             progress(42)
-            return self.blocked_import(source, progress=progress, cancelled=cancelled)
+            return self.blocked_import(source, import_dir, translate=translate, progress=progress, cancelled=cancelled)
 
         self.tray.update_import_progress = record_progress
         self.namespace["import_media"] = copy_with_progress
@@ -240,6 +250,13 @@ class ImportMenuTests(unittest.TestCase):
         self.wait_for_completion(self.tray.import_thread)
 
         self.assert_idle_menu()
+        self.namespace["import_media"].assert_called_once_with(
+            self.source,
+            self.namespace["SINGLE_IMPORT_DIR"],
+            translate=self.namespace["tr"],
+            progress=mock.ANY,
+            cancelled=mock.ANY
+        )
         self.tray.play_from_menu.assert_called_once_with(self.destination)
         self.tray.media_menu.thumbnail_thread.request.assert_called_once_with(self.destination)
         self.tray.refresh_media_menu.assert_called_once_with()
@@ -278,7 +295,7 @@ class ImportMenuTests(unittest.TestCase):
 
     def test_quitting_requests_cancellation_before_waiting(self):
 
-        def wait_for_cancel(source, *, progress, cancelled):
+        def wait_for_cancel(source, import_dir, *, translate, progress, cancelled):
 
             self.started.set()
             deadline = time.monotonic() + 5

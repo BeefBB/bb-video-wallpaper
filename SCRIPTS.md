@@ -7,7 +7,8 @@
 想做的事                       | 使用的腳本                                                       | 結果
 ---                            | ---                                                              | ---
 從原始碼啟動桌布程式           | [run.bat](./run.bat)                                             | 開啟桌布與系統匣選單
-修改桌布, 選單或媒體匯入       | [bb-video-wallpaper.py](./bb-video-wallpaper.py)                 | 主程式的實作
+修改桌布, 選單或匯入介面       | [bb-video-wallpaper.py](./bb-video-wallpaper.py)                 | 主程式的實作
+修改媒體匯入                   | [media_import.py](./media_import.py)                             | 去重, 複製, 容量檢查與取消
 修改設定驗證與語言載入         | [config.py](./config.py)                                         | 設定模組
 修改圖片顯示                   | [bb_image_display.py](./bb_image_display.py)                     | Qt 圖片輸出與子視窗管理
 修改縮圖產生與快取             | [thumbnails.py](./thumbnails.py)                                 | 縮圖模組
@@ -67,17 +68,18 @@ Python 與 VLC 的架構需要相容, 例如搭配使用 64 位元版本. 只有
 
 - Windows 桌布視窗, VLC 影片播放器與 Qt 圖片輸出整合
 - 系統匣選單, 語言與最近使用紀錄
-- 媒體匯入, 重複檔案比對與懸停預覽介面
+- 媒體匯入介面, 背景執行緒與懸停預覽介面
 - 自動暫停, 螢幕電源通知及開機啟動排程
 - 路徑, 日誌與 VLC 初始化
 
-另有三個由主程式使用的模組:
+另有四個由主程式使用的模組:
 
 - [config.py](./config.py): `ConfigStore` 負責設定初始化, 驗證, 讀寫與語言檔載入, 所需路徑由主程式傳入
+- [media_import.py](./media_import.py): 負責內容去重, 分塊複製, 容量檢查, 命名衝突與取消清理; 匯入目錄及翻譯函式由主程式傳入, 透過回呼回報進度與查詢取消狀態
 - [bb_image_display.py](./bb_image_display.py): 共用主程式的 `QApplication`, 以 `Instance` 接收桌布 HWND 並顯示圖片; 主程式管理桌布掛載與媒體切換, 模組管理圖片及內部子視窗
 - [thumbnails.py](./thumbnails.py): 負責支援的媒體格式, 縮圖產生, 快取驗證與背景排隊; 主程式將媒體與快取目錄傳給 `ThumbnailThread`
 
-三個模組都不反向匯入主程式, 匯入時不會建立使用者資料夾或設定日誌. 影片縮圖只在實際使用時匯入 VLC, 因此主程式仍先完成 DLL 載入設定; 圖片顯示與圖片縮圖測試不需初始化 VLC
+四個模組都不反向匯入主程式, 匯入時不會建立使用者資料夾或設定日誌. 影片縮圖只在實際使用時匯入 VLC, 因此主程式仍先完成 DLL 載入設定; 媒體匯入, 圖片顯示與圖片縮圖測試不需初始化 VLC
 
 虛擬環境準備完成後, 也可以先以系統管理員身分開啟 PowerShell, 切換到專案根目錄後直接執行:
 
@@ -150,7 +152,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 它會:
 
 1. 在 `.venv/` 不存在時建立環境並安裝套件
-2. 以 `--onedir`, `--noconsole`, `--uac-admin` 打包主程式, 並加入圖示及載入圖片; 直接匯入的 [config.py](./config.py), [bb_image_display.py](./bb_image_display.py) 與 [thumbnails.py](./thumbnails.py) 會一併納入
+2. 以 `--onedir`, `--noconsole`, `--uac-admin` 打包主程式, 並加入圖示及載入圖片; 直接匯入的 [config.py](./config.py), [media_import.py](./media_import.py), [bb_image_display.py](./bb_image_display.py) 與 [thumbnails.py](./thumbnails.py) 會一併納入
 3. 將 `VLC-lite/` 複製至輸出目錄, 發佈時改名為 `VLC/`, 另外在執行檔旁複製一份 `libvlc.dll`
 4. 複製語言檔案
 5. 清除根目錄下的 `build/` 與產生的 `BB Video Wallpaper.spec`

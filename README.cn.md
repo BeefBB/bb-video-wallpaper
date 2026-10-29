@@ -56,6 +56,7 @@ bb-video-wallpaper/
  │   └─ ...
  ├─ bb-video-wallpaper.py
  ├─ config.py
+ ├─ media_import.py
  ├─ thumbnails.py
  ├─ libvlc.dll
  └─ requirements.txt
