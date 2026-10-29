@@ -9,6 +9,7 @@
 從原始碼啟動桌布程式           | [run.bat](./run.bat)                                               | 開啟桌布與系統匣選單
 修改桌布, 選單或匯入介面       | [bb-video-wallpaper.py](./bb-video-wallpaper.py)                   | 主程式的實作
 修改媒體匯入                   | [media_import.py](./media_import.py)                               | 去重, 複製, 容量檢查與取消
+修改桌布預覽                   | [media_preview.py](./media_preview.py)                             | 懸停狀態, 縮圖顯示與預覽視窗定位
 修改 Windows 整合              | [windows_integration.py](./windows_integration.py)                 | 桌面掛載, 視窗偵測, 電源通知與開機排程
 修改設定驗證與語言載入         | [config.py](./config.py)                                           | 設定模組
 修改圖片顯示                   | [bb_image_display.py](./bb_image_display.py)                       | Qt 圖片輸出與子視窗管理
@@ -19,6 +20,7 @@
 檢查設定檔處理                 | [test_config.py](./tests/test_config.py)                           | 執行設定檔相關測試
 檢查媒體匯入                   | [test_media_import.py](./tests/test_media_import.py)               | 檢查容量, 去重, 命名, 進度與取消
 檢查匯入選單                   | [test_import_menu.py](./tests/test_import_menu.py)                 | 檢查選單排列, 進度訊號, 取消與結束狀態
+檢查預覽選單                   | [test_media_preview.py](./tests/test_media_preview.py)             | 檢查懸停時序, 過期縮圖, Qt 訊號與螢幕邊界
 檢查播放與暫停狀態             | [test_playback_state.py](./tests/test_playback_state.py)           | 檢查圖片與影片切換, 載入時序及桌布重掛
 檢查 Windows 整合              | [test_windows_integration.py](./tests/test_windows_integration.py) | 模擬 Windows API, 檢查桌面掛載與電源及排程介面
 檢查圖片原生視窗               | [test_image_display.py](./tests/test_image_display.py)             | 檢查圖片讀取, 顯示, 視窗重綁與釋放
@@ -70,19 +72,20 @@ Python 與 VLC 的架構需要相容, 例如搭配使用 64 位元版本. 只有
 
 - Windows 桌布視窗, VLC 影片播放器與 Qt 圖片輸出整合
 - 系統匣選單, 語言與最近使用紀錄
-- 媒體匯入介面, 背景執行緒與懸停預覽介面
+- 媒體匯入介面與背景執行緒
 - 自動暫停, 螢幕電源事件與開機啟動選項
 - 路徑, 日誌與 VLC 初始化
 
-另有五個由主程式使用的模組:
+另有六個由主程式使用的模組:
 
 - [config.py](./config.py): `ConfigStore` 負責設定初始化, 驗證, 讀寫與語言檔載入, 所需路徑由主程式傳入
 - [media_import.py](./media_import.py): 負責內容去重, 分塊複製, 容量檢查, 命名衝突與取消清理; 匯入目錄及翻譯函式由主程式傳入, 透過回呼回報進度與查詢取消狀態
+- [media_preview.py](./media_preview.py): `MediaPreviewMenu` 負責懸停延遲, 預覽模式, 縮圖訊號與視窗定位; 媒體目錄, 縮圖目錄與載入圖片路徑由主程式傳入, 主程式在退出時停止縮圖工作
 - [windows_integration.py](./windows_integration.py): 負責單一實例 Mutex, 桌面就緒檢查, 桌布掛載, 虛擬桌面與最大化視窗偵測, 電源通知及開機排程; 建立排程時由主程式傳入執行檔路徑
 - [bb_image_display.py](./bb_image_display.py): 共用主程式的 `QApplication`, 以 `Instance` 接收桌布 HWND 並顯示圖片; 主程式管理桌布掛載與媒體切換, 模組管理圖片及內部子視窗
-- [thumbnails.py](./thumbnails.py): 負責支援的媒體格式, 縮圖產生, 快取驗證與背景排隊; 主程式將媒體與快取目錄傳給 `ThumbnailThread`
+- [thumbnails.py](./thumbnails.py): 負責支援的媒體格式, 縮圖產生, 快取驗證與背景排隊; 預覽選單將媒體與快取目錄傳給 `ThumbnailThread`
 
-五個模組都不反向匯入主程式, 匯入時不會建立使用者資料夾或設定日誌. Windows 模組只在呼叫相關函式時建立 Mutex, 掛載桌面或管理排程. 影片縮圖只在實際使用時匯入 VLC, 因此主程式仍先完成 DLL 載入設定; 媒體匯入, Windows 整合, 圖片顯示與圖片縮圖測試不需初始化 VLC
+六個模組都不反向匯入主程式, 匯入時不會建立使用者資料夾或設定日誌. Windows 模組只在呼叫相關函式時建立 Mutex, 掛載桌面或管理排程. 預覽模組只在建立選單時建立 Qt 元件與縮圖工作物件. 影片縮圖只在實際使用時匯入 VLC, 因此主程式仍先完成 DLL 載入設定; 媒體匯入, 預覽選單, Windows 整合, 圖片顯示與圖片縮圖測試不需初始化 VLC
 
 虛擬環境準備完成後, 也可以先以系統管理員身分開啟 PowerShell, 切換到專案根目錄後直接執行:
 
@@ -155,7 +158,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 它會:
 
 1. 在 `.venv/` 不存在時建立環境並安裝套件
-2. 以 `--onedir`, `--noconsole`, `--uac-admin` 打包主程式, 並加入圖示及載入圖片; 直接匯入的 [config.py](./config.py), [media_import.py](./media_import.py), [windows_integration.py](./windows_integration.py), [bb_image_display.py](./bb_image_display.py) 與 [thumbnails.py](./thumbnails.py) 會一併納入
+2. 以 `--onedir`, `--noconsole`, `--uac-admin` 打包主程式, 並加入圖示及載入圖片; 直接匯入的 [config.py](./config.py), [media_import.py](./media_import.py), [media_preview.py](./media_preview.py), [windows_integration.py](./windows_integration.py), [bb_image_display.py](./bb_image_display.py) 與 [thumbnails.py](./thumbnails.py) 會一併納入
 3. 將 `VLC-lite/` 複製至輸出目錄, 發佈時改名為 `VLC/`, 另外在執行檔旁複製一份 `libvlc.dll`
 4. 複製語言檔案
 5. 清除根目錄下的 `build/` 與產生的 `BB Video Wallpaper.spec`
@@ -218,6 +221,7 @@ ISCC.exe '.\installer\BB Video Wallpaper.iss'
 .\.venv\Scripts\python.exe .\tests\test_config.py
 .\.venv\Scripts\python.exe .\tests\test_media_import.py
 .\.venv\Scripts\python.exe .\tests\test_import_menu.py
+.\.venv\Scripts\python.exe .\tests\test_media_preview.py
 .\.venv\Scripts\python.exe .\tests\test_playback_state.py
 .\.venv\Scripts\python.exe .\tests\test_windows_integration.py
 .\.venv\Scripts\python.exe .\tests\test_image_display.py
@@ -230,13 +234,14 @@ ISCC.exe '.\installer\BB Video Wallpaper.iss'
 [test_config.py](./tests/test_config.py)                           | 缺檔初始化, 預設設定, 無效欄位, 路徑與紀錄驗證, 語言載入, 寫入失敗處理 |
 [test_media_import.py](./tests/test_media_import.py)               | 同名匯入, 長檔名, 內容去重, 磁碟容量, 進度與取消後清理                 |
 [test_import_menu.py](./tests/test_import_menu.py)                 | 匯入前後選單排列, 主執行緒進度更新, 取消, 錯誤與退出處理               | PySide6
+[test_media_preview.py](./tests/test_media_preview.py)             | 懸停延遲, 預覽模式, 過期縮圖, Qt 主執行緒與螢幕邊界                    | PySide6
 [test_playback_state.py](./tests/test_playback_state.py)           | 圖片與影片切換, 讀取失敗, 載入期間暫停, Qt 執行緒及重掛後狀態          | PySide6
-[test_windows_integration.py](./tests/test_windows_integration.py) | 桌面掛載分支, 虛擬桌面, 電源解析, 64 位元 Handle 與排程路徑      |
+[test_windows_integration.py](./tests/test_windows_integration.py) | 桌面掛載分支, 虛擬桌面, 電源解析, 64 位元 Handle 與排程路徑            |
 [test_image_display.py](./tests/test_image_display.py)             | 圖片讀取失敗保留畫面, 原生子視窗, 隱藏後再顯示, 重綁與釋放             | PySide6
 [test_thumbnails.py](./tests/test_thumbnails.py)                   | 長檔名, 獨立快取, 舊快取替換, 清理範圍與儲存失敗處理                   | PySide6
 [test_video_thumbnails.py](./tests/test_video_thumbnails.py)       | 影片縮圖比例, 旋轉方向, 多影像軌, 取消及錯誤處理                       | 專案內的 VLC-lite, FFmpeg
 
-測試會在暫存目錄操作, 不會啟動桌布或改寫使用者設定. Windows 整合測試使用模擬 API, 不建立實際排程或改變桌面掛載. 圖片顯示測試建立隱藏的 Qt 目標視窗, 驗證實際 Windows 子視窗生命週期. 影片測試會呼叫 FFmpeg 產生短片, 再用 VLC-lite 擷取縮圖; FFmpeg 是測試工具, 主程式的影片播放與影片縮圖仍使用 VLC
+測試會在暫存目錄操作, 不會啟動桌布或改寫使用者設定. 預覽測試使用隱藏的 Qt 元件與模擬游標及螢幕, 不移動實際滑鼠. Windows 整合測試使用模擬 API, 不建立實際排程或改變桌面掛載. 圖片顯示測試建立隱藏的 Qt 目標視窗, 驗證實際 Windows 子視窗生命週期. 影片測試會呼叫 FFmpeg 產生短片, 再用 VLC-lite 擷取縮圖; FFmpeg 是測試工具, 主程式的影片播放與影片縮圖仍使用 VLC
 
 影片測試在缺少 Windows, VLC-lite 或 FFmpeg 時會顯示 `skipped`, 代表該組測試沒有執行. 檢查結果時也要留意跳過的項目
 

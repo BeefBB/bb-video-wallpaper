@@ -29,9 +29,12 @@ from media_import import MediaImportCancelled
 
 class PreviewMenu(QMenu):
 
-    def __init__(self, title, parent):
+    def __init__(self, title, parent, *, media_dir, thumbnail_dir, loading_image_path):
 
         super().__init__(title, parent)
+        self.media_dir = media_dir
+        self.thumbnail_dir = thumbnail_dir
+        self.loading_image_path = loading_image_path
         self.thumbnail_thread = mock.Mock()
 
 
@@ -84,6 +87,9 @@ class ImportMenuTests(unittest.TestCase):
             "MediaPreviewMenu": PreviewMenu,
             "MediaImportCancelled": MediaImportCancelled,
             "ICON_PATH": ROOT / "icon" / "bb-video-wallpaper.ico",
+            "MEDIA_DIR": ROOT / "test-media",
+            "THUMBNAIL_DIR": ROOT / "test-thumbnails",
+            "LOADING_IMAGE_PATH": ROOT / "icon" / "loading.jpg",
             "SINGLE_IMPORT_DIR": ROOT / "video" / "_imports",
             "LANG": self.language,
             "SUPPORTED_MEDIA_EXTENSIONS": {".mp4", ".png"},
@@ -185,6 +191,15 @@ class ImportMenuTests(unittest.TestCase):
         self.tray.toggle_startup(False)
 
         self.namespace["delete_task"].assert_called_once_with()
+
+
+    def test_preview_menu_receives_paths_and_stops_its_worker_on_quit(self):
+
+        preview = self.tray.media_menu
+        self.assertEqual(preview.media_dir, self.namespace["MEDIA_DIR"])
+        self.assertEqual(preview.thumbnail_dir, self.namespace["THUMBNAIL_DIR"])
+        self.assertEqual(preview.loading_image_path, self.namespace["LOADING_IMAGE_PATH"])
+        self.tray.app.aboutToQuit.connect.assert_any_call(preview.thumbnail_thread.stop)
 
 
     def test_comparing_menu_has_one_extra_cancel_row_and_cancel_restores_it(self):
