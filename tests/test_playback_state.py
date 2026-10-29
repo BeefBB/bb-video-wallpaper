@@ -1,6 +1,6 @@
 """
 測試圖片與影片切換, 桌布重掛及延遲播放事件之間的狀態
-使用真正的 Qt 訊號佇列與模擬輸出, 不啟動桌布或修改使用者設定
+使用真正的 Qt 訊號佇列, 重掛計時器與模擬輸出, 不啟動桌布或修改使用者設定
 """
 
 import ast
@@ -9,7 +9,8 @@ import threading
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import QCoreApplication, QEvent, QObject, Qt, Signal, Slot
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, Qt, QTimer, Signal, Slot
+from PySide6.QtTest import QSignalSpy, QTest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -213,7 +214,8 @@ class PlaybackStateTests(unittest.TestCase):
             "Qt": Qt,
             "Path": Path,
             "QApplication": application,
-            "QTimer": mock.Mock(),
+            # 建立真正的計時器, 靜態 singleShot 保留替身以略過啟動等待
+            "QTimer": mock.Mock(side_effect=QTimer),
             "vlc": vlc,
             "bb_image_display": image_module,
             "config_store": config_store,
@@ -243,6 +245,7 @@ class PlaybackStateTests(unittest.TestCase):
 
         self.wallpaper = wallpaper_class()
         self.addCleanup(self.dispose_wallpaper)
+        self.wallpaper.check_auto_pause_timer.stop()
 
         tray_class = self.namespace["Tray"]
         self.tray = tray_class.__new__(tray_class)
@@ -255,6 +258,7 @@ class PlaybackStateTests(unittest.TestCase):
     def dispose_wallpaper(self) -> None:
 
         self.wallpaper.is_exiting = True
+        self.wallpaper.reattach_timer.stop()
         self.player.callbacks.clear()
         self.wallpaper.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
@@ -373,12 +377,14 @@ class PlaybackStateTests(unittest.TestCase):
                 getattr(self.tray, command)()
                 self.player.position = 4321
 
-                single_shot = self.namespace["QTimer"].singleShot
-                single_shot.reset_mock()
                 self.wallpaper.on_screen_changed(mock.sentinel.new_geometry)
-                single_shot.assert_called_once()
-                _, callback = single_shot.call_args.args
-                callback()
+                timer = self.wallpaper.reattach_timer
+                self.assertTrue(timer.isActive())
+                self.assertEqual(timer.interval(), 200)
+                # 縮短測試等待, 仍透過真正的 Qt timeout 執行重掛
+                timer.start(0)
+                self.app.processEvents()
+                self.assertFalse(timer.isActive())
 
                 self.assertEqual(self.wallpaper.play_state, command)
                 self.assertEqual(self.player.position, 4321)
@@ -589,19 +595,120 @@ class PlaybackStateTests(unittest.TestCase):
                 self.assertEqual(self.wallpaper.play_state, "pause" if display_state == 0 else "play")
 
 
-    def test_destroy_notification_only_schedules_reattach_when_not_recreating(self):
+    def test_destroy_notification_skips_reattach_while_recreating_or_exiting(self):
 
         self.namespace["wintypes"].MSG.from_address.return_value.message = self.namespace["WM_DESTROY"]
-        single_shot = self.namespace["QTimer"].singleShot
-        single_shot.reset_mock()
+        timer = self.wallpaper.reattach_timer
 
         self.assertEqual(self.wallpaper.nativeEvent(b"windows_generic_MSG", 123), (True, 0))
-        single_shot.assert_called_once_with(200, self.wallpaper.reattach_to_desktop)
+        self.assertTrue(timer.isActive())
+        self.assertEqual(timer.interval(), 200)
 
-        single_shot.reset_mock()
+        timer.stop()
         self.wallpaper.is_recreating = True
         self.assertEqual(self.wallpaper.nativeEvent(b"windows_generic_MSG", 123), (True, 0))
-        single_shot.assert_not_called()
+        self.assertFalse(timer.isActive())
+
+        self.wallpaper.is_recreating = False
+        self.wallpaper.is_exiting = True
+        self.assertEqual(self.wallpaper.nativeEvent(b"windows_generic_MSG", 123), (True, 0))
+        self.assertFalse(timer.isActive())
+
+
+    def test_screen_and_destroy_events_share_one_pending_reattach(self):
+
+        self.namespace["wintypes"].MSG.from_address.return_value.message = self.namespace["WM_DESTROY"]
+        self.wallpaper.attach_to_desktop.reset_mock()
+        timer = self.wallpaper.reattach_timer
+        timeouts = QSignalSpy(timer.timeout)
+
+        self.wallpaper.on_screen_changed(mock.sentinel.first_geometry)
+        timer_id = timer.timerId()
+        self.wallpaper.nativeEvent(b"windows_generic_MSG", 123)
+        self.wallpaper.on_screen_changed(mock.sentinel.last_geometry)
+
+        self.assertEqual(timer.timerId(), timer_id)
+        self.assertEqual(timer.interval(), 200)
+        self.assertTrue(timeouts.wait(1000))
+        QTest.qWait(250)
+
+        self.assertEqual(timeouts.count(), 1)
+        self.wallpaper.attach_to_desktop.assert_called_once_with()
+        self.wallpaper.destroy.assert_called_once_with(True, True)
+        self.assertFalse(timer.isActive())
+
+
+    def test_failed_reattach_retries_twice_and_merges_new_events(self):
+
+        self.namespace["wintypes"].MSG.from_address.return_value.message = self.namespace["WM_DESTROY"]
+        self.wallpaper.attach_to_desktop.reset_mock()
+        self.wallpaper.attach_to_desktop.side_effect = RuntimeError("desktop unavailable")
+        timer = self.wallpaper.reattach_timer
+        self.wallpaper.on_screen_changed(mock.sentinel.geometry)
+
+        for attempt in range(3):
+            with self.subTest(attempt=attempt):
+                self.assertTrue(timer.isActive())
+                self.assertEqual(timer.interval(), 200 if attempt == 0 else 2000)
+                timer_id = timer.timerId()
+                self.wallpaper.on_screen_changed(mock.sentinel.new_geometry)
+                self.wallpaper.nativeEvent(b"windows_generic_MSG", 123)
+                self.assertEqual(timer.timerId(), timer_id)
+
+                # 保留正式重試間隔的檢查, 再加速這次 timeout
+                timer.start(0)
+                self.app.processEvents()
+
+                self.assertEqual(self.wallpaper.attach_to_desktop.call_count, attempt + 1)
+                self.assertEqual(self.wallpaper.reattach_retry_count, min(attempt + 1, 2))
+                self.assertFalse(self.wallpaper.is_recreating)
+
+        self.assertFalse(timer.isActive())
+        self.namespace["logger"].error.assert_called_once_with("重新掛載桌布失敗")
+
+
+    def test_successful_retry_clears_retry_count(self):
+
+        self.wallpaper.attach_to_desktop.reset_mock()
+        self.wallpaper.attach_to_desktop.side_effect = [RuntimeError("desktop unavailable"), None]
+        self.wallpaper.reattach_to_desktop()
+        timer = self.wallpaper.reattach_timer
+        self.assertTrue(timer.isActive())
+        self.assertEqual(timer.interval(), 2000)
+        self.assertEqual(self.wallpaper.reattach_retry_count, 1)
+
+        timer.start(0)
+        self.app.processEvents()
+
+        self.assertEqual(self.wallpaper.attach_to_desktop.call_count, 2)
+        self.assertEqual(self.wallpaper.reattach_retry_count, 0)
+        self.assertFalse(timer.isActive())
+
+
+    def test_direct_reattach_cancels_pending_timer(self):
+
+        self.wallpaper.attach_to_desktop.reset_mock()
+        self.wallpaper.schedule_reattach(0)
+        self.wallpaper.reattach_to_desktop()
+        self.app.processEvents()
+
+        self.wallpaper.attach_to_desktop.assert_called_once_with()
+        self.assertFalse(self.wallpaper.reattach_timer.isActive())
+
+
+    def test_exit_cancels_pending_reattach_and_rejects_new_requests(self):
+
+        self.wallpaper.attach_to_desktop.reset_mock()
+        self.wallpaper.schedule_reattach(0)
+        self.tray.exit()
+        self.wallpaper.on_screen_changed(mock.sentinel.geometry)
+        self.app.processEvents()
+
+        self.assertFalse(self.wallpaper.reattach_timer.isActive())
+        self.wallpaper.attach_to_desktop.assert_not_called()
+        self.wallpaper.destroy.assert_not_called()
+        self.assertEqual(self.player.state, "released")
+        self.namespace["logger"].exception.assert_not_called()
 
 
     def test_unregister_clears_handle_even_if_api_fails(self):
@@ -694,7 +801,8 @@ class PlaybackStateTests(unittest.TestCase):
         self.assertFalse(self.image_output.visible)
         self.namespace["config_store"].save.assert_not_called()
         self.namespace["logger"].exception.assert_called_once()
-        wallpaper.check_auto_pause_timer.start.assert_called_with(500)
+        self.assertEqual(wallpaper.check_auto_pause_timer.interval(), 500)
+        self.assertTrue(wallpaper.check_auto_pause_timer.isActive())
 
 
 if __name__ == "__main__":

@@ -242,6 +242,11 @@ class Wallpaper(QWidget):
         # 正在退出
         self.is_exiting = False
 
+        # 重掛用計時器
+        self.reattach_timer = QTimer(self)
+        self.reattach_timer.setSingleShot(True)
+        self.reattach_timer.timeout.connect(self.reattach_to_desktop)
+
         # 目前播放的媒體檔案
         self.current_media: Path | None = None
         # 初始媒體檔案
@@ -367,11 +372,7 @@ class Wallpaper(QWidget):
             # 監聽 切換虛擬桌面/用戶 時的 WM_DESTROY 訊息
             if msg.message == WM_DESTROY:
 
-                if not self.is_recreating:
-
-                    # 重新掛載
-                    QTimer.singleShot(200, self.reattach_to_desktop)
-
+                self.schedule_reattach()
                 return True, 0
 
 
@@ -443,6 +444,17 @@ class Wallpaper(QWidget):
             self.instance_vlc_player.set_pause(1)
 
 
+    def schedule_reattach(self, delay_ms: int = 200) -> None:
+        """
+        安排一次重掛, 已有排程時保留原本的執行時間
+        """
+
+        if self.is_exiting or self.is_recreating or self.reattach_timer.isActive():
+            return
+
+        self.reattach_timer.start(delay_ms)
+
+
     def reattach_to_desktop(self) -> None:
         """
         重新建立視窗並掛載桌布
@@ -454,6 +466,8 @@ class Wallpaper(QWidget):
         if self.is_recreating:
             return
 
+        # 直接呼叫重掛時, 也取消尚未執行的排程
+        self.reattach_timer.stop()
         self.is_recreating = True
 
 
@@ -526,7 +540,7 @@ class Wallpaper(QWidget):
                 self.reattach_retry_count += 1
 
                 logger.warning("正在重試重新掛載桌布（第 %s 次）", self.reattach_retry_count)
-                QTimer.singleShot(2000, self.reattach_to_desktop)
+                self.schedule_reattach(2000)
 
             else:
                 logger.error("重新掛載桌布失敗")
@@ -542,7 +556,7 @@ class Wallpaper(QWidget):
 
 
         logger.info("screen_changed - %s", geometry)
-        QTimer.singleShot(200, self.reattach_to_desktop)
+        self.schedule_reattach()
 
 
     def set_play_media(self, path: Path) -> None:
@@ -1145,6 +1159,7 @@ class Tray:
 
         try:
             self.wallpaper.is_exiting = True
+            self.wallpaper.reattach_timer.stop()
 
             self.wallpaper.unregister_power_notification()
             self.wallpaper.player_events.event_detach(vlc.EventType.MediaPlayerPlaying)  # type: ignore

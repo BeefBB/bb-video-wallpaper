@@ -235,7 +235,7 @@ ISCC.exe '.\installer\BB Video Wallpaper.iss'
 [test_media_import.py](./tests/test_media_import.py)               | 同名匯入, 長檔名, 內容去重, 磁碟容量, 進度與取消後清理                 |
 [test_import_menu.py](./tests/test_import_menu.py)                 | 匯入前後選單排列, 主執行緒進度更新, 取消, 錯誤與退出處理               | PySide6
 [test_media_preview.py](./tests/test_media_preview.py)             | 懸停延遲, 預覽模式, 過期縮圖, Qt 主執行緒與螢幕邊界                    | PySide6
-[test_playback_state.py](./tests/test_playback_state.py)           | 圖片與影片切換, 讀取失敗, 載入期間暫停, Qt 執行緒及重掛後狀態          | PySide6
+[test_playback_state.py](./tests/test_playback_state.py)           | 媒體切換與暫停, Qt 執行緒, 重掛排程合併與重試, 退出取消及狀態保留      | PySide6
 [test_windows_integration.py](./tests/test_windows_integration.py) | 掛載分支與父層診斷, 診斷容錯, 備援容器 alpha, 虛擬桌面及電源與排程     |
 [test_image_display.py](./tests/test_image_display.py)             | 圖片讀取失敗保留畫面, 原生子視窗, 隱藏後再顯示, 重綁與釋放             | PySide6
 [test_thumbnails.py](./tests/test_thumbnails.py)                   | 長檔名, 獨立快取, 舊快取替換, 清理範圍與儲存失敗處理                   | PySide6
