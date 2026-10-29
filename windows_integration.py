@@ -13,6 +13,7 @@ import win32gui
 import win32con
 import win32api
 import win32event
+import win32process
 import winerror
 
 import psutil
@@ -170,6 +171,55 @@ def check_desktop_ready() -> bool:
 
 
     return False
+
+
+def register_taskbar_created_notification(hwnd: int) -> int:
+    """
+    註冊工作列重建訊息, 允許 Explorer 通知管理員權限的監聽視窗
+    """
+
+    message = win32gui.RegisterWindowMessage("TaskbarCreated")
+
+    if not message:
+        raise RuntimeError("無法註冊 TaskbarCreated 訊息")
+
+    change_filter = ctypes.windll.user32.ChangeWindowMessageFilterEx
+    change_filter.restype = wintypes.BOOL
+    change_filter.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.DWORD, ctypes.c_void_p]
+
+    # MSGFLT_ALLOW = 1, 只放行此視窗的工作列重建訊息
+    if not change_filter(hwnd, message, 1, None):
+        logger.warning("允許工作列重建通知失敗 - hwnd=%#x error=%s", hwnd, ctypes.GetLastError())
+
+    return message
+
+
+def wake_vlc_video_windows() -> None:
+    """
+    喚醒本程序的 VLC 視窗訊息迴圈, 協助失效 HWND 的輸出完成停止
+    """
+
+    process_id = win32api.GetCurrentProcessId()
+
+    def wake(hwnd, _) -> bool:
+
+        try:
+            if win32process.GetWindowThreadProcessId(hwnd)[1] != process_id:
+                return True
+
+            class_name = win32gui.GetClassName(hwnd)
+
+            if class_name and class_name.startswith("VLC video main "):
+                # VLC 3 的停止流程會用 WM_NULL 喚醒 GetMessage, 舊 HWND 已銷毀時改送同執行緒仍存活的視窗
+                win32gui.PostMessage(hwnd, win32con.WM_NULL, 0, 0)
+
+        except win32gui.error:
+            # 停止期間視窗可能已被 VLC 自行釋放
+            pass
+
+        return True
+
+    win32gui.EnumWindows(wake, None)
 
 
 def is_on_battery() -> bool:

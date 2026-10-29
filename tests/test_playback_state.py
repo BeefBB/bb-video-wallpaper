@@ -9,7 +9,7 @@ import threading
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import QCoreApplication, QEvent, QObject, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtTest import QSignalSpy, QTest
 
 
@@ -39,6 +39,16 @@ class HeadlessWidget(QObject):
             setattr(self, name, mock.Mock())
 
         self.winId = mock.Mock(return_value=1)
+
+
+class HeadlessDesktopEvents(QObject):
+
+    taskbar_created = Signal()
+
+    def __init__(self):
+
+        super().__init__()
+        self.close = mock.Mock()
 
 
 class DeferredPlayer:
@@ -177,7 +187,7 @@ class PlaybackStateTests(unittest.TestCase):
             body=[
                 node for node in tree.body
                 if isinstance(node, ast.ClassDef) and
-                node.name in {"Wallpaper", "Tray"}
+                node.name in {"VlcStopThread", "Wallpaper", "Tray"}
             ],
             type_ignores=[]
         )
@@ -214,6 +224,9 @@ class PlaybackStateTests(unittest.TestCase):
             "Qt": Qt,
             "Path": Path,
             "QApplication": application,
+            "QEventLoop": QEventLoop,
+            "QThread": QThread,
+            "DesktopEventWindow": HeadlessDesktopEvents,
             # 建立真正的計時器, 靜態 singleShot 保留替身以略過啟動等待
             "QTimer": mock.Mock(side_effect=QTimer),
             "vlc": vlc,
@@ -225,6 +238,8 @@ class PlaybackStateTests(unittest.TestCase):
             "SUPPORTED_VIDEO_EXTENSIONS": {".mp4"},
             "is_on_battery": mock.Mock(return_value=False),
             "is_any_fullscreen": mock.Mock(return_value=False),
+            "check_desktop_ready": mock.Mock(return_value=True),
+            "wake_vlc_video_windows": mock.Mock(),
             "set_windows_as_wallpaper": mock.Mock(),
             "register_power_notification": mock.Mock(return_value=2**40 + 1),
             "unregister_power_notification": mock.Mock(),
@@ -255,12 +270,17 @@ class PlaybackStateTests(unittest.TestCase):
         self.image_path = self.namespace["MEDIA_DIR"] / "sample.PNG"
 
 
-    def dispose_wallpaper(self) -> None:
+    def dispose_wallpaper(self, wallpaper=None) -> None:
 
-        self.wallpaper.is_exiting = True
-        self.wallpaper.reattach_timer.stop()
+        wallpaper = self.wallpaper if wallpaper is None else wallpaper
+        wallpaper.is_exiting = True
+        wallpaper.reattach_timer.stop()
+
+        if wallpaper.desktop_events is not None:
+            wallpaper.desktop_events.deleteLater()
+
         self.player.callbacks.clear()
-        self.wallpaper.deleteLater()
+        wallpaper.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
@@ -396,6 +416,126 @@ class PlaybackStateTests(unittest.TestCase):
                 self.assertEqual(self.wallpaper.current_media, self.media_path)
                 self.assertFalse(self.wallpaper.is_recreating)
                 self.namespace["logger"].exception.assert_not_called()
+
+
+    def test_video_reattach_stops_old_output_before_destroying_and_rebinding(self):
+
+        self.start_loading()
+        self.player.finish_loading()
+        self.app.processEvents()
+        self.tray.pause()
+        self.player.position = 4321
+        self.wallpaper.attach_to_desktop.side_effect = lambda: self.attach_to_desktop(self.wallpaper)
+        original_stop = self.player.stop
+
+        def stop_and_clear_time():
+            if self.wallpaper.is_recreating and not self.wallpaper.destroy.called:
+                self.assertNotEqual(threading.get_ident(), main_thread)
+            original_stop()
+            self.player.position = -1
+
+        main_thread = threading.get_ident()
+        with mock.patch.object(self.player, "stop", side_effect=stop_and_clear_time) as stop:
+            operations = mock.Mock()
+            operations.attach_mock(stop, "stop")
+            operations.attach_mock(self.wallpaper.destroy, "destroy")
+            operations.attach_mock(self.player.set_hwnd, "set_hwnd")
+            self.wallpaper.reattach_to_desktop()
+
+        self.assertEqual(operations.mock_calls[:3], [
+            mock.call.stop(),
+            mock.call.destroy(True, True),
+            mock.call.set_hwnd(1),
+        ])
+        self.player.finish_loading()
+        self.app.processEvents()
+        self.assertEqual(self.wallpaper.play_state, "pause")
+        self.assertEqual(self.player.state, "paused")
+        self.assertEqual(self.player.position, 4321)
+        self.namespace["logger"].exception.assert_not_called()
+
+
+    def test_reattach_stop_keeps_qt_events_running_and_ignores_pending_pause(self):
+
+        self.start_loading()
+        self.tray.pause()
+        self.wallpaper.is_recreating = True
+        processed = threading.Event()
+        woken = threading.Event()
+        self.namespace["wake_vlc_video_windows"].side_effect = woken.set
+
+        def stop_waiting_for_ui():
+            if not processed.wait(2) or not woken.wait(2):
+                raise RuntimeError("Qt event loop blocked")
+
+        QTimer.singleShot(0, processed.set)
+        self.player.finish_loading()
+        self.player.pause_calls.clear()
+
+        with mock.patch.object(self.player, "stop", side_effect=stop_waiting_for_ui):
+            self.wallpaper.stop_video_for_reattach()
+
+        self.assertTrue(processed.is_set())
+        self.assertEqual(self.player.pause_calls, [])
+        self.assertEqual(self.wallpaper.play_state, "pause")
+        self.namespace["wake_vlc_video_windows"].assert_called_once_with()
+        self.assertFalse(any(timer.isActive() for timer in self.wallpaper.findChildren(QTimer)))
+
+
+    def test_failed_background_stop_preserves_window_and_schedules_retry(self):
+
+        with mock.patch.object(self.player, "stop", side_effect=RuntimeError("stop failed")):
+            self.wallpaper.reattach_to_desktop()
+
+        self.wallpaper.destroy.assert_not_called()
+        self.wallpaper.hide.assert_not_called()
+        self.assertFalse(self.wallpaper.is_recreating)
+        self.assertTrue(self.wallpaper.reattach_timer.isActive())
+        self.assertEqual(self.wallpaper.reattach_retry_count, 1)
+        self.namespace["logger"].exception.assert_called_once()
+
+
+    def test_reattach_seeks_after_playing_when_initial_seek_is_ignored(self):
+
+        self.start_loading()
+        self.player.finish_loading()
+        self.app.processEvents()
+        self.tray.pause()
+        self.player.position = 4321
+
+        def seek_when_ready(position):
+            if self.player.state in {"playing", "paused"}:
+                self.player.position = position
+
+        with mock.patch.object(self.player, "set_time", side_effect=seek_when_ready):
+            self.wallpaper.reattach_to_desktop()
+            self.assertEqual(self.player.position, 0)
+            self.assertEqual(self.wallpaper.pending_reattach_time, 4321)
+            self.player.finish_loading()
+            self.app.processEvents()
+
+        self.assertEqual(self.player.position, 4321)
+        self.assertEqual(self.player.state, "paused")
+        self.assertIsNone(self.wallpaper.pending_reattach_time)
+
+
+    def test_new_media_or_stop_cancels_pending_reattach_seek(self):
+
+        for action in ("stop", "new_media"):
+            with self.subTest(action=action):
+                self.start_loading()
+                self.wallpaper.pending_reattach_time = 4321
+                if action == "stop":
+                    self.tray.stop()
+                else:
+                    self.wallpaper.set_play_media(self.media_path.with_name("new.mp4"))
+
+                with mock.patch.object(self.player, "set_time") as seek:
+                    self.player.finish_loading()
+                    self.app.processEvents()
+
+                seek.assert_not_called()
+                self.assertIsNone(self.wallpaper.pending_reattach_time)
 
 
     def test_auto_pause_during_loading_applies_and_resumes(self):
@@ -667,6 +807,171 @@ class PlaybackStateTests(unittest.TestCase):
         self.namespace["logger"].error.assert_called_once_with("重新掛載桌布失敗")
 
 
+    def test_taskbar_notification_recovers_without_destroy_event(self):
+
+        self.wallpaper.attach_to_desktop.reset_mock()
+        self.wallpaper.reattach_retry_count = 2
+        self.wallpaper.desktop_events.taskbar_created.emit()
+        self.wallpaper.desktop_events.taskbar_created.emit()
+        self.app.processEvents()
+
+        timer = self.wallpaper.reattach_timer
+        self.assertTrue(timer.isActive())
+        self.assertEqual(timer.interval(), 200)
+        self.assertEqual(self.wallpaper.reattach_retry_count, 0)
+        timer.start(0)
+        self.app.processEvents()
+
+        self.wallpaper.attach_to_desktop.assert_called_once_with()
+        self.wallpaper.destroy.assert_called_once_with(True, True)
+        self.assertFalse(timer.isActive())
+
+
+    def test_taskbar_notification_waits_for_new_desktop(self):
+
+        self.wallpaper.attach_to_desktop.reset_mock()
+        self.namespace["check_desktop_ready"].return_value = False
+        self.wallpaper.desktop_events.taskbar_created.emit()
+        self.app.processEvents()
+        timer = self.wallpaper.reattach_timer
+        timer.start(0)
+        self.app.processEvents()
+
+        self.wallpaper.attach_to_desktop.assert_not_called()
+        self.assertTrue(timer.isActive())
+        self.assertEqual(timer.interval(), 2000)
+        self.assertEqual(self.wallpaper.reattach_retry_count, 0)
+
+        self.namespace["check_desktop_ready"].return_value = True
+        timer.start(0)
+        self.app.processEvents()
+        self.wallpaper.attach_to_desktop.assert_called_once_with()
+        self.assertFalse(timer.isActive())
+
+
+    def test_queued_taskbar_notification_does_not_restart_after_exit(self):
+
+        self.wallpaper.attach_to_desktop.reset_mock()
+        listener = self.wallpaper.desktop_events
+        listener.taskbar_created.emit()
+        self.tray.exit()
+        self.app.processEvents()
+
+        listener.close.assert_called_once_with()
+        self.assertIsNone(self.wallpaper.desktop_events)
+        self.assertFalse(self.wallpaper.reattach_timer.isActive())
+        self.wallpaper.attach_to_desktop.assert_not_called()
+        self.namespace["logger"].exception.assert_not_called()
+
+
+    def test_listener_initialization_failure_keeps_wallpaper_available(self):
+
+        self.namespace["DesktopEventWindow"] = mock.Mock(side_effect=OSError("registration failed"))
+        wallpaper = self.namespace["Wallpaper"]()
+        self.addCleanup(self.dispose_wallpaper, wallpaper)
+
+        self.assertIsNone(wallpaper.desktop_events)
+        self.assertTrue(wallpaper.check_auto_pause_timer.isActive())
+        self.namespace["logger"].exception.assert_called_once_with("建立工作列重建通知視窗失敗")
+
+
+    def test_unready_desktop_preserves_output_until_ready(self):
+
+        self.start_loading()
+        self.player.finish_loading()
+        self.app.processEvents()
+        self.tray.pause()
+        self.player.position = 4321
+        self.wallpaper.reattach_retry_count = 1
+        self.wallpaper.attach_to_desktop.reset_mock()
+        self.instance_image.reset_mock()
+        self.namespace["check_desktop_ready"].return_value = False
+        timer = self.wallpaper.reattach_timer
+
+        for _ in range(3):
+            self.wallpaper.schedule_reattach(0)
+            timer.start(0)
+            self.app.processEvents()
+
+            self.assertTrue(timer.isActive())
+            self.assertEqual(timer.interval(), 2000)
+            self.assertEqual(self.wallpaper.reattach_retry_count, 1)
+            self.assertFalse(self.wallpaper.is_recreating)
+            self.wallpaper.destroy.assert_not_called()
+            self.wallpaper.create.assert_not_called()
+            self.wallpaper.hide.assert_not_called()
+            self.wallpaper.attach_to_desktop.assert_not_called()
+            self.wallpaper.unregister_power_notification.assert_not_called()
+            self.instance_image.set_hwnd.assert_not_called()
+            self.assertEqual(self.wallpaper.current_media, self.media_path)
+            self.assertEqual(self.wallpaper.play_state, "pause")
+            self.assertEqual(self.player.state, "paused")
+            self.assertEqual(self.player.position, 4321)
+
+        self.namespace["check_desktop_ready"].return_value = True
+        timer.start(0)
+        self.app.processEvents()
+        self.player.finish_loading()
+        self.app.processEvents()
+
+        self.wallpaper.attach_to_desktop.assert_called_once_with()
+        self.wallpaper.destroy.assert_called_once_with(True, True)
+        self.assertFalse(timer.isActive())
+        self.assertEqual(self.wallpaper.reattach_retry_count, 0)
+        self.assertEqual(self.player.state, "paused")
+        self.assertEqual(self.player.position, 4321)
+        self.namespace["logger"].exception.assert_not_called()
+
+
+    def test_desktop_wait_preserves_remaining_attachment_retries(self):
+
+        self.wallpaper.attach_to_desktop.reset_mock()
+        self.wallpaper.attach_to_desktop.side_effect = RuntimeError("attachment failed")
+        self.wallpaper.reattach_to_desktop()
+        timer = self.wallpaper.reattach_timer
+        self.assertEqual(self.wallpaper.reattach_retry_count, 1)
+
+        self.namespace["check_desktop_ready"].return_value = False
+        for _ in range(3):
+            timer.start(0)
+            self.app.processEvents()
+            self.assertTrue(timer.isActive())
+            self.assertEqual(timer.interval(), 2000)
+            self.assertEqual(self.wallpaper.reattach_retry_count, 1)
+            self.wallpaper.attach_to_desktop.assert_called_once_with()
+
+        self.namespace["check_desktop_ready"].return_value = True
+        timer.start(0)
+        self.app.processEvents()
+        self.assertEqual(self.wallpaper.attach_to_desktop.call_count, 2)
+        self.assertEqual(self.wallpaper.reattach_retry_count, 2)
+        self.assertTrue(timer.isActive())
+
+        timer.start(0)
+        self.app.processEvents()
+        self.assertEqual(self.wallpaper.attach_to_desktop.call_count, 3)
+        self.assertFalse(timer.isActive())
+        self.namespace["logger"].error.assert_called_once_with("重新掛載桌布失敗")
+
+
+    def test_exit_cancels_desktop_wait(self):
+
+        self.wallpaper.attach_to_desktop.reset_mock()
+        self.namespace["check_desktop_ready"].return_value = False
+        self.wallpaper.reattach_to_desktop()
+        self.assertTrue(self.wallpaper.reattach_timer.isActive())
+
+        self.tray.exit()
+        self.wallpaper.reattach_to_desktop()
+        self.app.processEvents()
+
+        self.assertFalse(self.wallpaper.reattach_timer.isActive())
+        self.namespace["check_desktop_ready"].assert_called_once_with()
+        self.wallpaper.attach_to_desktop.assert_not_called()
+        self.wallpaper.destroy.assert_not_called()
+        self.namespace["logger"].exception.assert_not_called()
+
+
     def test_successful_retry_clears_retry_count(self):
 
         self.wallpaper.attach_to_desktop.reset_mock()
@@ -745,6 +1050,7 @@ class PlaybackStateTests(unittest.TestCase):
                 with (
                     mock.patch.object(self.player, "get_time", side_effect=AssertionError("image seek")),
                     mock.patch.object(self.player, "set_time", side_effect=AssertionError("image seek")),
+                    mock.patch.object(self.player, "stop", side_effect=AssertionError("image stop")),
                 ):
                     self.wallpaper.reattach_to_desktop()
 
@@ -781,7 +1087,7 @@ class PlaybackStateTests(unittest.TestCase):
 
         self.namespace["get_media"].return_value = [self.image_path]
         wallpaper = self.namespace["Wallpaper"]()
-        self.addCleanup(wallpaper.deleteLater)
+        self.addCleanup(self.dispose_wallpaper, wallpaper)
 
         self.assertEqual(wallpaper.current_media, self.image_path)
         self.assertEqual(wallpaper.play_state, "play")
@@ -794,7 +1100,7 @@ class PlaybackStateTests(unittest.TestCase):
         self.namespace["get_media"].return_value = [self.image_path]
         self.instance_image.set_image.side_effect = RuntimeError("bad image")
         wallpaper = self.namespace["Wallpaper"]()
-        self.addCleanup(wallpaper.deleteLater)
+        self.addCleanup(self.dispose_wallpaper, wallpaper)
 
         self.assertIsNone(wallpaper.current_media)
         self.assertEqual(wallpaper.play_state, "stop")

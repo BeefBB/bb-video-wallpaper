@@ -24,6 +24,73 @@ import windows_integration as windows
 
 class WindowsIntegrationTests(unittest.TestCase):
 
+    def test_vlc_wakeup_only_posts_null_to_own_video_windows(self):
+
+        error_type = windows.win32gui.error
+        with (
+            mock.patch.object(windows, "win32gui") as gui,
+            mock.patch.object(windows.win32api, "GetCurrentProcessId", return_value=100),
+            mock.patch.object(windows.win32process, "GetWindowThreadProcessId") as owner,
+        ):
+            gui.error = error_type
+            owner.side_effect = lambda hwnd: (10, 999 if hwnd == 4 else 100)
+
+            def class_name(hwnd):
+                if hwnd == 5:
+                    raise error_type(1400, "GetClassName", "window destroyed")
+                if hwnd == 6:
+                    return None
+                return "QtWindow" if hwnd == 3 else "VLC video main 1234"
+
+            gui.GetClassName.side_effect = class_name
+            gui.EnumWindows.side_effect = lambda callback, data: [callback(hwnd, data) for hwnd in range(1, 7)]
+            windows.wake_vlc_video_windows()
+
+            self.assertEqual(gui.PostMessage.call_args_list, [
+                mock.call(1, windows.win32con.WM_NULL, 0, 0),
+                mock.call(2, windows.win32con.WM_NULL, 0, 0),
+            ])
+
+
+    def test_taskbar_notification_allows_only_registered_message_and_preserves_handle(self):
+
+        hwnd = 2**40 + 1
+        with (
+            mock.patch.object(windows.win32gui, "RegisterWindowMessage", return_value=0xC123) as register,
+            mock.patch.object(windows.ctypes.windll.user32, "ChangeWindowMessageFilterEx", return_value=1) as change,
+        ):
+            self.assertEqual(windows.register_taskbar_created_notification(hwnd), 0xC123)
+            register.assert_called_once_with("TaskbarCreated")
+            change.assert_called_once_with(hwnd, 0xC123, 1, None)
+            self.assertIs(change.argtypes[0], wintypes.HWND)
+            self.assertIs(change.restype, wintypes.BOOL)
+
+
+    def test_taskbar_filter_failure_keeps_message_registered(self):
+
+        with (
+            mock.patch.object(windows.win32gui, "RegisterWindowMessage", return_value=0xC123),
+            mock.patch.object(windows.ctypes.windll.user32, "ChangeWindowMessageFilterEx", return_value=0),
+            mock.patch.object(windows.ctypes, "GetLastError", return_value=5),
+            self.assertLogs(windows.logger, level="WARNING") as logs,
+        ):
+            self.assertEqual(windows.register_taskbar_created_notification(100), 0xC123)
+
+        self.assertIn("error=5", logs.output[0])
+
+
+    def test_taskbar_registration_failure_does_not_allow_null_message(self):
+
+        with (
+            mock.patch.object(windows.win32gui, "RegisterWindowMessage", return_value=0),
+            mock.patch.object(windows.ctypes.windll.user32, "ChangeWindowMessageFilterEx") as change,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "TaskbarCreated"):
+                windows.register_taskbar_created_notification(100)
+
+        change.assert_not_called()
+
+
     def test_single_instance_returns_mutex_handle_for_its_lifetime(self):
 
         with (

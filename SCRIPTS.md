@@ -22,6 +22,8 @@
 檢查匯入選單                   | [test_import_menu.py](./tests/test_import_menu.py)                 | 檢查選單排列, 進度訊號, 取消與結束狀態
 檢查預覽選單                   | [test_media_preview.py](./tests/test_media_preview.py)             | 檢查懸停時序, 過期縮圖, Qt 訊號與螢幕邊界
 檢查播放與暫停狀態             | [test_playback_state.py](./tests/test_playback_state.py)           | 檢查圖片與影片切換, 載入時序及桌布重掛
+檢查桌面重建通知               | [test_desktop_events.py](./tests/test_desktop_events.py)           | 隱藏頂層視窗接收通知及桌布容器銷毀後的存活
+檢查影片重掛恢復               | [test_video_recovery.py](./tests/test_video_recovery.py)           | 實際 VLC 在父視窗程序結束後恢復影片輸出
 檢查 Windows 整合              | [test_windows_integration.py](./tests/test_windows_integration.py) | 模擬掛載與電源及排程介面, 隱藏視窗驗證備援容器
 檢查圖片原生視窗               | [test_image_display.py](./tests/test_image_display.py)             | 檢查圖片讀取, 顯示, 視窗重綁與釋放
 檢查縮圖快取                   | [test_thumbnails.py](./tests/test_thumbnails.py)                   | 執行快取相關測試
@@ -74,6 +76,7 @@ Python 與 VLC 的架構需要相容, 例如搭配使用 64 位元版本. 只有
 - 系統匣選單, 語言與最近使用紀錄
 - 媒體匯入介面與背景執行緒
 - 自動暫停, 螢幕電源事件與開機啟動選項
+- 獨立隱藏視窗接收工作列重建通知, 觸發桌布恢復
 - 路徑, 日誌與 VLC 初始化
 
 另有六個由主程式使用的模組:
@@ -223,6 +226,8 @@ ISCC.exe '.\installer\BB Video Wallpaper.iss'
 .\.venv\Scripts\python.exe .\tests\test_import_menu.py
 .\.venv\Scripts\python.exe .\tests\test_media_preview.py
 .\.venv\Scripts\python.exe .\tests\test_playback_state.py
+.\.venv\Scripts\python.exe .\tests\test_desktop_events.py
+.\.venv\Scripts\python.exe .\tests\test_video_recovery.py
 .\.venv\Scripts\python.exe .\tests\test_windows_integration.py
 .\.venv\Scripts\python.exe .\tests\test_image_display.py
 .\.venv\Scripts\python.exe .\tests\test_thumbnails.py
@@ -235,18 +240,27 @@ ISCC.exe '.\installer\BB Video Wallpaper.iss'
 [test_media_import.py](./tests/test_media_import.py)               | 同名匯入, 長檔名, 內容去重, 磁碟容量, 進度與取消後清理                 |
 [test_import_menu.py](./tests/test_import_menu.py)                 | 匯入前後選單排列, 主執行緒進度更新, 取消, 錯誤與退出處理               | PySide6
 [test_media_preview.py](./tests/test_media_preview.py)             | 懸停延遲, 預覽模式, 過期縮圖, Qt 主執行緒與螢幕邊界                    | PySide6
-[test_playback_state.py](./tests/test_playback_state.py)           | 媒體切換與暫停, Qt 執行緒, 重掛排程合併與重試, 退出取消及狀態保留      | PySide6
+[test_playback_state.py](./tests/test_playback_state.py)           | 媒體切換與暫停, Qt 執行緒, 重掛排程與桌面就緒等待, 重試及退出取消      | PySide6
+[test_desktop_events.py](./tests/test_desktop_events.py)           | 隱藏頂層視窗接收 TaskbarCreated, 桌布容器銷毀後仍能接收通知            | PySide6
+[test_video_recovery.py](./tests/test_video_recovery.py)           | 真正 VLC 影片輸出失效後恢復播放, 暫停及進度, 子程序逾時保護            | PySide6, 專案內的 VLC-lite, FFmpeg
 [test_windows_integration.py](./tests/test_windows_integration.py) | 掛載分支與父層診斷, 診斷容錯, 備援容器 alpha, 虛擬桌面及電源與排程     |
 [test_image_display.py](./tests/test_image_display.py)             | 圖片讀取失敗保留畫面, 原生子視窗, 隱藏後再顯示, 重綁與釋放             | PySide6
 [test_thumbnails.py](./tests/test_thumbnails.py)                   | 長檔名, 獨立快取, 舊快取替換, 清理範圍與儲存失敗處理                   | PySide6
 [test_video_thumbnails.py](./tests/test_video_thumbnails.py)       | 影片縮圖比例, 旋轉方向, 多影像軌, 取消及錯誤處理                       | 專案內的 VLC-lite, FFmpeg
 
-測試會在暫存目錄操作, 不會啟動桌布或改寫使用者設定  
-預覽測試使用隱藏的 Qt 元件與模擬游標及螢幕, 不移動實際滑鼠  
-Windows 整合測試以模擬 API 檢查掛載與電源及排程, 另建立隱藏的獨立父視窗驗證備援容器的 alpha 與類別重用, 不建立實際排程或改變桌面掛載  
-圖片顯示測試建立隱藏的 Qt 目標視窗, 驗證實際 Windows 子視窗生命週期  
-影片測試會呼叫 FFmpeg 產生短片, 再用 VLC-lite 擷取縮圖; FFmpeg 是測試工具, 主程式的影片播放與影片縮圖仍使用 VLC  
+測試會在暫存目錄操作, 不會啟動桌布或改寫使用者設定
 
+桌面通知測試只對測試用隱藏視窗發送原生訊息, 不廣播給其他程式或重啟 Explorer
+
+影片重掛測試會結束自己的畫面外父視窗程序, 再確認 VLC 確實重建影片輸出與恢復進度; 不會重啟 Explorer 或操作使用者的桌布程序
+
+預覽測試使用隱藏的 Qt 元件與模擬游標及螢幕, 不移動實際滑鼠
+
+Windows 整合測試以模擬 API 檢查掛載與電源及排程, 另建立隱藏的獨立父視窗驗證備援容器的 alpha 與類別重用, 不建立實際排程或改變桌面掛載
+
+圖片顯示測試建立隱藏的 Qt 目標視窗, 驗證實際 Windows 子視窗生命週期
+
+影片測試會呼叫 FFmpeg 產生短片, 再用 VLC-lite 擷取縮圖; FFmpeg 是測試工具, 主程式的影片播放與影片縮圖仍使用 VLC  
 影片測試在缺少 Windows, VLC-lite 或 FFmpeg 時會顯示 `skipped`, 代表該組測試沒有執行. 檢查結果時也要留意跳過的項目
 
 ## 常見情況
