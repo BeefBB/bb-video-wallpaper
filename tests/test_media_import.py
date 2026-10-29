@@ -72,6 +72,7 @@ class MediaImportTests(unittest.TestCase):
             "shutil": shutil,
             "tempfile": tempfile,
             "MEDIA_DIR": self.media_dir,
+            "SINGLE_IMPORT_DIR": self.import_dir,
             "SUPPORTED_MEDIA_EXTENSIONS": {".mp4", ".jpeg"},
             "LANG": json.loads((ROOT / "lang" / "zh-TW.json").read_text(encoding="utf-8")),
         }

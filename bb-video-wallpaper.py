@@ -36,6 +36,8 @@ from thumbnails import (
 )
 
 
+# 路徑
+
 if getattr(sys, "frozen", False):
 
     FILE = Path(sys.executable).resolve()
@@ -51,10 +53,38 @@ else:
     LOADING_IMAGE_PATH = ROOT_DIR / "icon" / "loading.jpg"
 
 
+APPDATA_DIR = Path(os.environ["LOCALAPPDATA"]) / "BB" / "BB Video Wallpaper"
+APPDATA_DIR.mkdir(parents=True, exist_ok=True)
+
+MEDIA_DIR = APPDATA_DIR / "video"
+MEDIA_DIR.mkdir(exist_ok=True)
+
+SINGLE_IMPORT_DIR = MEDIA_DIR / "_imports"
+
+THUMBNAIL_DIR = APPDATA_DIR / "thumbnails"
+
+CONFIG_PATH = APPDATA_DIR / "config.json"
+
+LOG_DIR = APPDATA_DIR / "log"
+
+VLC_DIR = next(
+    (
+        path
+        for path in (ROOT_DIR / "VLC-lite", ROOT_DIR / "VLC")
+        if path.is_dir()
+    ),
+    None
+)
+
+
+# Windows 工作排程器的工作名稱
 TASK_NAME = "BBVideoWallpaper"
+
+# 匯入媒體時預留的額外空間
 IMPORT_RESERVE_BYTES = 100 * 1024 * 1024
 
 
+# 單一實例
 # 唯一的 Mutex 名稱
 MUTEX_NAME = "Global\\BBVideoWallpaper_SingleInstance_Mutex"
 
@@ -74,25 +104,14 @@ def is_already_running() -> tuple[bool, object]:
     return False, mutex
 
 
-# 開啟日誌前先確認單一實例, 避免重複啟動時鎖住日誌檔
 already_running = False
+
 if __name__ == "__main__":
     already_running, mutex = is_already_running()
 
 
-APPDATA_DIR = Path(os.environ["LOCALAPPDATA"]) / "BB" / "BB Video Wallpaper"
-APPDATA_DIR.mkdir(parents=True, exist_ok=True)
-
-MEDIA_DIR = APPDATA_DIR / "video"
-MEDIA_DIR.mkdir(exist_ok=True)
-
-THUMBNAIL_DIR = APPDATA_DIR / "thumbnails"
-
-CONFIG_PATH = APPDATA_DIR / "config.json"
-
-LOG_DIR = APPDATA_DIR / "log"
-
 if not already_running:
+
     LOG_DIR.mkdir(exist_ok=True)
 
     handler = RotatingFileHandler(
@@ -112,16 +131,8 @@ if not already_running:
 logger = logging.getLogger(__name__)
 
 
-VLC_DIR = next(
-    (
-        path
-        for path in (ROOT_DIR / "VLC-lite", ROOT_DIR / "VLC")
-        if path.is_dir()
-    ),
-    None
-)
-
 if VLC_DIR:
+
     os.add_dll_directory(str(VLC_DIR))
     os.environ["PYTHON_VLC_LIB_PATH"] = str(VLC_DIR / "libvlc.dll")
     os.environ["PYTHON_VLC_MODULE_PATH"] = str(VLC_DIR)
@@ -132,7 +143,9 @@ if VLC_DIR:
     except OSError:
         logger.exception("VLC 載入失敗")
         sys.exit(1)
+
 else:
+
     logger.error("找不到 VLC-lite/ 或 VLC/")
     sys.exit(1)
 
@@ -288,10 +301,7 @@ def is_on_battery() -> bool:
         return False
 
 
-    # 0 = 沒插電
-    # 1 = 接上 AC 電源
-    # 255 = 未知
-    return status.ACLineStatus == 0
+    return status.ACLineStatus == 0  # 0 = 沒插電, 1 = 接上 AC 電源, 255 = 未知
 
 
 def create_task() -> None:
@@ -433,14 +443,14 @@ def import_media(source: Path, *, progress=None, cancelled=lambda: False) -> Pat
         raise ValueError(source.name)
 
 
-    import_dir = MEDIA_DIR / "_imports"
-    import_dir.mkdir(parents=True, exist_ok=True)
+    SINGLE_IMPORT_DIR.mkdir(parents=True, exist_ok=True)
+
 
     source_size = source.stat().st_size
     source_hash = None
 
 
-    for candidate in sorted(import_dir.iterdir()):
+    for candidate in sorted(SINGLE_IMPORT_DIR.iterdir()):
 
         check_import_cancelled(cancelled)
 
@@ -463,10 +473,12 @@ def import_media(source: Path, *, progress=None, cancelled=lambda: False) -> Pat
             return candidate
 
 
+    check_import_cancelled(cancelled)
+
+
     # 重複檔案不需額外空間; 確定要複製時才檢查並預留
     # 可用空間是給使用者看的, 是扣除預留空間後的數值, 也就是說會比真實可用空間小一些
-    check_import_cancelled(cancelled)
-    free_space = shutil.disk_usage(import_dir).free
+    free_space = shutil.disk_usage(SINGLE_IMPORT_DIR).free
     required_space = source_size + IMPORT_RESERVE_BYTES
 
     if free_space < required_space:
@@ -481,7 +493,7 @@ def import_media(source: Path, *, progress=None, cancelled=lambda: False) -> Pat
 
     # 暫存檔不會出現在媒體清單, 完成複製後才改成正式檔名
     with tempfile.NamedTemporaryFile(
-        dir=import_dir,
+        dir=SINGLE_IMPORT_DIR,
         prefix=".import-",
         suffix=".tmp",
         delete=False
@@ -502,6 +514,7 @@ def import_media(source: Path, *, progress=None, cancelled=lambda: False) -> Pat
             while True:
 
                 check_import_cancelled(cancelled)
+
                 chunk = source_file.read(1024 * 1024)
 
                 if not chunk:
@@ -516,7 +529,7 @@ def import_media(source: Path, *, progress=None, cancelled=lambda: False) -> Pat
                     progress(percent)
                     last_percent = percent
 
-        destination = import_dir / source.name
+        destination = SINGLE_IMPORT_DIR / source.name
         index = 1
 
         while True:
@@ -524,6 +537,7 @@ def import_media(source: Path, *, progress=None, cancelled=lambda: False) -> Pat
             check_import_cancelled(cancelled)
 
             try:
+
                 # Windows 的 rename 不會覆蓋已存在的檔案
                 temp_path.rename(destination)
 
@@ -533,9 +547,11 @@ def import_media(source: Path, *, progress=None, cancelled=lambda: False) -> Pat
                 return destination
 
             except FileExistsError:
+
                 suffix = f"({index}){source.suffix}"
                 stem = source.stem
                 encoded_stem = stem.encode("utf-16-le")
+
                 # Windows 檔名上限以 UTF-16 單位計算
                 max_stem_units = 255 - len(suffix.encode("utf-16-le")) // 2
 
@@ -543,44 +559,11 @@ def import_media(source: Path, *, progress=None, cancelled=lambda: False) -> Pat
                     # 截斷時額外預留 4 個單位, 並避免留下不完整的雙單位字元
                     stem = encoded_stem[:(max_stem_units - 4) * 2].decode("utf-16-le", errors="ignore")
 
-                destination = import_dir / f"{stem}{suffix}"
+                destination = SINGLE_IMPORT_DIR / f"{stem}{suffix}"
                 index += 1
 
     finally:
         temp_path.unlink(missing_ok=True)
-
-
-class MediaImportThread(QThread):
-
-    progress = Signal(int)
-
-    def __init__(self, source: Path) -> None:
-
-        super().__init__()
-
-
-        self.source = source
-        self.destination: Path | None = None
-        self.error = ""
-        self.cancelled = False
-
-
-    def run(self) -> None:
-
-        try:
-            self.destination = import_media(
-                self.source,
-                progress=self.progress.emit,
-                cancelled=self.isInterruptionRequested
-            )
-
-        except MediaImportCancelled:
-            self.cancelled = True
-            logger.info("已取消新增媒體 - %s", self.source)
-
-        except Exception as e:
-            logger.exception("新增媒體失敗 - %s", self.source)
-            self.error = str(e)
 
 
 def create_workerw(parent_hwnd) -> int:
@@ -681,12 +664,11 @@ def set_windows_as_wallpaper(hwnd: int) -> None:
         )
 
 
-CLSID_VIRTUAL_DESKTOP_MANAGER = ComGUID(
-    "{AA509086-5CA9-4C25-8F95-589D3C07B48A}"
-)
+CLSID_VIRTUAL_DESKTOP_MANAGER = ComGUID("{AA509086-5CA9-4C25-8F95-589D3C07B48A}")
 
 
 class IVirtualDesktopManager(IUnknown):
+
     _iid_ = ComGUID("{A5CD92FF-29BE-454C-8D04-D82879FB3F1B}")
     _methods_ = [
         COMMETHOD(
@@ -724,7 +706,9 @@ def is_on_current_desktop(hwnd: int) -> bool:
         return False
 
 
-# 邊界容許值
+# 視窗最大化
+
+# 邊界容許值(沒有人會透過螢幕邊緣幾個像素看桌布)
 FULLSCREEN_MARGIN = 4
 
 WINDOW_TITLE_BLACKLIST = {
@@ -768,8 +752,8 @@ def is_any_fullscreen(wallpaper_hwnd) -> bool:
 
 
         if (
-            hwnd == wallpaper_hwnd or                  # 自己不算
-            hwnd == shell_hwnd                         # Progman不算
+            hwnd == wallpaper_hwnd or  # 自己不算
+            hwnd == shell_hwnd         # Progman不算
         ):
             return True
 
@@ -795,7 +779,7 @@ def is_any_fullscreen(wallpaper_hwnd) -> bool:
             return True
 
 
-        # 黑名單 不算
+        # 黑名單不算
         window_title = win32gui.GetWindowText(hwnd).casefold().strip()
 
         if window_title in WINDOW_TITLE_BLACKLIST:
@@ -841,7 +825,46 @@ def is_any_fullscreen(wallpaper_hwnd) -> bool:
     return has_fullscreen
 
 
+class MediaImportThread(QThread):
+    """
+    匯入媒體的背景執行緒, 支援進度回報
+    """
+
+    progress = Signal(int)
+
+    def __init__(self, source: Path) -> None:
+
+        super().__init__()
+
+
+        self.source = source
+        self.destination: Path | None = None
+        self.error = ""
+        self.cancelled = False
+
+
+    def run(self) -> None:
+
+        try:
+            self.destination = import_media(
+                self.source,
+                progress=self.progress.emit,
+                cancelled=self.isInterruptionRequested
+            )
+
+        except MediaImportCancelled:
+            self.cancelled = True
+            logger.info("已取消新增媒體 - %s", self.source)
+
+        except Exception as e:
+            logger.exception("新增媒體失敗 - %s", self.source)
+            self.error = str(e)
+
+
 class Wallpaper(QWidget):
+    """
+    桌布視窗
+    """
 
     playback_started = Signal()
 
@@ -851,18 +874,40 @@ class Wallpaper(QWidget):
         super().__init__()
 
 
-        # 正在重建或退出
+        # 設定檔
+        config = config_store.load()
+
+        # 正在重建
         self.is_recreating = False
         self.reattach_retry_count = 0
+        # 正在退出
         self.is_exiting = False
 
-
+        # 目前播放的媒體檔案
         self.current_media: Path | None = None
+        # 初始媒體檔案
         initial_media: Path | None = None
+        # 媒體清單
         media_files = get_media()
 
+        # 播放狀態: "play", "pause", "stop"
+        self.play_state = "stop"
+        # 啟用自動暫停
+        self.enable_auto_pause = True
 
-        config = config_store.load()
+        # 全螢幕檢測就緒
+        self.fullscreen_detection_ready = False
+
+        # 螢幕亮滅
+        self.screen_off = False
+        # 監聽螢幕亮滅的事件
+        self.power_notify = None
+
+        # 自動暫停設定
+        self.auto_pause_if_fullscreen = config.get("autoPauseIfFullscreen", True)
+        self.auto_pause_if_screen_off = config.get("autoPauseIfScreenOff", True)
+        self.auto_pause_if_on_battery = config.get("autoPauseIfOnBattery", False)
+
 
         recent = config.get("recentVideo")
 
@@ -896,50 +941,27 @@ class Wallpaper(QWidget):
             screen.geometryChanged.connect(self.on_screen_changed)
 
 
-        # VLC
+        # 建立 VLC 播放器物件
         self.instance_vlc = vlc.Instance(
             "--no-video-title-show",
             "--input-repeat=65535",
             "--no-audio"
         )
+        self.instance_vlc_player = self.instance_vlc.media_player_new()  # type: ignore
 
-        # 建立 VLC 播放器物件
-        self.player = self.instance_vlc.media_player_new()  # type: ignore
-
-
+        # 建立圖片顯示物件
         # 圖片共用主程式的 QApplication 與桌布 HWND
         self.instance_image = bb_image_display.Instance()
 
 
-        self.enable_auto_pause = True
-        self.play_state = "stop"  # "play", "pause", "stop"
-
-
         # VLC 回呼只發送訊號, 播放器操作回到 Qt 主執行緒處理
-        self.playback_started.connect(
-            self.apply_pending_pause,
-            Qt.ConnectionType.QueuedConnection
-        )
-        self.player_events = self.player.event_manager()
+        self.playback_started.connect(self.apply_pending_pause, Qt.ConnectionType.QueuedConnection)
+
+        self.player_events = self.instance_vlc_player.event_manager()
         self.player_events.event_attach(
             vlc.EventType.MediaPlayerPlaying,  # type: ignore
             lambda event: self.playback_started.emit()
         )
-
-
-        self.fullscreen_detection_ready = False
-        QTimer.singleShot(10000, self.enable_fullscreen_detection)
-
-
-        # 螢幕亮滅
-        self.screen_off = False
-        # 監聽螢幕亮滅的事件
-        self.power_notify = None
-
-
-        self.auto_pause_if_fullscreen = config.get("autoPauseIfFullscreen", True)
-        self.auto_pause_if_screen_off = config.get("autoPauseIfScreenOff", True)
-        self.auto_pause_if_on_battery = config.get("autoPauseIfOnBattery", False)
 
 
         # 掛載到桌布
@@ -950,7 +972,6 @@ class Wallpaper(QWidget):
         if initial_media:
 
             try:
-
                 self.set_play_media(initial_media)
                 self.media_play()
                 logger.info("init - play")
@@ -958,6 +979,8 @@ class Wallpaper(QWidget):
             except Exception:
                 logger.exception("載入初始桌布時發生錯誤 - %s", initial_media)
 
+
+        QTimer.singleShot(10000, self.enable_fullscreen_detection)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.check_auto_pause)
@@ -1023,7 +1046,7 @@ class Wallpaper(QWidget):
             self.instance_image.show()
 
         else:
-            self.player.play()
+            self.instance_vlc_player.play()
 
         self.play_state = "play"
 
@@ -1039,10 +1062,13 @@ class Wallpaper(QWidget):
 
     @Slot()
     def apply_pending_pause(self) -> None:
+        """
+        VLC 播放器在 MediaPlayerPlaying 事件發生前不會接受暫停指令, 所以要等到播放開始後再套用暫停
+        """
 
         # 載入完成後依最新狀態補套暫停, 不覆蓋後續的播放或停止要求
         if not self.is_exiting and not self.is_image() and self.play_state == "pause":
-            self.player.set_pause(1)
+            self.instance_vlc_player.set_pause(1)
 
 
     def media_stop(self) -> None:
@@ -1051,7 +1077,7 @@ class Wallpaper(QWidget):
             self.instance_image.hide()
 
         else:
-            self.player.stop()
+            self.instance_vlc_player.stop()
 
         self.play_state = "stop"
 
@@ -1076,7 +1102,7 @@ class Wallpaper(QWidget):
 
 
             # 紀錄當前播放時間進度
-            curr_time = self.player.get_time() if not self.is_image() else -1
+            curr_time = self.instance_vlc_player.get_time() if not self.is_image() else -1
 
 
             self.unregister_power_notification()
@@ -1121,7 +1147,7 @@ class Wallpaper(QWidget):
                     self.set_play_media(self.current_media)
 
                     if curr_time > 0:
-                        self.player.set_time(curr_time)
+                        self.instance_vlc_player.set_time(curr_time)
 
 
             logger.info("reattach_to_desktop - finish")
@@ -1181,13 +1207,13 @@ class Wallpaper(QWidget):
             media = self.instance_vlc.media_new(str(path))  # type: ignore
 
             try:
-                self.player.set_media(media)
+                self.instance_vlc_player.set_media(media)
 
             finally:
                 media.release()
 
             # 裁切填滿螢幕, 並釋放已不再使用的圖片
-            self.player.video_set_crop_geometry(self.get_screen_aspect_ratio())
+            self.instance_vlc_player.video_set_crop_geometry(self.get_screen_aspect_ratio())
             self.instance_image.close()
 
 
@@ -1237,7 +1263,7 @@ class Wallpaper(QWidget):
 
 
         # 重新設定圖片與影片輸出的目標 HWND
-        self.player.set_hwnd(hwnd)
+        self.instance_vlc_player.set_hwnd(hwnd)
         self.instance_image.set_hwnd(hwnd)
 
 
@@ -1938,7 +1964,7 @@ class Tray:
             self.wallpaper.media_stop()
             self.wallpaper.instance_image.close()
 
-            self.wallpaper.player.release()
+            self.wallpaper.instance_vlc_player.release()
             self.wallpaper.instance_vlc.release()
 
         except Exception:
