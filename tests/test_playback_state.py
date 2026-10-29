@@ -169,7 +169,7 @@ class PlaybackStateTests(unittest.TestCase):
 
         cls.app = QCoreApplication.instance() or QCoreApplication([])
 
-        # 與匯入測試相同, 僅載入原始類別, 避免模組頂層初始化使用者目錄與 VLC
+        # 僅載入原始類別, 避免模組頂層初始化使用者目錄與 VLC
         source_path = ROOT / "bb-video-wallpaper.py"
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
         classes = ast.Module(
@@ -224,9 +224,11 @@ class PlaybackStateTests(unittest.TestCase):
             "is_on_battery": mock.Mock(return_value=False),
             "is_any_fullscreen": mock.Mock(return_value=False),
             "set_windows_as_wallpaper": mock.Mock(),
-            "ctypes": mock.Mock(),
-            "GUID_CONSOLE_DISPLAY_STATE": mock.sentinel.power_guid,
-            "DEVICE_NOTIFY_WINDOW_HANDLE": 0,
+            "register_power_notification": mock.Mock(return_value=2**40 + 1),
+            "unregister_power_notification": mock.Mock(),
+            "get_display_state": mock.Mock(return_value=None),
+            "wintypes": mock.Mock(),
+            "WM_DESTROY": 2,
             "logger": mock.Mock(),
         }
         exec(self.playback_code, self.namespace)
@@ -234,6 +236,7 @@ class PlaybackStateTests(unittest.TestCase):
 
         wallpaper_class = self.namespace["Wallpaper"]
         self.attach_to_desktop = wallpaper_class.attach_to_desktop
+        self.unregister_power_notification = wallpaper_class.unregister_power_notification
 
         for name in ("attach_to_desktop", "unregister_power_notification"):
             self.enterContext(mock.patch.object(wallpaper_class, name))
@@ -568,6 +571,50 @@ class PlaybackStateTests(unittest.TestCase):
         self.namespace["set_windows_as_wallpaper"].assert_called_once_with(1)
         self.player.set_hwnd.assert_called_once_with(1)
         self.instance_image.set_hwnd.assert_called_once_with(1)
+        self.namespace["register_power_notification"].assert_called_once_with(1)
+        self.assertEqual(self.wallpaper.power_notify, 2**40 + 1)
+
+
+    def test_display_notification_updates_auto_pause(self):
+
+        self.start_loading()
+
+        for event_type, display_state in ((b"windows_generic_MSG", 0), ("windows_generic_MSG", 1)):
+            with self.subTest(display_state=display_state):
+                self.namespace["get_display_state"].return_value = display_state
+                result = self.wallpaper.nativeEvent(event_type, 123)
+
+                self.assertEqual(result, (True, 0))
+                self.assertEqual(self.wallpaper.screen_off, display_state == 0)
+                self.assertEqual(self.wallpaper.play_state, "pause" if display_state == 0 else "play")
+
+
+    def test_destroy_notification_only_schedules_reattach_when_not_recreating(self):
+
+        self.namespace["wintypes"].MSG.from_address.return_value.message = self.namespace["WM_DESTROY"]
+        single_shot = self.namespace["QTimer"].singleShot
+        single_shot.reset_mock()
+
+        self.assertEqual(self.wallpaper.nativeEvent(b"windows_generic_MSG", 123), (True, 0))
+        single_shot.assert_called_once_with(200, self.wallpaper.reattach_to_desktop)
+
+        single_shot.reset_mock()
+        self.wallpaper.is_recreating = True
+        self.assertEqual(self.wallpaper.nativeEvent(b"windows_generic_MSG", 123), (True, 0))
+        single_shot.assert_not_called()
+
+
+    def test_unregister_clears_handle_even_if_api_fails(self):
+
+        handle = 2**40 + 1
+        self.wallpaper.power_notify = handle
+        self.namespace["unregister_power_notification"].side_effect = OSError("invalid handle")
+
+        self.unregister_power_notification(self.wallpaper)
+
+        self.namespace["unregister_power_notification"].assert_called_once_with(handle)
+        self.assertIsNone(self.wallpaper.power_notify)
+        self.namespace["logger"].exception.assert_called_once()
 
 
     def test_image_reattach_rebinds_without_reload_or_vlc_seek(self):

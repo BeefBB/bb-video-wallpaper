@@ -90,6 +90,9 @@ class ImportMenuTests(unittest.TestCase):
             "SUPPORTED_VIDEO_EXTENSIONS": {".mp4"},
             "config_store": config_store,
             "task_exists": lambda: False,
+            "FILE": ROOT / "BB Video Wallpaper.exe",
+            "create_task": mock.Mock(),
+            "delete_task": mock.Mock(),
             "logger": mock.Mock(),
             "import_media": mock.Mock(return_value=self.destination),
         }
@@ -170,6 +173,18 @@ class ImportMenuTests(unittest.TestCase):
         self.assert_idle_menu()
         self.assertIsNone(self.tray.import_thread)
         self.namespace["import_media"].assert_not_called()
+
+
+    def test_startup_toggle_passes_entry_point_to_task_creation(self):
+
+        self.tray.toggle_startup(True)
+
+        self.namespace["create_task"].assert_called_once_with(self.namespace["FILE"])
+        self.namespace["delete_task"].assert_not_called()
+
+        self.tray.toggle_startup(False)
+
+        self.namespace["delete_task"].assert_called_once_with()
 
 
     def test_comparing_menu_has_one_extra_cancel_row_and_cancel_restores_it(self):
