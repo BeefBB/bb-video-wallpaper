@@ -1,6 +1,7 @@
 """
 測試 Windows 桌面掛載, 電源通知與開機排程的模組邊界
 模擬外部 API, 不變更桌面, Mutex 或工作排程
+備援容器另用隱藏的獨立父視窗驗證原生 alpha 設定
 """
 
 import ctypes
@@ -74,6 +75,9 @@ class WindowsIntegrationTests(unittest.TestCase):
         with mock.patch.object(windows, "win32gui") as gui:
             gui.FindWindow.return_value = 10
             gui.FindWindowEx.side_effect = [0, 20]
+            gui.GetAncestor.return_value = 20
+            # 頂層視窗原本沒有父層時, SetParent 成功也可能回傳 0
+            gui.SetParent.return_value = 0
 
             windows.set_windows_as_wallpaper(100)
 
@@ -89,6 +93,7 @@ class WindowsIntegrationTests(unittest.TestCase):
         ):
             gui.FindWindow.return_value = 10
             gui.FindWindowEx.side_effect = [0, 0]
+            gui.GetAncestor.return_value = 20
 
             windows.set_windows_as_wallpaper(100)
 
@@ -101,6 +106,7 @@ class WindowsIntegrationTests(unittest.TestCase):
         with mock.patch.object(windows, "win32gui") as gui:
             gui.FindWindow.return_value = 10
             gui.FindWindowEx.side_effect = [20, 30, 40]
+            gui.GetAncestor.return_value = 40
 
             windows.set_windows_as_wallpaper(100)
 
@@ -113,11 +119,175 @@ class WindowsIntegrationTests(unittest.TestCase):
         with mock.patch.object(windows, "win32gui") as gui:
             gui.FindWindow.return_value = 0
 
-            with self.assertRaisesRegex(RuntimeError, "Progman"):
-                windows.set_windows_as_wallpaper(100)
+            with self.assertLogs(windows.logger, level="ERROR") as logs:
+                with self.assertRaisesRegex(RuntimeError, "Progman"):
+                    windows.set_windows_as_wallpaper(100)
 
             gui.SetParent.assert_not_called()
             gui.SendMessageTimeout.assert_not_called()
+            self.assertIn("stage=尋找 Progman", logs.output[0])
+
+
+    def test_wallpaper_warns_about_parent_mismatch_without_interrupting(self):
+
+        for actual_parent in (0, 10, 30):
+            with self.subTest(actual_parent=actual_parent), mock.patch.object(windows, "win32gui") as gui:
+                gui.FindWindow.return_value = 10
+                gui.FindWindowEx.side_effect = [0, 20]
+                gui.GetParent.return_value = 20
+                gui.GetAncestor.return_value = actual_parent
+
+                with self.assertLogs(windows.logger, level="INFO") as logs:
+                    windows.set_windows_as_wallpaper(100)
+
+                output = "\n".join(logs.output)
+                self.assertIn("WARNING:windows_integration:桌布掛載父視窗不符, 繼續既有流程", output)
+                self.assertIn("expected=0x14", output)
+                self.assertIn(f"actual={actual_parent:#x}", output)
+                self.assertNotIn("桌布掛載完成", output)
+                self.assertNotIn("ERROR:", output)
+                gui.SetParent.assert_called_once_with(100, 20)
+                gui.GetParent.assert_not_called()
+
+
+    def test_parent_query_failure_warns_without_interrupting(self):
+
+        error = windows.win32gui.error(1400, "GetAncestor", "invalid window handle")
+
+        with mock.patch.object(windows, "win32gui") as gui:
+            gui.FindWindow.return_value = 10
+            gui.FindWindowEx.side_effect = [0, 20]
+            gui.GetAncestor.side_effect = error
+
+            with self.assertLogs(windows.logger, level="INFO") as logs:
+                windows.set_windows_as_wallpaper(100)
+
+            gui.SetParent.assert_called_once_with(100, 20)
+
+        output = "\n".join(logs.output)
+        self.assertIn("WARNING:windows_integration:無法確認桌布父視窗, 繼續既有流程", output)
+        self.assertIn("hwnd=0x64 expected=0x14", output)
+        self.assertNotIn("桌布掛載完成", output)
+        self.assertNotIn("ERROR:", output)
+
+
+    def test_wallpaper_logs_structure_and_selected_path(self):
+
+        with mock.patch.object(windows, "win32gui") as gui:
+            gui.FindWindow.return_value = 10
+            gui.FindWindowEx.side_effect = [0, 20]
+            gui.GetAncestor.return_value = 20
+            gui.GetClassName.return_value = "TestWindow"
+            gui.GetWindowLong.side_effect = lambda hwnd, index: -2147483648 if index == windows.win32con.GWL_STYLE else 0x200000
+            gui.GetWindowRect.return_value = (0, 0, 1920, 1080)
+
+            with self.assertLogs(windows.logger, level="INFO") as logs:
+                windows.set_windows_as_wallpaper(100)
+
+        output = "\n".join(logs.output)
+        for expected in (
+            "Windows=",
+            "mode=progman-workerw",
+            "progman=0xa workerw=0x14",
+            "wallpaper-after: hwnd=0x64 class=TestWindow parent=0x14",
+            "style=0x80000000 exstyle=0x00200000",
+            "rect=(0, 0, 1920, 1080)",
+            "桌布掛載完成",
+        ):
+            self.assertIn(expected, output)
+
+
+    def test_diagnostic_read_failure_does_not_prevent_attachment(self):
+
+        with mock.patch.object(windows, "win32gui") as gui:
+            gui.FindWindow.return_value = 10
+            gui.FindWindowEx.side_effect = [0, 20]
+            gui.GetAncestor.return_value = 20
+            gui.GetClassName.side_effect = RuntimeError("diagnostic unavailable")
+
+            with self.assertLogs(windows.logger, level="INFO") as logs:
+                windows.set_windows_as_wallpaper(100)
+
+            gui.SetParent.assert_called_once_with(100, 20)
+
+        output = "\n".join(logs.output)
+        self.assertIn("讀取桌布視窗診斷失敗", output)
+        self.assertIn("桌布掛載完成", output)
+
+
+    def test_split_message_failure_is_logged_and_does_not_attempt_attachment(self):
+
+        error = windows.win32gui.error(1460, "SendMessageTimeout", "timed out")
+
+        with mock.patch.object(windows, "win32gui") as gui:
+            gui.FindWindow.return_value = 10
+            gui.SendMessageTimeout.side_effect = [None, error]
+
+            with self.assertLogs(windows.logger, level="ERROR") as logs:
+                with self.assertRaises(type(error)) as caught:
+                    windows.set_windows_as_wallpaper(100)
+
+            self.assertIs(caught.exception, error)
+            self.assertIn("stage=SendMessageTimeout(0x052C, 13, None)", logs.output[0])
+            gui.SetParent.assert_not_called()
+            gui.FindWindowEx.assert_not_called()
+
+
+    def test_attachment_error_survives_failed_diagnostics(self):
+
+        error = windows.win32gui.error(5, "SetParent", "access denied")
+
+        with mock.patch.object(windows, "win32gui") as gui:
+            gui.FindWindow.return_value = 10
+            gui.FindWindowEx.side_effect = [0, 20]
+            gui.SetParent.side_effect = error
+            gui.GetClassName.side_effect = RuntimeError("diagnostic unavailable")
+
+            with self.assertLogs(windows.logger, level="INFO") as logs:
+                with self.assertRaises(type(error)) as caught:
+                    windows.set_windows_as_wallpaper(100)
+
+        self.assertIs(caught.exception, error)
+        output = "\n".join(logs.output)
+        self.assertIn("stage=SetParent mode=progman-workerw", output)
+        self.assertNotIn("桌布掛載完成", output)
+
+
+    def test_workerw_registration_does_not_hide_unexpected_errors(self):
+
+        error = windows.win32gui.error(5, "RegisterClass", "access denied")
+
+        with (
+            mock.patch.object(windows.win32gui, "RegisterClass", side_effect=error),
+            mock.patch.object(windows.win32gui, "CreateWindowEx") as create,
+        ):
+            with self.assertRaises(type(error)) as caught:
+                windows.create_workerw(10)
+
+        self.assertIs(caught.exception, error)
+        create.assert_not_called()
+
+
+    def test_workerw_alpha_failure_cleans_up_and_preserves_original_error(self):
+
+        error_type = windows.win32gui.error
+        error = error_type(87, "SetLayeredWindowAttributes", "invalid parameter")
+
+        for cleanup_error in (None, error_type(5, "DestroyWindow", "access denied")):
+            with self.subTest(cleanup_error=cleanup_error), mock.patch.object(windows, "win32gui") as gui:
+                gui.error = error_type
+                gui.GetClientRect.return_value = (0, 0, 1920, 1080)
+                gui.CreateWindowEx.return_value = 20
+                gui.SetLayeredWindowAttributes.side_effect = error
+                gui.DestroyWindow.side_effect = cleanup_error
+
+                with mock.patch.object(windows.logger, "exception") as log:
+                    with self.assertRaises(error_type) as caught:
+                        windows.create_workerw(10)
+
+                self.assertIs(caught.exception, error)
+                gui.DestroyWindow.assert_called_once_with(20)
+                self.assertEqual(log.call_count, int(cleanup_error is not None))
 
 
     def test_virtual_desktop_manager_is_created_on_demand_and_reused(self):
@@ -222,6 +392,35 @@ class WindowsIntegrationTests(unittest.TestCase):
             windows.unregister_power_notification(handle)
             self.assertIs(unregister.argtypes[0], wintypes.HANDLE)
             unregister.assert_called_once_with(handle)
+
+
+class WorkerWNativeTests(unittest.TestCase):
+
+    def test_created_workerw_is_opaque_and_class_can_be_reused(self):
+
+        # 父視窗保持隱藏, 不接觸 Explorer 或使用者桌面
+        parent = windows.win32gui.CreateWindowEx(
+            0, "Static", "", windows.win32con.WS_OVERLAPPED,
+            0, 0, 320, 240, 0, 0, windows.win32api.GetModuleHandle(None), None,
+        )
+
+        try:
+
+            for _ in range(2):
+                hwnd = windows.create_workerw(parent)
+
+                try:
+                    self.assertEqual(windows.win32gui.GetAncestor(hwnd, windows.win32con.GA_PARENT), parent)
+                    _, alpha, flags = windows.win32gui.GetLayeredWindowAttributes(hwnd)
+                    self.assertEqual(alpha, 255)
+                    self.assertTrue(flags & windows.win32con.LWA_ALPHA)
+                    self.assertFalse(windows.win32gui.IsWindowVisible(hwnd))
+
+                finally:
+                    windows.win32gui.DestroyWindow(hwnd)
+
+        finally:
+            windows.win32gui.DestroyWindow(parent)
 
 
 if __name__ == "__main__":

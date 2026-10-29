@@ -22,7 +22,7 @@
 檢查匯入選單                   | [test_import_menu.py](./tests/test_import_menu.py)                 | 檢查選單排列, 進度訊號, 取消與結束狀態
 檢查預覽選單                   | [test_media_preview.py](./tests/test_media_preview.py)             | 檢查懸停時序, 過期縮圖, Qt 訊號與螢幕邊界
 檢查播放與暫停狀態             | [test_playback_state.py](./tests/test_playback_state.py)           | 檢查圖片與影片切換, 載入時序及桌布重掛
-檢查 Windows 整合              | [test_windows_integration.py](./tests/test_windows_integration.py) | 模擬 Windows API, 檢查桌面掛載與電源及排程介面
+檢查 Windows 整合              | [test_windows_integration.py](./tests/test_windows_integration.py) | 模擬掛載與電源及排程介面, 隱藏視窗驗證備援容器
 檢查圖片原生視窗               | [test_image_display.py](./tests/test_image_display.py)             | 檢查圖片讀取, 顯示, 視窗重綁與釋放
 檢查縮圖快取                   | [test_thumbnails.py](./tests/test_thumbnails.py)                   | 執行快取相關測試
 檢查實際影片縮圖比例           | [test_video_thumbnails.py](./tests/test_video_thumbnails.py)       | 使用 VLC-lite 解碼合成影片並檢查結果
@@ -236,12 +236,16 @@ ISCC.exe '.\installer\BB Video Wallpaper.iss'
 [test_import_menu.py](./tests/test_import_menu.py)                 | 匯入前後選單排列, 主執行緒進度更新, 取消, 錯誤與退出處理               | PySide6
 [test_media_preview.py](./tests/test_media_preview.py)             | 懸停延遲, 預覽模式, 過期縮圖, Qt 主執行緒與螢幕邊界                    | PySide6
 [test_playback_state.py](./tests/test_playback_state.py)           | 圖片與影片切換, 讀取失敗, 載入期間暫停, Qt 執行緒及重掛後狀態          | PySide6
-[test_windows_integration.py](./tests/test_windows_integration.py) | 桌面掛載分支, 虛擬桌面, 電源解析, 64 位元 Handle 與排程路徑            |
+[test_windows_integration.py](./tests/test_windows_integration.py) | 掛載分支與父層診斷, 診斷容錯, 備援容器 alpha, 虛擬桌面及電源與排程     |
 [test_image_display.py](./tests/test_image_display.py)             | 圖片讀取失敗保留畫面, 原生子視窗, 隱藏後再顯示, 重綁與釋放             | PySide6
 [test_thumbnails.py](./tests/test_thumbnails.py)                   | 長檔名, 獨立快取, 舊快取替換, 清理範圍與儲存失敗處理                   | PySide6
 [test_video_thumbnails.py](./tests/test_video_thumbnails.py)       | 影片縮圖比例, 旋轉方向, 多影像軌, 取消及錯誤處理                       | 專案內的 VLC-lite, FFmpeg
 
-測試會在暫存目錄操作, 不會啟動桌布或改寫使用者設定. 預覽測試使用隱藏的 Qt 元件與模擬游標及螢幕, 不移動實際滑鼠. Windows 整合測試使用模擬 API, 不建立實際排程或改變桌面掛載. 圖片顯示測試建立隱藏的 Qt 目標視窗, 驗證實際 Windows 子視窗生命週期. 影片測試會呼叫 FFmpeg 產生短片, 再用 VLC-lite 擷取縮圖; FFmpeg 是測試工具, 主程式的影片播放與影片縮圖仍使用 VLC
+測試會在暫存目錄操作, 不會啟動桌布或改寫使用者設定  
+預覽測試使用隱藏的 Qt 元件與模擬游標及螢幕, 不移動實際滑鼠  
+Windows 整合測試以模擬 API 檢查掛載與電源及排程, 另建立隱藏的獨立父視窗驗證備援容器的 alpha 與類別重用, 不建立實際排程或改變桌面掛載  
+圖片顯示測試建立隱藏的 Qt 目標視窗, 驗證實際 Windows 子視窗生命週期  
+影片測試會呼叫 FFmpeg 產生短片, 再用 VLC-lite 擷取縮圖; FFmpeg 是測試工具, 主程式的影片播放與影片縮圖仍使用 VLC  
 
 影片測試在缺少 Windows, VLC-lite 或 FFmpeg 時會顯示 `skipped`, 代表該組測試沒有執行. 檢查結果時也要留意跳過的項目
 

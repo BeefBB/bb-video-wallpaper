@@ -276,9 +276,10 @@ def create_workerw(parent_hwnd) -> int:
         wc.lpfnWndProc = lambda hwnd, msg, wParam, lParam: win32gui.DefWindowProc(hwnd, msg, wParam, lParam)  # type: ignore
         win32gui.RegisterClass(wc)
 
-    except Exception:
-        # WorkerW 類別可能已經註冊, 直接忽略即可
-        pass
+    except win32gui.error as error:
+        # 只忽略已註冊的類別, 其他錯誤保留給掛載流程記錄
+        if error.winerror != winerror.ERROR_CLASS_ALREADY_EXISTS:
+            raise
 
 
     rect = win32gui.GetClientRect(parent_hwnd)
@@ -297,7 +298,48 @@ def create_workerw(parent_hwnd) -> int:
         None
     )
 
+    try:
+        # Layered 視窗需要設定 alpha 才會顯示, 保持完全不透明
+        win32gui.SetLayeredWindowAttributes(hwnd, 0, 255, win32con.LWA_ALPHA)
+
+    except Exception:
+
+        try:
+            win32gui.DestroyWindow(hwnd)
+
+        except Exception:
+            logger.exception("清理未完成初始化的 WorkerW 失敗 - hwnd=%#x", hwnd)
+
+        raise
+
     return hwnd
+
+
+def _log_wallpaper_window(role: str, hwnd: int) -> None:
+    """
+    記錄掛載相關視窗的結構, 診斷失敗不影響掛載結果
+    """
+
+    if not hwnd:
+        logger.info("桌布視窗 - %s: hwnd=0", role)
+        return
+
+    try:
+
+        logger.info(
+            "桌布視窗 - %s: hwnd=%#x class=%s parent=%#x style=%#010x exstyle=%#010x rect=%s visible=%s",
+            role,
+            hwnd,
+            win32gui.GetClassName(hwnd),
+            win32gui.GetAncestor(hwnd, win32con.GA_PARENT),
+            win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE) & 0xFFFFFFFF,
+            win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE) & 0xFFFFFFFF,
+            win32gui.GetWindowRect(hwnd),
+            bool(win32gui.IsWindowVisible(hwnd)),
+        )
+
+    except Exception:
+        logger.warning("讀取桌布視窗診斷失敗 - %s: hwnd=%#x", role, hwnd, exc_info=True)
 
 
 def set_windows_as_wallpaper(hwnd: int) -> None:
@@ -305,59 +347,124 @@ def set_windows_as_wallpaper(hwnd: int) -> None:
     將視窗掛載到 Windows 桌布層
     """
 
-    progman = win32gui.FindWindow("Progman", "Program Manager")
+    progman = 0
+    workerw = 0
+    mode = "unknown"
+    stage = "尋找 Progman"
 
-    if not progman:
-        progman = win32gui.FindWindow("Progman", None)
+    logger.info("桌布掛載開始 - hwnd=%#x Windows=%s", hwnd, sys.getwindowsversion())
+    _log_wallpaper_window("wallpaper-before", hwnd)
 
-    if not progman:
-        raise RuntimeError("找不到 Progman 視窗")
+    try:
+
+        progman = win32gui.FindWindow("Progman", "Program Manager")
+
+        if not progman:
+            progman = win32gui.FindWindow("Progman", None)
+
+        if not progman:
+            raise RuntimeError("找不到 Progman 視窗")
+
+        _log_wallpaper_window("Progman", progman)
 
 
-    # 發送桌面分裂訊息, 讓桌布與桌面圖示分屬不同的 WorkerW
-    win32gui.SendMessageTimeout(progman, 0x052C, 0, None, 0, 0x03E8)
-    win32gui.SendMessageTimeout(progman, 0x052C, 0xD, None, 0, 0x03E8)
-    win32gui.SendMessageTimeout(progman, 0x052C, 0xD, 1, 0, 0x03E8)
+        # 發送桌面分裂訊息, 讓桌布與桌面圖示分屬不同的 WorkerW
+        for wparam, lparam in ((0, None), (0xD, None), (0xD, 1)):
+
+            stage = f"SendMessageTimeout(0x052C, {wparam}, {lparam})"
+            win32gui.SendMessageTimeout(progman, 0x052C, wparam, lparam, 0, 0x03E8)
 
 
-    workerw_top = 0
-    icon_layer = 0
-    workerw_old = 0
+        stage = "尋找 WorkerW"
+        workerw_top = 0
+        icon_layer = 0
+        workerw_old = 0
 
-    while True:
+        while True:
 
-        workerw_top = win32gui.FindWindowEx(None, workerw_top, "WorkerW", None)
+            workerw_top = win32gui.FindWindowEx(None, workerw_top, "WorkerW", None)
 
-        if not workerw_top:
+            if not workerw_top:
+                break
+
+            icon_layer = win32gui.FindWindowEx(workerw_top, None, "SHELLDLL_DefView", None)
+
+            if not icon_layer:
+                continue
+
+            workerw_old = win32gui.FindWindowEx(None, workerw_top, "WorkerW", None)
             break
 
-        icon_layer = win32gui.FindWindowEx(workerw_top, None, "SHELLDLL_DefView", None)
 
-        if not icon_layer:
-            continue
+        if not workerw_old:
 
-        workerw_old = win32gui.FindWindowEx(None, workerw_top, "WorkerW", None)
-        break
+            # 新版 Windows 11: 在 Progman 底下找尋或建立 WorkerW
+            mode = "progman-workerw"
+            workerw = win32gui.FindWindowEx(progman, None, "WorkerW", None)
+
+            if not workerw:
+
+                mode = "created-workerw"
+                stage = "建立備援 WorkerW"
+                workerw = create_workerw(progman)
+
+        else:
+
+            # 舊版: 掛載到桌面圖示層後方的 WorkerW
+            mode = "legacy-workerw"
+            workerw = workerw_old
 
 
-    if not workerw_old:
+        logger.info("桌布掛載路徑 - mode=%s progman=%#x workerw=%#x", mode, progman, workerw)
+        _log_wallpaper_window("WorkerW", workerw)
 
-        # 新版 Windows 11: 在 Progman 底下找尋或建立 WorkerW
-        workerw = win32gui.FindWindowEx(progman, None, "WorkerW", None)
+        if icon_layer:
+            _log_wallpaper_window("SHELLDLL_DefView", icon_layer)
 
-        if not workerw:
-            workerw = create_workerw(progman)
-
+        stage = "SetParent"
         win32gui.SetParent(hwnd, workerw)
 
-    else:
+        if workerw_old:
 
-        # 舊版: 掛載到桌面圖示層後方的 WorkerW
-        win32gui.SetParent(hwnd, workerw_old)
-        win32gui.SetWindowPos(
-            hwnd, icon_layer, 0, 0, 0, 0,
-            win32con.SWP_NOSIZE | win32con.SWP_NOMOVE
+            stage = "SetWindowPos"
+            win32gui.SetWindowPos(
+                hwnd, icon_layer, 0, 0, 0, 0,
+                win32con.SWP_NOSIZE | win32con.SWP_NOMOVE
+            )
+
+
+        # 父層檢查只供診斷, 不因結構不符或查詢失敗中斷既有流程
+        try:
+            # 使用實際父層, 避免 GetParent 把頂層視窗的 owner 當成 parent
+            actual_parent = win32gui.GetAncestor(hwnd, win32con.GA_PARENT)
+
+        except Exception:
+            logger.warning(
+                "無法確認桌布父視窗, 繼續既有流程 - hwnd=%#x expected=%#x mode=%s",
+                hwnd, workerw, mode, exc_info=True,
+            )
+
+        else:
+
+            if not workerw or actual_parent != workerw:
+                logger.warning(
+                    "桌布掛載父視窗不符, 繼續既有流程 - hwnd=%#x expected=%#x actual=%#x mode=%s",
+                    hwnd, workerw, actual_parent, mode,
+                )
+
+            else:
+                logger.info("桌布掛載完成 - hwnd=%#x parent=%#x mode=%s", hwnd, actual_parent, mode)
+
+        _log_wallpaper_window("wallpaper-after", hwnd)
+
+    except Exception:
+
+        logger.exception(
+            "桌布掛載失敗 - stage=%s mode=%s hwnd=%#x progman=%#x workerw=%#x",
+            stage, mode, hwnd, progman, workerw,
         )
+        _log_wallpaper_window("wallpaper-failed", hwnd)
+        raise
 
 
 CLSID_VIRTUAL_DESKTOP_MANAGER = ComGUID("{AA509086-5CA9-4C25-8F95-589D3C07B48A}")
