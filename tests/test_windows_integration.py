@@ -494,6 +494,97 @@ class WindowsIntegrationTests(unittest.TestCase):
             create.assert_called_once()
 
 
+    def test_fullscreen_detection_only_matches_wallpaper_monitor(self):
+        """
+        只偵測桌布所在螢幕的最大化視窗, 支援負座標與非主螢幕
+        """
+
+        work_areas = {
+            1: (0, 0, 1920, 1040),
+            2: (-1280, -240, 0, 744),
+        }
+
+        with (
+            mock.patch.object(windows, "win32gui") as gui,
+            mock.patch.object(windows, "win32api") as api,
+            mock.patch.object(windows, "is_on_current_desktop", return_value=True),
+            mock.patch.object(windows.ctypes.windll.user32, "GetShellWindow", return_value=10),
+        ):
+            gui.EnumWindows.side_effect = lambda callback, data: callback(20, data)
+            gui.IsWindowVisible.return_value = True
+            gui.IsIconic.return_value = False
+            gui.GetClassName.return_value = "AppWindow"
+            gui.GetWindowText.return_value = "Video editor"
+            api.GetMonitorInfo.side_effect = lambda monitor: {"Work": work_areas[monitor]}
+
+            for wallpaper_monitor in work_areas:
+                for window_monitor, work_area in work_areas.items():
+                    for maximized in (False, True):
+                        with self.subTest(
+                            wallpaper_monitor=wallpaper_monitor,
+                            window_monitor=window_monitor,
+                            maximized=maximized,
+                        ):
+                            api.MonitorFromWindow.side_effect = (
+                                lambda hwnd, flags: wallpaper_monitor if hwnd == 100 else window_monitor
+                            )
+                            left, top, right, bottom = work_area
+                            gui.GetWindowRect.return_value = (
+                                work_area if maximized else (left + 100, top + 100, right - 100, bottom - 100)
+                            )
+
+                            self.assertEqual(
+                                windows.is_any_fullscreen(100),
+                                maximized and wallpaper_monitor == window_monitor,
+                            )
+
+
+    def test_fullscreen_detection_continues_after_other_monitor(self):
+        """
+        略過其他螢幕後仍會檢查目標螢幕的視窗
+        """
+
+        with (
+            mock.patch.object(windows, "win32gui") as gui,
+            mock.patch.object(windows, "win32api") as api,
+            mock.patch.object(windows, "is_on_current_desktop", return_value=True),
+            mock.patch.object(windows.ctypes.windll.user32, "GetShellWindow", return_value=10),
+        ):
+            gui.EnumWindows.side_effect = lambda callback, data: [callback(hwnd, data) for hwnd in (20, 30)]
+            gui.IsWindowVisible.return_value = True
+            gui.IsIconic.return_value = False
+            gui.GetClassName.return_value = "AppWindow"
+            gui.GetWindowText.return_value = "Video editor"
+            gui.GetWindowRect.return_value = (0, 0, 1920, 1040)
+            api.MonitorFromWindow.side_effect = lambda hwnd, flags: 2 if hwnd == 20 else 1
+            api.GetMonitorInfo.return_value = {"Work": (0, 0, 1920, 1040)}
+
+            self.assertTrue(windows.is_any_fullscreen(100))
+            gui.GetWindowRect.assert_called_once_with(30)
+
+
+    def test_fullscreen_detection_skips_unavailable_wallpaper_monitor(self):
+        """
+        桌布視窗失效或不在任何螢幕時略過這次偵測
+        """
+
+        error = windows.win32api.error(1400, "MonitorFromWindow", "window destroyed")
+
+        for result in (None, 0, error):
+            with (
+                self.subTest(result=result),
+                mock.patch.object(windows, "win32gui") as gui,
+                mock.patch.object(windows, "win32api") as api,
+            ):
+                if isinstance(result, Exception):
+                    api.MonitorFromWindow.side_effect = result
+                else:
+                    api.MonitorFromWindow.return_value = result
+
+                self.assertFalse(windows.is_any_fullscreen(100))
+                gui.EnumWindows.assert_not_called()
+
+
     def test_fullscreen_detection_ignores_windows_from_other_desktops(self):
         """
         全螢幕偵測忽略其他虛擬桌面的視窗
@@ -511,6 +602,7 @@ class WindowsIntegrationTests(unittest.TestCase):
             gui.GetClassName.return_value = "AppWindow"
             gui.GetWindowText.return_value = "Video editor"
             gui.GetWindowRect.return_value = (0, 0, 1920, 1040)
+            api.MonitorFromWindow.return_value = 1
             api.GetMonitorInfo.return_value = {"Work": (0, 0, 1920, 1040)}
 
             current_desktop.return_value = False

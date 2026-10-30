@@ -613,10 +613,21 @@ SHELL_CLASSES = {
     "Shell_SecondaryTrayWnd",
 }
 
-def is_any_fullscreen(wallpaper_hwnd) -> bool:
+def is_any_fullscreen(wallpaper_hwnd: int) -> bool:
     """
-    偵測是否有任何視窗最大化
+    偵測桌布所在螢幕是否有視窗最大化
     """
+
+    try:
+        wallpaper_monitor = win32api.MonitorFromWindow(wallpaper_hwnd, win32con.MONITOR_DEFAULTTONULL)
+
+    except Exception:
+        return False
+
+    # 桌布視窗不在任何螢幕時, 略過這次偵測
+    if not wallpaper_monitor:
+        return False
+
 
     shell_hwnd = ctypes.windll.user32.GetShellWindow()
 
@@ -668,6 +679,10 @@ def is_any_fullscreen(wallpaper_hwnd) -> bool:
 
         try:
             monitor = win32api.MonitorFromWindow(hwnd, win32con.MONITOR_DEFAULTTONEAREST)
+
+            # 其他螢幕的視窗不影響此桌布
+            if monitor != wallpaper_monitor:
+                return True
 
             info = win32api.GetMonitorInfo(monitor)
 
