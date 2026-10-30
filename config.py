@@ -1,5 +1,5 @@
 """
-設定檔驗證, 讀寫與語言載入
+設定檔初始化, 驗證, 讀寫與語言載入
 路徑由主程式提供
 """
 
@@ -33,11 +33,37 @@ class ConfigStore:
     管理設定與語言檔, 建立物件時不讀寫檔案
     """
 
-    def __init__(self, config_path: Path, media_dir: Path, lang_dir: Path):
+    def __init__(self, config_path: Path, media_dir: Path, lang_dir: Path) -> None:
 
         self.config_path = config_path
         self.media_dir = media_dir
         self.lang_dir = lang_dir
+
+
+    def _normalize_media_path(self, value) -> str | None:
+        """
+        檢查並標準化媒體資料夾內的相對路徑, 不允許絕對路徑或跳出資料夾的路徑
+        失敗時回傳 None
+        """
+
+        if not isinstance(value, str) or not value or "\0" in value:
+            return None
+
+        try:
+            path = Path(value)
+
+            if path.drive or path.root or not path.parts or ".." in path.parts:
+                return None
+
+            media_root = self.media_dir.resolve()
+
+            if not (media_root / path).resolve().is_relative_to(media_root):
+                return None
+
+        except (OSError, ValueError, RuntimeError):
+            return None
+
+        return path.as_posix()
 
 
     def validate(self, raw) -> dict:
@@ -71,7 +97,7 @@ class ConfigStore:
             try:
                 installer_config.read(
                     self.lang_dir.parent / "install-language.ini",
-                    encoding="utf-8-sig",
+                    encoding="utf-8-sig"
                 )
                 language = installer_config.get("Setup", "Language", fallback="")
 
@@ -112,29 +138,14 @@ class ConfigStore:
 
         if isinstance(recent, list):
 
-            media_root = self.media_dir.resolve()
-
             for media_path in recent:
 
-                if not isinstance(media_path, str) or not media_path or "\0" in media_path:
+                normalized = self._normalize_media_path(media_path)
+
+                if normalized is None:
                     continue
 
-                try:
-                    path = Path(media_path)
-
-                    if (
-                        path.drive or
-                        path.root or
-                        not path.parts or
-                        ".." in path.parts
-                    ):
-                        continue
-
-                    if not (media_root / path).resolve().is_relative_to(media_root):
-                        continue
-
-                except (OSError, ValueError, RuntimeError):
-                    continue
+                path = Path(normalized)
 
                 if path not in seen:
                     seen.add(path)
@@ -149,7 +160,81 @@ class ConfigStore:
         config["recentVideo"] = normalized_recent
 
 
+        # 各螢幕的桌布選擇
+        screen_wallpapers = config.get("screenWallpapers", {})
+        normalized_wallpapers = {}
+
+        if isinstance(screen_wallpapers, dict):
+            for screen_id, media_path in screen_wallpapers.items():
+                if not isinstance(screen_id, str) or not screen_id.strip() or "\0" in screen_id:
+                    continue
+
+                normalized = self._normalize_media_path(media_path)
+
+                if normalized is not None:
+                    normalized_wallpapers[screen_id] = normalized
+
+        if normalized_wallpapers != screen_wallpapers:
+            logger.warning("設定欄位 screenWallpapers 已移除無效項目")
+
+        config["screenWallpapers"] = normalized_wallpapers
+
+
         return config
+
+
+    def remember_recent(self, path: Path) -> None:
+        """
+        保存最近紀錄
+        """
+
+        media_path = self._normalize_media_path(path.relative_to(self.media_dir).as_posix())
+
+        if media_path is None:
+            raise ValueError("桌布路徑必須位於媒體資料夾內")
+
+
+        config = self.load()
+        recent = config["recentVideo"]
+        config["recentVideo"] = [media_path] + [
+            item for item in recent if Path(item) != Path(media_path)
+        ][:4]
+
+        self.save(config)
+
+
+    def remember_wallpaper(self, screen_id: str, path: Path) -> None:
+        """
+        保存單一螢幕的選擇
+        """
+
+        if not isinstance(screen_id, str) or not screen_id.strip() or "\0" in screen_id:
+            raise ValueError("無效的螢幕識別")
+
+        media_path = self._normalize_media_path(path.relative_to(self.media_dir).as_posix())
+
+        if media_path is None:
+            raise ValueError("桌布路徑必須位於媒體資料夾內")
+
+
+        config = self.load()
+        config["screenWallpapers"][screen_id] = media_path
+        self.save(config)
+
+
+    def initialize_if_missing(self) -> None:
+        """
+        設定檔不存在時寫入完整預設值, 保留既有檔案
+        """
+
+        try:
+            self.config_path.stat()
+
+        except FileNotFoundError:
+            self.save(self.validate({}))
+
+        except OSError:
+            logger.exception("檢查 config 是否存在時發生錯誤")
 
 
     def load(self) -> dict:

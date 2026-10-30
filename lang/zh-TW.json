@@ -11,6 +11,7 @@
   "importing_media": "匯入中 {percent}%",
   "cancel_media_import": "取消匯入",
   "media_add_failed": "新增影片失敗：{error}",
+  "media_load_failed": "載入桌布失敗：{error}",
   "media_insufficient_space": "磁碟空間不足\n需要 {required:,} MB, 目前可用 {available:,} MB",
   "open_video_folder": "開啟影片資料夾",
   "select_video": "選擇影片",
