@@ -532,6 +532,51 @@ class Wallpaper(QWidget):
         self.play_state = "stop"
 
 
+    def manual_play(self) -> None:
+        """
+        手動播放, 恢復自動暫停
+        """
+
+        if self.is_exiting or not self.current_media:
+            return
+
+        self.media_play()
+        self.enable_auto_pause = True
+        logger.info("manual - play")
+
+
+    def manual_pause(self) -> None:
+        """
+        手動暫停, 停用自動暫停
+        """
+
+        if self.is_exiting:
+            return
+
+        if (
+            self.current_media and
+            self.current_media.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS and
+            self.play_state == "play"
+        ):
+            self.media_pause()
+
+        self.enable_auto_pause = False
+        logger.info("manual - pause")
+
+
+    def manual_stop(self) -> None:
+        """
+        手動停止, 停用自動暫停
+        """
+
+        if self.is_exiting:
+            return
+
+        self.media_stop()
+        self.enable_auto_pause = False
+        logger.info("manual - stop")
+
+
     @Slot()
     def apply_pending_reattach_time(self) -> None:
         """
@@ -814,9 +859,7 @@ class Wallpaper(QWidget):
             return
 
         self.set_play_media(path)
-        self.media_play()
-
-        self.enable_auto_pause = True
+        self.manual_play()
 
         config_store.remember_recent(path)
         config_store.remember_wallpaper(self.screen_id, path)
@@ -1159,32 +1202,17 @@ class Tray:
 
     def play(self) -> None:
 
-        if self.wallpaper.current_media:
-
-            self.wallpaper.media_play()
-            self.wallpaper.enable_auto_pause = True
-            logger.info("manual - play")
+        self.wallpaper.manual_play()
 
 
     def pause(self) -> None:
 
-        if self.wallpaper.current_media:
-
-            if self.wallpaper.current_media.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS:
-
-                if self.wallpaper.play_state == "play":
-
-                    self.wallpaper.media_pause()
-
-        self.wallpaper.enable_auto_pause = False
-        logger.info("manual - pause")
+        self.wallpaper.manual_pause()
 
 
     def stop(self) -> None:
 
-        self.wallpaper.media_stop()
-        self.wallpaper.enable_auto_pause = False
-        logger.info("manual - stop")
+        self.wallpaper.manual_stop()
 
 
     def refresh_language_menu(self) -> None:
