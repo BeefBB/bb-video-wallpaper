@@ -295,6 +295,7 @@ class Wallpaper(QWidget):
 
         # 正在重建
         self.is_recreating = False
+        # 重掛失敗重試次數
         self.reattach_retry_count = 0
         # 正在退出
         self.is_exiting = False
