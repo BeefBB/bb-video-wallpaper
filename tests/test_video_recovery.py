@@ -44,7 +44,7 @@ def run_host() -> None:
     app.exec()
 
 
-def run_recovery_probe(media: Path) -> None:
+def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
 
     import win32con
     import win32gui
@@ -66,7 +66,6 @@ def run_recovery_probe(media: Path) -> None:
     # python-vlc 動態建立列舉成員, 以名稱查取並註明型別
     playing_state: vlc.State = getattr(vlc.State, "Playing")
     paused_state: vlc.State = getattr(vlc.State, "Paused")
-    playing_event: vlc.EventType = getattr(vlc.EventType, "MediaPlayerPlaying")
 
     app = QApplication([])
     app.setQuitOnLastWindowClosed(False)
@@ -158,18 +157,29 @@ def run_recovery_probe(media: Path) -> None:
             assert player.get_time() >= saved_time - 250, "播放進度未恢復"
             print(f"PASS {state}: vout={player.has_vout()}, time={player.get_time()}", flush=True)
 
+        old_hwnd = int(wallpaper.winId())
+        host_process.terminate()
+        host_process.wait(timeout=5)
+        wait_until(lambda: not win32gui.IsWindow(old_hwnd))
+        with mock.patch.object(namespace["logger"], "exception") as cleanup_error:
+            if quit_application:
+                app.aboutToQuit.connect(wallpaper.shutdown)
+                QTimer.singleShot(0, app.quit)
+                app.exec()
+            else:
+                wallpaper.shutdown()
+            wallpaper.shutdown()
+            cleanup_error.assert_not_called()
+        assert wallpaper.is_exiting and wallpaper.desktop_events is None
+        assert not wallpaper.reattach_timer.isActive()
+        assert not wallpaper.check_auto_pause_timer.isActive()
+        assert not wallpaper.fullscreen_detection_timer.isActive()
+        print("PASS shutdown: lost host, repeated cleanup", flush=True)
+
     finally:
-        # 先停止仍綁定於有效測試 HWND 的播放器, 再清理原生視窗與父程序
+        # 桌布自行停止輸出並釋放資源, 父程序由測試清理
         if wallpaper is not None:
-            wallpaper.is_exiting = True
-            wallpaper.reattach_timer.stop()
-            wallpaper.player_events.event_detach(playing_event)
-            wallpaper.instance_vlc_player.stop()
-            wallpaper.instance_image.close()
-            wallpaper.desktop_events.destroy()
-            wallpaper.destroy()
-            wallpaper.instance_vlc_player.release()
-            wallpaper.instance_vlc.release()
+            wallpaper.shutdown()
         for process in hosts:
             if process.poll() is None:
                 process.terminate()
@@ -197,20 +207,27 @@ class VideoRecoveryTests(unittest.TestCase):
                  "-t", "20", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(media)],
                 check=True, capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW,
             )
-            result = subprocess.run(
-                [sys.executable, "-X", "utf8", __file__, "--probe", str(media)], cwd=ROOT,
-                capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=30, creationflags=subprocess.CREATE_NO_WINDOW,
-            )
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn("PASS play:", result.stdout)
-            self.assertIn("PASS pause:", result.stdout)
+            for quit_application in (False, True):
+                with self.subTest(quit_application=quit_application):
+                    command = [sys.executable, "-X", "utf8", __file__, "--probe", str(media)]
+                    if quit_application:
+                        command.append("--quit")
+
+                    result = subprocess.run(
+                        command, cwd=ROOT,
+                        capture_output=True, text=True, encoding="utf-8", errors="replace",
+                        timeout=30, creationflags=subprocess.CREATE_NO_WINDOW,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("PASS play:", result.stdout)
+                    self.assertIn("PASS shutdown:", result.stdout)
+                    self.assertIn("PASS pause:", result.stdout)
 
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--host":
         run_host()
     elif len(sys.argv) > 1 and sys.argv[1] == "--probe":
-        run_recovery_probe(Path(sys.argv[2]))
+        run_recovery_probe(Path(sys.argv[2]), quit_application="--quit" in sys.argv[3:])
     else:
         unittest.main()

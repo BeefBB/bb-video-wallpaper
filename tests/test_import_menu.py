@@ -181,6 +181,21 @@ class ImportMenuTests(unittest.TestCase):
         self.namespace["import_media"].assert_not_called()
 
 
+    def test_exit_delegates_cleanup_and_quits_even_if_shutdown_fails(self):
+
+        operations = mock.Mock()
+        operations.attach_mock(self.tray.wallpaper.shutdown, "shutdown")
+        operations.attach_mock(self.tray.app.quit, "quit")
+
+        for error in (None, RuntimeError("shutdown failed")):
+            with self.subTest(error=error):
+                operations.reset_mock()
+                self.tray.wallpaper.shutdown.side_effect = error
+                self.tray.exit()
+
+                self.assertEqual(operations.mock_calls, [mock.call.shutdown(), mock.call.quit()])
+
+
     def test_startup_toggle_passes_entry_point_to_task_creation(self):
 
         self.tray.toggle_startup(True)

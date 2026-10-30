@@ -164,6 +164,7 @@ class ImageDisplay:
         self.current_image: Path | None = None
         self.visible = False
         self.hwnd = 0
+        self.deleteLater = mock.Mock()
 
 
     def set_image(self, path: Path) -> None:
@@ -251,7 +252,7 @@ class PlaybackStateTests(unittest.TestCase):
             "QEventLoop": QEventLoop,
             "QThread": QThread,
             "DesktopEventWindow": HeadlessDesktopEvents,
-            # 建立真正的計時器, 靜態 singleShot 保留替身以略過啟動等待
+            # 建立真正的計時器, 啟動等待由測試停止
             "QTimer": mock.Mock(side_effect=QTimer),
             "vlc": vlc,
             "bb_image_display": image_module,
@@ -285,6 +286,7 @@ class PlaybackStateTests(unittest.TestCase):
         self.wallpaper = wallpaper_class()
         self.addCleanup(self.dispose_wallpaper)
         self.wallpaper.check_auto_pause_timer.stop()
+        self.wallpaper.fullscreen_detection_timer.stop()
 
         tray_class = self.namespace["Tray"]
         self.tray = tray_class.__new__(tray_class)
@@ -576,7 +578,7 @@ class PlaybackStateTests(unittest.TestCase):
         self.player.pause_calls.clear()
 
         with mock.patch.object(self.player, "stop", side_effect=stop_waiting_for_ui):
-            self.wallpaper.stop_video_for_reattach()
+            self.wallpaper.stop_video_output()
 
         self.assertTrue(processed.is_set())
         self.assertEqual(self.player.pause_calls, [])
@@ -1071,7 +1073,7 @@ class PlaybackStateTests(unittest.TestCase):
         self.assertFalse(self.wallpaper.reattach_timer.isActive())
         self.namespace["check_desktop_ready"].assert_called_once_with()
         self.wallpaper.attach_to_desktop.assert_not_called()
-        self.wallpaper.destroy.assert_not_called()
+        self.wallpaper.destroy.assert_called_once_with(True, True)
         self.namespace["logger"].exception.assert_not_called()
 
 
@@ -1114,7 +1116,7 @@ class PlaybackStateTests(unittest.TestCase):
 
         self.assertFalse(self.wallpaper.reattach_timer.isActive())
         self.wallpaper.attach_to_desktop.assert_not_called()
-        self.wallpaper.destroy.assert_not_called()
+        self.wallpaper.destroy.assert_called_once_with(True, True)
         self.assertEqual(self.player.state, "released")
         self.namespace["logger"].exception.assert_not_called()
 
@@ -1169,6 +1171,157 @@ class PlaybackStateTests(unittest.TestCase):
                 self.instance_image.set_image.assert_not_called()
                 self.namespace["config_store"].save.assert_not_called()
                 self.namespace["logger"].exception.assert_not_called()
+
+
+    def test_shutdown_is_idempotent_and_blocks_late_operations_without_quitting(self):
+
+        self.start_loading()
+        self.wallpaper.pending_reattach_time = 4321
+        self.wallpaper.attach_to_desktop.reset_mock()
+        self.wallpaper.reattach_timer.start(10000)
+        self.wallpaper.check_auto_pause_timer.start(10000)
+        self.wallpaper.fullscreen_detection_timer.start(10000)
+        listener = self.wallpaper.desktop_events
+        instance = self.wallpaper.instance_vlc
+
+        with (
+            mock.patch.object(self.player, "stop", wraps=self.player.stop) as stop,
+            mock.patch.object(self.player, "release", wraps=self.player.release) as release,
+        ):
+            operations = mock.Mock()
+            operations.attach_mock(stop, "stop")
+            operations.attach_mock(self.instance_image.close, "close_image")
+            operations.attach_mock(release, "release_player")
+            operations.attach_mock(instance.release, "release_instance")
+            operations.attach_mock(self.wallpaper.destroy, "destroy")
+
+            self.wallpaper.shutdown()
+            self.wallpaper.shutdown()
+            self.wallpaper.media_play()
+            self.wallpaper.media_pause()
+            self.wallpaper.media_stop()
+            self.wallpaper.set_play_media(self.media_path)
+            self.attach_to_desktop(self.wallpaper)
+            self.wallpaper.enable_fullscreen_detection()
+            self.wallpaper.check_auto_pause()
+            self.wallpaper.on_taskbar_created()
+            self.wallpaper.target_screen.set_geometry(QRect(0, 0, 2560, 1440))
+            self.app.processEvents()
+
+            self.assertEqual(operations.mock_calls, [
+                mock.call.stop(),
+                mock.call.close_image(),
+                mock.call.release_player(),
+                mock.call.release_instance(),
+                mock.call.destroy(True, True),
+            ])
+
+        self.assertTrue(self.wallpaper.is_exiting)
+        self.assertIsNone(self.wallpaper.current_media)
+        self.assertIsNone(self.wallpaper.pending_reattach_time)
+        self.assertEqual(self.wallpaper.play_state, "stop")
+        self.assertEqual(self.player.state, "released")
+        self.assertEqual(self.player.callbacks, {})
+        self.assertFalse(self.wallpaper.fullscreen_detection_ready)
+        self.assertFalse(any(timer.isActive() for timer in self.wallpaper.findChildren(QTimer)))
+        self.assertIsNone(self.wallpaper.desktop_events)
+        listener.close.assert_called_once_with()
+        self.instance_image.set_hwnd.assert_called_with(0)
+        self.instance_image.deleteLater.assert_called_once_with()
+        self.wallpaper.unregister_power_notification.assert_called_once_with()
+        self.wallpaper.attach_to_desktop.assert_not_called()
+        self.namespace["is_any_fullscreen"].assert_not_called()
+        self.tray.app.quit.assert_not_called()
+        self.namespace["logger"].exception.assert_not_called()
+
+
+    def test_shutdown_continues_after_listener_stop_image_and_player_release_failures(self):
+
+        listener = self.wallpaper.desktop_events
+        listener.close.side_effect = RuntimeError("listener close failed")
+        self.instance_image.close.side_effect = RuntimeError("image close failed")
+
+        with (
+            mock.patch.object(self.player, "stop", side_effect=RuntimeError("stop failed")),
+            mock.patch.object(self.player, "release", side_effect=RuntimeError("release failed")),
+        ):
+            self.wallpaper.shutdown()
+
+        self.wallpaper.unregister_power_notification.assert_called_once_with()
+        self.instance_image.set_hwnd.assert_called_with(0)
+        self.instance_image.deleteLater.assert_called_once_with()
+        self.wallpaper.instance_vlc.release.assert_called_once_with()
+        self.wallpaper.hide.assert_called_once_with()
+        self.wallpaper.destroy.assert_called_once_with(True, True)
+        self.assertIsNone(self.wallpaper.desktop_events)
+        self.assertEqual(self.player.callbacks, {})
+        self.assertEqual(self.namespace["logger"].exception.call_count, 4)
+
+
+    def test_shutdown_during_reattach_reuses_stop_and_prevents_rebinding(self):
+
+        self.start_loading()
+        self.wallpaper.attach_to_desktop.reset_mock()
+        continue_stop = threading.Event()
+        original_stop = self.player.stop
+
+        def stop_waiting_for_shutdown():
+
+            if not continue_stop.wait(2):
+                raise RuntimeError("shutdown was not processed")
+            original_stop()
+
+        def shutdown_during_stop():
+
+            continue_stop.set()
+            self.wallpaper.shutdown()
+
+        QTimer.singleShot(0, shutdown_during_stop)
+
+        with mock.patch.object(self.player, "stop", side_effect=stop_waiting_for_shutdown) as stop:
+            self.wallpaper.reattach_to_desktop()
+
+        stop.assert_called_once_with()
+        self.assertTrue(self.wallpaper.is_exiting)
+        self.assertFalse(self.wallpaper.is_recreating)
+        self.assertEqual(self.player.state, "released")
+        self.wallpaper.attach_to_desktop.assert_not_called()
+        self.wallpaper.create.assert_not_called()
+        self.wallpaper.destroy.assert_called_once_with(True, True)
+        self.namespace["logger"].exception.assert_not_called()
+
+
+    def test_shutdown_does_not_affect_another_wallpaper(self):
+
+        other_player = DeferredPlayer()
+        other_instance = mock.Mock()
+        other_instance.media_player_new.return_value = other_player
+        other_image = mock.Mock(wraps=ImageDisplay())
+        self.namespace["vlc"].Instance.return_value = other_instance
+        self.namespace["bb_image_display"].Instance.return_value = other_image
+        other_screen = HeadlessScreen(QRect(1920, 0, 2560, 1440))
+        other = self.namespace["Wallpaper"](target_screen=other_screen)
+        self.addCleanup(other.deleteLater)
+        self.addCleanup(other.shutdown)
+        other.set_play_media(self.media_path)
+        other.media_play()
+        other.media_pause()
+        other_image.close.reset_mock()
+
+        self.wallpaper.shutdown()
+        other_player.finish_loading()
+        self.app.processEvents()
+        other_screen.set_geometry(QRect(1920, 0, 1440, 2560))
+
+        self.assertEqual(other_player.state, "paused")
+        self.assertFalse(other.is_exiting)
+        self.assertTrue(other.check_auto_pause_timer.isActive())
+        self.assertTrue(other.reattach_timer.isActive())
+        other_instance.release.assert_not_called()
+        other_image.close.assert_not_called()
+        other.destroy.assert_not_called()
+        self.tray.app.quit.assert_not_called()
+        self.namespace["logger"].exception.assert_not_called()
 
 
     def test_image_exit_releases_image_and_vlc(self):
