@@ -1,170 +1,142 @@
 # 專案腳本說明
 
-這份文件介紹專案內各個腳本的用途, 執行方式及使用順序. 以下指令以 Windows PowerShell 為例, 工作目錄為專案根目錄
+這份文件依準備環境, 日常開發, 測試與發佈的流程, 說明各腳本的用途及操作方式. 以下指令以 Windows PowerShell 為例, 工作目錄為專案根目錄
 
-## 快速查找
+## 準備環境與啟動
 
-想做的事                       | 使用的腳本                                                         | 結果
----                            | ---                                                                | ---
-從原始碼啟動桌布程式           | [run.bat](./run.bat)                                               | 開啟桌布與系統匣選單
-修改桌布, 選單或匯入介面       | [bb-video-wallpaper.py](./bb-video-wallpaper.py)                   | 主程式的實作
-修改媒體匯入                   | [media_import.py](./media_import.py)                               | 去重, 複製, 容量檢查與取消
-修改桌布預覽                   | [media_preview.py](./media_preview.py)                             | 懸停狀態, 縮圖顯示與預覽視窗定位
-修改 Windows 整合              | [windows_integration.py](./windows_integration.py)                 | 桌面掛載, 視窗偵測, 電源通知與開機排程
-修改設定驗證與語言載入         | [config.py](./config.py)                                           | 設定模組
-修改圖片顯示                   | [bb_image_display.py](./bb_image_display.py)                       | Qt 圖片輸出與子視窗管理
-修改縮圖產生與快取             | [thumbnails.py](./thumbnails.py)                                   | 縮圖模組
-從完整 VLC 製作精簡版          | [create-vlc-lite.ps1](./create-vlc-lite.ps1)                       | 產生專案根目錄下的 `VLC-lite/`
-將 Python 程式打包成執行檔     | [build.bat](./build.bat)                                           | 產生 `dist/BB Video Wallpaper/`
-將打包結果製作成安裝程式       | [BB Video Wallpaper.iss](./installer/BB%20Video%20Wallpaper.iss)   | 在 `installer/` 產生安裝檔
-檢查設定檔處理                 | [test_config.py](./tests/test_config.py)                           | 執行設定檔相關測試
-檢查媒體匯入                   | [test_media_import.py](./tests/test_media_import.py)               | 檢查容量, 去重, 命名, 進度與取消
-檢查匯入選單                   | [test_import_menu.py](./tests/test_import_menu.py)                 | 檢查選單排列, 進度訊號, 取消與結束狀態
-檢查預覽選單                   | [test_media_preview.py](./tests/test_media_preview.py)             | 檢查懸停時序, 過期縮圖, Qt 訊號與螢幕邊界
-檢查播放與暫停狀態             | [test_playback_state.py](./tests/test_playback_state.py)           | 檢查圖片與影片切換, 載入時序及桌布重掛
-檢查桌面重建通知               | [test_desktop_events.py](./tests/test_desktop_events.py)           | 隱藏頂層視窗接收通知及桌布容器銷毀後的存活
-檢查影片重掛恢復               | [test_video_recovery.py](./tests/test_video_recovery.py)           | 實際 VLC 在父視窗程序結束後恢復影片輸出
-檢查 Windows 整合              | [test_windows_integration.py](./tests/test_windows_integration.py) | 模擬掛載與電源及排程介面, 隱藏視窗驗證備援容器
-檢查圖片原生視窗               | [test_image_display.py](./tests/test_image_display.py)             | 檢查圖片讀取, 顯示, 視窗重綁與釋放
-檢查縮圖快取                   | [test_thumbnails.py](./tests/test_thumbnails.py)                   | 執行快取相關測試
-檢查實際影片縮圖比例           | [test_video_thumbnails.py](./tests/test_video_thumbnails.py)       | 使用 VLC-lite 解碼合成影片並檢查結果
+需要 Windows, PATH 中可使用的 `python`, 以及完整的 Windows VLC 發行包. Python 與 VLC 的架構必須相容, 例如皆使用 64 位元版本; 只有 Python 套件仍不足以播放影片
 
-## 建議使用順序
+### 產生精簡版 VLC
 
-首次準備專案時:
-
-1. 安裝 Python, 將完整的 Windows VLC 放入專案根目錄的 `VLC/`
-2. 執行 [create-vlc-lite.ps1](./create-vlc-lite.ps1), 產生精簡版 VLC
-3. 執行 [run.bat](./run.bat), 建立 Python 環境並啟動程式
-4. 開發或修改功能後, 執行測試
-5. 要發佈時, 執行 [build.bat](./build.bat)
-6. 使用 Inno Setup 編譯 [BB Video Wallpaper.iss](./installer/BB%20Video%20Wallpaper.iss)
-
-平常修改 Python 程式後, 通常只需要重新啟動程式與執行測試. 更換 VLC 版本或調整保留的模組時, 才需要重新產生精簡版; 要更新發佈檔時, 則重新打包並製作安裝檔
-
-## 啟動程式
-
-### run.bat
-
-[run.bat](./run.bat) 是從原始碼啟動程式的入口, 可以直接雙擊, 或在 PowerShell 執行:
-
-```powershell
-.\run.bat
-```
-
-它依序處理下列工作:
-
-1. 檢查管理員權限, 必要時顯示提權提示並重新啟動自身
-2. 將工作目錄切換到腳本所在的專案根目錄
-3. 如果 `.venv/` 不存在, 透過 PATH 中的 `python` 建立虛擬環境, 並安裝 [requirements.txt](./requirements.txt) 中的套件
-4. 使用虛擬環境內的 Python 執行 [bb-video-wallpaper.py](./bb-video-wallpaper.py)
-5. 程式退出後保留命令視窗, 方便查看輸出
-
-**環境建立只在 `.venv/` 不存在時執行. ** 已有虛擬環境時, 更新套件需求後需自行執行:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r .\requirements.txt
-```
-
-Python 與 VLC 的架構需要相容, 例如搭配使用 64 位元版本. 只有安裝 Python 套件仍不足以播放影片, 還需要 VLC 的 DLL 與外掛
-
-### bb-video-wallpaper.py
-
-[bb-video-wallpaper.py](./bb-video-wallpaper.py) 是主程式, 包含:
-
-- Windows 桌布視窗, VLC 影片播放器與 Qt 圖片輸出整合
-- 系統匣選單, 語言與最近使用紀錄
-- 媒體匯入介面與背景執行緒
-- 自動暫停, 螢幕電源事件與開機啟動選項
-- 獨立隱藏視窗接收工作列重建通知, 觸發桌布恢復
-- 路徑, 日誌與 VLC 初始化
-
-另有六個由主程式使用的模組:
-
-- [config.py](./config.py): `ConfigStore` 負責設定初始化, 驗證, 讀寫與語言檔載入, 所需路徑由主程式傳入
-- [media_import.py](./media_import.py): 負責內容去重, 分塊複製, 容量檢查, 命名衝突與取消清理; 匯入目錄及翻譯函式由主程式傳入, 透過回呼回報進度與查詢取消狀態
-- [media_preview.py](./media_preview.py): `MediaPreviewMenu` 負責懸停延遲, 預覽模式, 縮圖訊號與視窗定位; 媒體目錄, 縮圖目錄與載入圖片路徑由主程式傳入, 主程式在退出時停止縮圖工作
-- [windows_integration.py](./windows_integration.py): 負責單一實例 Mutex, 螢幕識別, 桌面就緒檢查, 桌布掛載, 虛擬桌面與最大化視窗偵測, 電源通知及開機排程; 建立排程時由主程式傳入執行檔路徑
-- [bb_image_display.py](./bb_image_display.py): 共用主程式的 `QApplication`, 以 `Instance` 接收桌布 HWND 並顯示圖片; 主程式管理桌布掛載與媒體切換, 模組管理圖片及內部子視窗
-- [thumbnails.py](./thumbnails.py): 負責支援的媒體格式, 縮圖產生, 快取驗證與背景排隊; 預覽選單將媒體與快取目錄傳給 `ThumbnailThread`
-
-六個模組都不反向匯入主程式, 匯入時不會建立使用者資料夾或設定日誌. Windows 模組只在呼叫相關函式時建立 Mutex, 掛載桌面或管理排程. 預覽模組只在建立選單時建立 Qt 元件與縮圖工作物件. 影片縮圖只在實際使用時匯入 VLC, 因此主程式仍先完成 DLL 載入設定; 媒體匯入, 預覽選單, Windows 整合, 圖片顯示與圖片縮圖測試不需初始化 VLC
-
-虛擬環境準備完成後, 也可以先以系統管理員身分開啟 PowerShell, 切換到專案根目錄後直接執行:
-
-```powershell
-.\.venv\Scripts\python.exe .\bb-video-wallpaper.py
-```
-
-主程式會優先載入同層的 `VLC-lite/`, 找不到時才使用 `VLC/`. 兩個資料夾同時存在時, 更換完整 VLC 並不會切換目前使用的精簡版
-
-`--task` 是開機排程使用的內部參數, 一般手動啟動不需要加上
-
-程式資料存放在 `%LOCALAPPDATA%\BB\BB Video Wallpaper\`:
-
-路徑          | 用途
----           | ---
-`config.json` | 語言, 自動暫停選項, 各螢幕桌布與共用最近使用紀錄
-`video/`      | 媒體資料夾, 匯入的檔案放在其下的 `_imports/` 子目錄
-`thumbnails/` | 縮圖快取
-`log/log.log` | 日誌, 達到上限後輪替
-
-## 準備精簡版 VLC
-
-### create-vlc-lite.ps1
-
-[create-vlc-lite.ps1](./create-vlc-lite.ps1) 從專案根目錄的完整 `VLC/` 複製需要的檔案, 產生 `VLC-lite/`
-
-來源目錄至少應包含完整 VLC 發行包中的 DLL, 授權文件, `vlc-cache-gen.exe` 與 `plugins/`, 例如:
-
-```text
-專案根目錄/
-├─ VLC/
-│  ├─ libvlc.dll
-│  ├─ libvlccore.dll
-│  ├─ vlc-cache-gen.exe
-│  ├─ COPYING.txt
-│  └─ plugins/
-└─ create-vlc-lite.ps1
-```
-
-執行方式:
+將完整 VLC 放入專案根目錄的 `VLC/`, 保留 DLL, 授權文件, `vlc-cache-gen.exe` 與 `plugins/` 等原始內容, 再執行 [create-vlc-lite.ps1](./create-vlc-lite.ps1):
 
 ```powershell
 .\create-vlc-lite.ps1
 ```
 
-如果 PowerShell 的執行原則阻擋這個腳本, 可以只對這次執行指定:
+腳本依複製清單保留播放所需的 DLL 與外掛, 包含處理影片旋轉的 `libtransform_plugin.dll`, 輸出至 `VLC-lite/`, 並重新產生外掛快取及顯示容量差異. 保留清單以腳本中的規則為準
+
+**執行時會刪除既有的 `VLC-lite/`, 包括手動加入的檔案**. 需要長期保留的模組應加入複製規則. 更換 VLC 版本或調整規則後, 需重新產生精簡版並驗證播放與影片縮圖
+
+若 PowerShell 執行原則阻擋腳本, 可只對這次執行指定:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 ```
 
-腳本會先刪除既有的 `VLC-lite/`, 再建立新的輸出. 手動放進輸出目錄的檔案也會被移除; 需要長期保留的模組應加入腳本的複製規則
+### 啟動程式
 
-目前保留的外掛類別為 `access`, `codec`, `d3d11`, `d3d9`, `demux`, `packetizer`, `video_chroma` 與 `video_output`, 另外從 `video_filter` 保留 `libtransform_plugin.dll`, 供記憶體影片輸出處理旋轉. 複製完成後會重新產生外掛快取, 並顯示精簡前後的容量
+雙擊 [run.bat](./run.bat), 或在 PowerShell 執行:
 
-調整保留清單後, 需重新執行腳本, 並用新產生的精簡版驗證播放與縮圖. 現有影片測試涵蓋一般比例, 非正方形像素, 以及 90/180/270 度旋轉後的尺寸與實際畫面方向
+```powershell
+.\run.bat
+```
 
-## 打包與製作安裝程式
+腳本會檢查管理員權限, 必要時提示提權, 再切換到專案根目錄. 首次執行會建立 `.venv/` 並安裝 [requirements.txt](./requirements.txt) 中的套件, 然後以虛擬環境啟動 [bb-video-wallpaper.py](./bb-video-wallpaper.py). 程式退出後會保留命令視窗, 方便查看輸出
 
-### build.bat
+[run.bat](./run.bat) 與 [build.bat](./build.bat) 都只在 `.venv/` 不存在時建立環境並安裝套件. 更新套件需求後, 已有的環境需手動更新:
 
-[build.bat](./build.bat) 使用 PyInstaller 產生可執行的程式目錄
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r .\requirements.txt
+```
+
+環境準備完成後, 也可在以系統管理員身分開啟的 PowerShell 直接執行:
+
+```powershell
+.\.venv\Scripts\python.exe .\bb-video-wallpaper.py
+```
+
+主程式優先使用同層的 `VLC-lite/`, 找不到時才使用 `VLC/`. 兩者同時存在時, 更新完整 VLC 後仍需重新產生精簡版. `--task` 是開機排程使用的內部參數, 手動啟動不需要加上
+
+### 執行時資料
+
+使用者資料存放在 `%LOCALAPPDATA%\BB\BB Video Wallpaper\`:
+
+路徑          | 用途
+---           | ---
+`config.json` | 語言, 自動暫停選項, 各螢幕桌布與共用最近使用紀錄
+`video/`      | 媒體資料夾, 匯入檔案存放在其下的 `_imports/`
+`thumbnails/` | 縮圖快取
+`log/log.log` | 日誌, 達到上限後輪替
+
+## 日常開發
+
+依要修改的功能查找實作:
+
+檔案                                               | 職責
+---                                                | ---
+[bb-video-wallpaper.py](./bb-video-wallpaper.py)   | 主程式組裝, VLC 初始化, 桌布生命週期, 系統匣與匯入介面, 自動暫停及桌面重建恢復
+[config.py](./config.py)                           | 設定初始化, 驗證與讀寫, 語言檔載入
+[media_import.py](./media_import.py)               | 媒體內容去重, 分塊複製, 容量檢查, 命名衝突與取消清理
+[media_preview.py](./media_preview.py)             | 預覽選單, 懸停時序, 縮圖訊號與預覽視窗定位
+[windows_integration.py](./windows_integration.py) | 單一實例, 螢幕識別, 桌面掛載與就緒檢查, 虛擬桌面及最大化視窗偵測, 電源通知與開機排程
+[bb_image_display.py](./bb_image_display.py)       | Qt 圖片輸出, 原生子視窗管理與重綁
+[thumbnails.py](./thumbnails.py)                   | 支援的媒體格式, 縮圖產生, 快取驗證與背景排隊
+
+模組整合時需維持以下邊界:
+
+- 模組不反向匯入主程式, 匯入時不建立使用者資料夾或設定日誌. 路徑, 翻譯函式與進度及取消回呼由呼叫端傳入; Windows 的 Mutex, 桌面掛載與排程操作也只在呼叫相關函式時執行
+- Qt 元件共用主程式的 `QApplication`. 主程式負責桌布掛載, 媒體切換與退出時停止縮圖工作; 圖片模組管理內部子視窗, 預覽模組管理選單及縮圖顯示
+- 主程式先完成 VLC DLL 載入設定. 影片縮圖只在實際使用時匯入 VLC, 其他模組測試可獨立執行
+
+日常修改後, 重新啟動程式並執行相關測試即可. 更動 VLC 時需重建精簡版, 準備發佈時則接著打包與製作安裝檔
+
+## 執行測試
+
+測試使用 Python 內建的 `unittest`, 在 Windows 與專案套件準備完成後執行:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+只檢查一個範圍時, 可從下表選擇測試檔案單獨執行, 例如:
+
+```powershell
+.\.venv\Scripts\python.exe .\tests\test_config.py
+```
+
+### 測試範圍
+
+測試腳本                                                           | 檢查重點
+---                                                                | ---
+[test_config.py](./tests/test_config.py)                           | 預設設定, 欄位與路徑驗證, 各螢幕桌布及紀錄, 語言載入與讀寫失敗處理
+[test_media_import.py](./tests/test_media_import.py)               | 去重, 命名, 容量檢查, 進度與取消後清理
+[test_import_menu.py](./tests/test_import_menu.py)                 | 匯入選單排列, 主執行緒進度更新, 取消及退出處理
+[test_media_preview.py](./tests/test_media_preview.py)             | 懸停時序, 預覽模式, 過期縮圖, Qt 訊號與螢幕邊界
+[test_playback_state.py](./tests/test_playback_state.py)           | 媒體切換與暫停, 載入時序, 桌布重掛排程, 重試及退出取消
+[test_desktop_events.py](./tests/test_desktop_events.py)           | 隱藏頂層視窗接收桌面重建通知, 桌布容器銷毀後仍能接收通知
+[test_video_recovery.py](./tests/test_video_recovery.py)           | 實際 VLC 影片輸出失效後的重建, 播放及暫停狀態與進度恢復
+[test_windows_integration.py](./tests/test_windows_integration.py) | 模擬掛載, 螢幕識別, 電源及排程 API, 以隱藏視窗驗證備援容器
+[test_image_display.py](./tests/test_image_display.py)             | 圖片讀取, 隱藏及顯示, 原生子視窗重綁與釋放
+[test_thumbnails.py](./tests/test_thumbnails.py)                   | 快取命名, 獨立性, 舊快取替換, 清理範圍與儲存失敗處理
+[test_video_thumbnails.py](./tests/test_video_thumbnails.py)       | 實際影片縮圖比例, 非正方形像素, 旋轉方向, 多影像軌, 取消及錯誤處理
+
+### 測試環境與執行影響
+
+一般測試使用暫存資料, 模擬 API 或隱藏的 Qt 元件, 不啟動桌布或改寫使用者設定. 預覽測試模擬游標與螢幕, 不移動實際滑鼠
+
+原生視窗測試只操作測試建立的視窗及程序. 桌面通知只送給測試視窗; 影片重掛測試會結束自己的畫面外父視窗程序, 確認 VLC 能恢復輸出. 這些測試不廣播訊息, 不重啟 Explorer, 不建立實際開機排程或改變使用者的桌面掛載
+
+影片重掛與影片縮圖測試另需專案內的 `VLC-lite/` 及 PATH 中的 `ffmpeg`. FFmpeg 僅用來產生測試短片, 程式的影片播放與縮圖仍使用 VLC. 缺少 Windows, VLC-lite 或 FFmpeg 時, 這兩組測試會顯示 `skipped`; 部分案例也可能因缺少指定編碼器而跳過, 檢查結果時需留意未執行的項目
+
+## 打包與發佈
+
+發佈順序為: 確認 VLC-lite 與測試結果, 使用 PyInstaller 打包, 再使用 Inno Setup 製作安裝檔
+
+### 打包程式
+
+先準備好 `VLC-lite/`, 再執行 [build.bat](./build.bat):
 
 ```powershell
 .\build.bat
 ```
 
-執行前, 先準備好 `VLC-lite/`. 腳本本身不會執行 VLC 精簡流程
+腳本不會執行 VLC 精簡流程. 它會依序:
 
-它會:
-
-1. 在 `.venv/` 不存在時建立環境並安裝套件
-2. 以 `--onedir`, `--noconsole`, `--uac-admin` 打包主程式, 並加入圖示及載入圖片; 直接匯入的 [config.py](./config.py), [media_import.py](./media_import.py), [media_preview.py](./media_preview.py), [windows_integration.py](./windows_integration.py), [bb_image_display.py](./bb_image_display.py) 與 [thumbnails.py](./thumbnails.py) 會一併納入
-3. 將 `VLC-lite/` 複製至輸出目錄, 發佈時改名為 `VLC/`, 另外在執行檔旁複製一份 `libvlc.dll`
-4. 複製語言檔案
-5. 清除根目錄下的 `build/` 與產生的 `BB Video Wallpaper.spec`
+1. 檢查 Python 虛擬環境, 必要時建立環境並安裝套件
+2. 以 PyInstaller 的 `--onedir`, `--noconsole`, `--uac-admin` 打包主程式, 一併納入直接匯入的模組, 圖示及載入圖片
+3. 複製 VLC-lite 至輸出目錄並改名為 `VLC/`, 另在執行檔旁複製一份 `libvlc.dll`, 再複製語言檔案
+4. 清除根目錄下的 `build/` 與產生的 `BB Video Wallpaper.spec`
 
 主要輸出結構:
 
@@ -181,95 +153,42 @@ dist/BB Video Wallpaper/
    └─ plugins/
 ```
 
-發佈時需要整個輸出目錄, 單獨複製 EXE 會缺少執行所需的檔案. 要製作安裝程式時, 接著執行下一步
+發佈時需要整個輸出目錄, 單獨複製 EXE 會缺少執行所需的檔案
 
-### installer/BB Video Wallpaper.iss
+### 製作安裝檔
 
-[BB Video Wallpaper.iss](./installer/BB%20Video%20Wallpaper.iss) 是 Inno Setup 的安裝程式定義檔
+[BB Video Wallpaper.iss](./installer/BB%20Video%20Wallpaper.iss) 是 Inno Setup 定義檔, 以打包完成的 `dist/BB Video Wallpaper/` 為輸入:
 
-使用方式:
+1. 確認打包結果已更新
+2. 發佈新版本時, 更新定義檔開頭的 `MyAppVersion`
+3. 使用 Inno Setup Compiler 開啟定義檔並執行 Compile
 
-1. 先完成 [build.bat](./build.bat) 的打包
-2. 在 Inno Setup Compiler 開啟這份定義檔
-3. 發佈新版本時, 確認檔案開頭的 `MyAppVersion` 已更新
-4. 執行 Compile
-
-如果 `ISCC.exe` 已在 PATH 中, 也可使用:
+若 `ISCC.exe` 已在 PATH 中, 也可執行:
 
 ```powershell
 ISCC.exe '.\installer\BB Video Wallpaper.iss'
 ```
 
-編譯器會將 `dist/BB Video Wallpaper/` 的內容製作成安裝檔, 輸出至 `installer/`, 名稱為 `bb-video-wallpaper-版本號-setup.exe`, 版本號中的句點會改成連字號
+安裝檔輸出至 `installer/`, 名稱為 `bb-video-wallpaper-版本號-setup.exe`, 版本號中的句點改為連字號. 編譯安裝檔不會重新打包 Python 程式
 
-這份定義檔也設定安裝位置, 開始功能表捷徑, 選用的桌面捷徑及解除安裝資訊. 它不會重新打包 Python 程式; 編譯前需確認輸入目錄已更新. 目前安裝完成後自動啟動程式的區段是註解狀態
+安裝行為集中定義在同一份定義檔:
 
-解除安裝時會移除 `BBVideoWallpaper` 開機排程, 使用者資料仍保留在 `%LOCALAPPDATA%\BB\BB Video Wallpaper\`
+項目       | 行為
+---        | ---
+安裝語言   | 支援繁體中文, 簡體中文, 英文與日文, 使用編譯器隨附的語言檔. 首次依 Windows 顯示語言預選, 不支援時使用英文; 升級時預選上次語言, 並提供語言選擇視窗
+捷徑       | 建立開始功能表捷徑, 桌面捷徑可選. 名稱隨安裝語言切換, 升級時清除本程式已知的舊語言捷徑
+安裝後啟動 | 自動啟動區段目前為註解狀態
+解除安裝   | 移除 `BBVideoWallpaper` 開機排程, 保留使用者資料
 
-同一份安裝檔支援繁體中文, 簡體中文, 英文與日文, 使用 Inno Setup 編譯器隨附的語言檔. 首次安裝依 Windows 顯示語言預選, 不支援時使用英文; 升級時預選上次安裝使用的語言, 並提供語言選擇視窗. 開始功能表與桌面捷徑名稱會隨安裝語言切換, 升級時清除本程式已知的舊語言捷徑
-
-主程式保留既有的語言設定. 未指定語言時, 優先使用安裝語言; 安裝語言無法讀取或不受支援時使用系統語言, 系統語言也不受支援時則使用繁體中文
-
-## 執行測試
-
-測試使用 Python 內建的 `unittest`. 在虛擬環境與套件準備完成後, 執行全部測試:
-
-```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
-```
-
-也可以單獨執行一份測試:
-
-```powershell
-.\.venv\Scripts\python.exe .\tests\test_config.py
-.\.venv\Scripts\python.exe .\tests\test_media_import.py
-.\.venv\Scripts\python.exe .\tests\test_import_menu.py
-.\.venv\Scripts\python.exe .\tests\test_media_preview.py
-.\.venv\Scripts\python.exe .\tests\test_playback_state.py
-.\.venv\Scripts\python.exe .\tests\test_desktop_events.py
-.\.venv\Scripts\python.exe .\tests\test_video_recovery.py
-.\.venv\Scripts\python.exe .\tests\test_windows_integration.py
-.\.venv\Scripts\python.exe .\tests\test_image_display.py
-.\.venv\Scripts\python.exe .\tests\test_thumbnails.py
-.\.venv\Scripts\python.exe .\tests\test_video_thumbnails.py
-```
-
-測試腳本                                                           | 檢查內容                                                               | 額外需求
----                                                                | ---                                                                    | ---
-[test_config.py](./tests/test_config.py)                           | 缺檔初始化, 預設設定, 無效欄位, 路徑與紀錄驗證, 語言載入, 寫入失敗處理 |
-[test_media_import.py](./tests/test_media_import.py)               | 同名匯入, 長檔名, 內容去重, 磁碟容量, 進度與取消後清理                 |
-[test_import_menu.py](./tests/test_import_menu.py)                 | 匯入前後選單排列, 主執行緒進度更新, 取消, 錯誤與退出處理               | PySide6
-[test_media_preview.py](./tests/test_media_preview.py)             | 懸停延遲, 預覽模式, 過期縮圖, Qt 主執行緒與螢幕邊界                    | PySide6
-[test_playback_state.py](./tests/test_playback_state.py)           | 媒體切換與暫停, Qt 執行緒, 重掛排程與桌面就緒等待, 重試及退出取消      | PySide6
-[test_desktop_events.py](./tests/test_desktop_events.py)           | 隱藏頂層視窗接收 TaskbarCreated, 桌布容器銷毀後仍能接收通知            | PySide6
-[test_video_recovery.py](./tests/test_video_recovery.py)           | 真正 VLC 影片輸出失效後恢復播放, 暫停及進度, 子程序逾時保護            | PySide6, 專案內的 VLC-lite, FFmpeg
-[test_windows_integration.py](./tests/test_windows_integration.py) | 掛載分支與父層診斷, 診斷容錯, 備援容器 alpha, 虛擬桌面及電源與排程     |
-[test_image_display.py](./tests/test_image_display.py)             | 圖片讀取失敗保留畫面, 原生子視窗, 隱藏後再顯示, 重綁與釋放             | PySide6
-[test_thumbnails.py](./tests/test_thumbnails.py)                   | 長檔名, 獨立快取, 舊快取替換, 清理範圍與儲存失敗處理                   | PySide6
-[test_video_thumbnails.py](./tests/test_video_thumbnails.py)       | 影片縮圖比例, 旋轉方向, 多影像軌, 取消及錯誤處理                       | 專案內的 VLC-lite, FFmpeg
-
-測試會在暫存目錄操作, 不會啟動桌布或改寫使用者設定
-
-桌面通知測試只對測試用隱藏視窗發送原生訊息, 不廣播給其他程式或重啟 Explorer
-
-影片重掛測試會結束自己的畫面外父視窗程序, 再確認 VLC 確實重建影片輸出與恢復進度; 不會重啟 Explorer 或操作使用者的桌布程序
-
-預覽測試使用隱藏的 Qt 元件與模擬游標及螢幕, 不移動實際滑鼠
-
-Windows 整合測試以模擬 API 檢查掛載與電源及排程, 另建立隱藏的獨立父視窗驗證備援容器的 alpha 與類別重用, 不建立實際排程或改變桌面掛載
-
-圖片顯示測試建立隱藏的 Qt 目標視窗, 驗證實際 Windows 子視窗生命週期
-
-影片測試會呼叫 FFmpeg 產生短片, 再用 VLC-lite 擷取縮圖; FFmpeg 是測試工具, 主程式的影片播放與影片縮圖仍使用 VLC  
-影片測試在缺少 Windows, VLC-lite 或 FFmpeg 時會顯示 `skipped`, 代表該組測試沒有執行. 檢查結果時也要留意跳過的項目
+主程式的語言載入由 [config.py](./config.py) 處理: 保留既有語言設定; 未指定時依序使用安裝語言, 系統語言, 最後以繁體中文作為預設
 
 ## 常見情況
 
-情況                                     | 檢查方式
----                                      | ---
-修改了套件需求, 但啟動或打包仍使用舊環境 | 手動執行虛擬環境的 `python -m pip install -r requirements.txt`
-更新了完整 VLC, 執行結果卻沒變           | 主程式優先使用 `VLC-lite/`; 重新產生精簡版後再測試
-改了 VLC 精簡規則, 安裝版本卻沒更新      | 依序重新產生 VLC-lite, 執行打包, 再編譯安裝檔
-打包完成但缺少語言或 VLC 檔案            | 檢查輸出目錄的實際內容與批次檔的複製輸出
-想知道執行時的錯誤原因                   | 查看使用者資料目錄下的 `log/log.log`
-影片測試顯示 `skipped`                   | 檢查 Windows 環境, `VLC-lite/libvlc.dll` 及 PATH 中的 `ffmpeg`
+情況                                   | 檢查方式
+---                                    | ---
+套件需求已變更, 啟動或打包仍使用舊環境 | 依[啟動程式](#啟動程式)中的指令更新虛擬環境套件
+更新完整 VLC 後, 執行結果沒有改變      | 確認主程式優先載入的 VLC-lite 是否已重新產生
+修改 VLC 精簡規則後, 安裝版本沒有更新  | 依序重新產生 VLC-lite, 打包程式, 編譯安裝檔
+打包完成但缺少語言或 VLC 檔案          | 檢查輸出目錄的實際內容與批次檔的複製輸出
+需要查看執行錯誤                       | 查看使用者資料目錄下的 `log/log.log`
+影片測試顯示 `skipped`                 | 依[測試環境與執行影響](#測試環境與執行影響)檢查必要工具與跳過原因
