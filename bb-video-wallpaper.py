@@ -580,7 +580,7 @@ class Wallpaper(QWidget):
     @Slot()
     def apply_pending_reattach_time(self) -> None:
         """
-        新影片輸出開始後補套重掛前的進度, 再由下一個回呼恢復暫停
+        新影片輸出開始後補套重掛前的播放進度
         """
 
         if self.is_exiting or self.is_recreating or self.is_image() or self.play_state == "stop":
@@ -800,7 +800,7 @@ class Wallpaper(QWidget):
         previous_play_state = self.play_state
         is_image = path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS
 
-        # 先讀取圖片, 失敗時保留原本的輸出, 播放狀態與最近紀錄
+        # 先讀取圖片, 失敗時保留原本的輸出與播放狀態
         if is_image:
             self.instance_image.set_image(path)
 

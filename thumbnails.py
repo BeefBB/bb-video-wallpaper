@@ -31,7 +31,7 @@ def fast_hash(path: Path) -> str:
     """
 
     digest = hashlib.sha256()
-    # 縮圖演算法更新時更換版本, 讓既有快取重新產生並清除舊檔
+    # 將縮圖演算法版本納入識別碼計算
     digest.update(b"thumbnail-v3\0")
 
     with path.open("rb") as file:

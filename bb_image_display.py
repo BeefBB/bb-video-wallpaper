@@ -413,7 +413,7 @@ class Instance(QObject):
     @Slot()
     def show(self) -> None:
         """
-        在指定視窗顯示已載入的圖片, 由主程式管理目標視窗及桌面掛載
+        在指定視窗顯示已載入的圖片
         """
 
         if self.window is None:
