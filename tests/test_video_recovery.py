@@ -49,6 +49,7 @@ def run_recovery_probe(media: Path) -> None:
     import win32con
     import win32gui
     from PySide6.QtCore import QEventLoop, Qt, QThread, QTimer, Signal, Slot
+    from PySide6.QtGui import QScreen
     from PySide6.QtWidgets import QApplication, QWidget
 
     sys.path.insert(0, str(ROOT))
@@ -109,7 +110,7 @@ def run_recovery_probe(media: Path) -> None:
         )
         # exec 使用的命名空間混合類別, 模組與測試替身
         namespace: dict[str, Any] = {
-            "QWidget": QWidget, "QApplication": QApplication, "Qt": Qt, "QTimer": QTimer,
+            "QWidget": QWidget, "QApplication": QApplication, "QScreen": QScreen, "Qt": Qt, "QTimer": QTimer,
             "QEventLoop": QEventLoop, "QThread": QThread,
             "Signal": Signal, "Slot": Slot, "Path": Path, "wintypes": wintypes,
             "WM_DESTROY": win32con.WM_DESTROY, "vlc": vlc, "bb_image_display": bb_image_display,

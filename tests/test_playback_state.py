@@ -9,7 +9,8 @@ import threading
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QObject, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QObject, QRect, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtGui import QScreen
 from PySide6.QtTest import QSignalSpy, QTest
 
 
@@ -39,6 +40,30 @@ class HeadlessWidget(QObject):
             setattr(self, name, mock.Mock())
 
         self.winId = mock.Mock(return_value=1)
+
+
+class HeadlessScreen(QObject):
+    """
+    模擬螢幕位置與尺寸, 透過真正的 Qt 訊號通知變更
+    """
+
+    geometryChanged = Signal(QRect)
+
+    def __init__(self, geometry: QRect) -> None:
+
+        super().__init__()
+        self._geometry = geometry
+
+
+    def geometry(self) -> QRect:
+
+        return self._geometry
+
+
+    def set_geometry(self, geometry: QRect) -> None:
+
+        self._geometry = geometry
+        self.geometryChanged.emit(geometry)
 
 
 class HeadlessDesktopEvents(QObject):
@@ -213,9 +238,7 @@ class PlaybackStateTests(unittest.TestCase):
         config_store.load.return_value = {}
 
         application = mock.Mock()
-        geometry = application.primaryScreen.return_value.geometry.return_value
-        geometry.width.return_value = 1920
-        geometry.height.return_value = 1080
+        application.primaryScreen.return_value = HeadlessScreen(QRect(0, 0, 1920, 1080))
 
         self.namespace = {
             "QWidget": HeadlessWidget,
@@ -224,6 +247,7 @@ class PlaybackStateTests(unittest.TestCase):
             "Qt": Qt,
             "Path": Path,
             "QApplication": application,
+            "QScreen": QScreen,
             "QEventLoop": QEventLoop,
             "QThread": QThread,
             "DesktopEventWindow": HeadlessDesktopEvents,
@@ -289,6 +313,85 @@ class PlaybackStateTests(unittest.TestCase):
         self.wallpaper.set_play_media(self.media_path)
         self.tray.play()
         self.assertEqual(self.player.state, "opening")
+
+
+    def test_default_target_stays_on_original_screen_after_primary_changes(self):
+
+        application = self.namespace["QApplication"]
+        original_screen = application.primaryScreen.return_value
+        self.assertIs(self.wallpaper.target_screen, original_screen)
+        self.wallpaper.setGeometry.assert_called_once_with(original_screen.geometry())
+
+        application.primaryScreen.return_value = HeadlessScreen(QRect(1920, 0, 2560, 1440))
+        self.wallpaper.set_play_media(self.media_path)
+        self.wallpaper.reattach_to_desktop()
+
+        self.wallpaper.setGeometry.assert_called_with(original_screen.geometry())
+        self.player.video_set_crop_geometry.assert_called_with("1920:1080")
+        application.primaryScreen.assert_called_once_with()
+        self.namespace["logger"].exception.assert_not_called()
+
+
+    def test_explicit_target_controls_geometry_crop_and_reattach(self):
+
+        target_screen = HeadlessScreen(QRect(-1080, -240, 1080, 1920))
+        application = self.namespace["QApplication"]
+        application.primaryScreen.reset_mock()
+        wallpaper = self.namespace["Wallpaper"](target_screen=target_screen)
+        self.addCleanup(self.dispose_wallpaper, wallpaper)
+        wallpaper.check_auto_pause_timer.stop()
+
+        self.assertIs(wallpaper.target_screen, target_screen)
+        wallpaper.setGeometry.assert_called_once_with(target_screen.geometry())
+        wallpaper.set_play_media(self.media_path)
+        self.player.video_set_crop_geometry.assert_called_once_with("1080:1920")
+
+        application.primaryScreen.return_value = HeadlessScreen(QRect(0, 0, 3840, 2160))
+        wallpaper.setGeometry.reset_mock()
+        wallpaper.reattach_to_desktop()
+
+        wallpaper.setGeometry.assert_called_once_with(target_screen.geometry())
+        self.player.video_set_crop_geometry.assert_called_with("1080:1920")
+        application.primaryScreen.assert_not_called()
+        self.namespace["logger"].exception.assert_not_called()
+
+
+    def test_only_target_geometry_changes_reattach_with_updated_size_and_crop(self):
+
+        target_screen = HeadlessScreen(QRect(-1080, 0, 1080, 1920))
+        wallpaper = self.namespace["Wallpaper"](target_screen=target_screen)
+        self.addCleanup(self.dispose_wallpaper, wallpaper)
+        wallpaper.check_auto_pause_timer.stop()
+        wallpaper.set_play_media(self.media_path)
+
+        primary_screen = self.namespace["QApplication"].primaryScreen.return_value
+        primary_screen.set_geometry(QRect(0, 0, 2560, 1440))
+        self.assertFalse(wallpaper.reattach_timer.isActive())
+        self.wallpaper.reattach_timer.stop()
+
+        geometry = QRect(-1440, 200, 1440, 2560)
+        target_screen.set_geometry(geometry)
+        self.assertTrue(wallpaper.reattach_timer.isActive())
+        wallpaper.reattach_timer.start(0)
+        self.app.processEvents()
+
+        self.assertFalse(wallpaper.reattach_timer.isActive())
+        wallpaper.setGeometry.assert_called_with(geometry)
+        self.player.video_set_crop_geometry.assert_called_with("1440:2560")
+        self.namespace["logger"].exception.assert_not_called()
+
+
+    def test_no_available_screen_fails_before_creating_outputs(self):
+
+        self.namespace["QApplication"].primaryScreen.return_value = None
+        self.namespace["vlc"].Instance.reset_mock()
+        self.namespace["bb_image_display"].Instance.reset_mock()
+
+        with self.assertRaisesRegex(RuntimeError, "找不到可用的目標螢幕"):
+            self.namespace["Wallpaper"]()
+
+        self.namespace["vlc"].Instance.assert_not_called()
+        self.namespace["bb_image_display"].Instance.assert_not_called()
 
 
     def test_pause_during_loading_applies_after_playing_event(self):

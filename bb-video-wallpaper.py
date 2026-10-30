@@ -11,7 +11,7 @@ from win32con import WM_DESTROY
 
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog
 from PySide6.QtCore import QEventLoop, Qt, QTimer, QThread, Slot, Signal
-from PySide6.QtGui import QAction, QIcon, QFont
+from PySide6.QtGui import QAction, QIcon, QFont, QScreen
 
 import bb_image_display
 from config import ConfigStore, SUPPORTED_LANGUAGES
@@ -285,9 +285,19 @@ class Wallpaper(QWidget):
     playback_started = Signal()
 
 
-    def __init__(self) -> None:
+    def __init__(self, target_screen: QScreen | None = None) -> None:
 
         super().__init__()
+
+
+        # 未指定時使用建立當下的主螢幕, 重掛時保留同一個目標
+        if target_screen is None:
+            target_screen = QApplication.primaryScreen()
+
+        if target_screen is None:
+            raise RuntimeError("找不到可用的目標螢幕")
+
+        self.target_screen = target_screen
 
 
         # 設定檔
@@ -355,13 +365,11 @@ class Wallpaper(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         # 設成螢幕大小
-        screen = QApplication.primaryScreen()
-        self.setGeometry(screen.geometry())
+        self.setGeometry(self.target_screen.geometry())
 
 
         # 螢幕解析度變更事件
-        if screen:
-            screen.geometryChanged.connect(self.on_screen_changed)
+        self.target_screen.geometryChanged.connect(self.on_screen_changed)
 
 
         # 建立 VLC 播放器物件
@@ -627,9 +635,7 @@ class Wallpaper(QWidget):
 
 
             # 建立視窗
-            screen = QApplication.primaryScreen()
-
-            self.setGeometry(screen.geometry())
+            self.setGeometry(self.target_screen.geometry())
 
             self.setWindowFlags(
                 Qt.WindowType.FramelessWindowHint |
@@ -792,8 +798,7 @@ class Wallpaper(QWidget):
         取得螢幕解析度的寬高比
         """
 
-        screen = QApplication.primaryScreen()
-        geometry = screen.geometry()
+        geometry = self.target_screen.geometry()
 
         width = geometry.width()
         height = geometry.height()
@@ -1354,7 +1359,7 @@ if __name__ == "__main__":
 
 
     # 建立播放器
-    w = Wallpaper()
+    w = Wallpaper(target_screen=app.primaryScreen())
     w.show()
 
 
