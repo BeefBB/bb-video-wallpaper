@@ -27,6 +27,66 @@ class WindowsIntegrationTests(unittest.TestCase):
     使用模擬 API 驗證 Windows 整合行為
     """
 
+    def test_monitor_identity_uses_device_interface_and_survives_display_renumbering(self):
+        """
+        螢幕設定跟隨裝置介面識別, 不跟隨 Windows 顯示編號
+        """
+
+        device = mock.Mock(StateFlags=1, DeviceID=r"\\?\DISPLAY#Monitor-A")
+        with (
+            mock.patch.object(windows.win32api, "MonitorFromWindow", return_value=10) as monitor,
+            mock.patch.object(windows.win32api, "GetMonitorInfo") as info,
+            mock.patch.object(windows.win32api, "EnumDisplayDevices", return_value=device) as devices,
+        ):
+            info.side_effect = [{"Device": r"\\.\DISPLAY1"}, {"Device": r"\\.\DISPLAY3"}]
+
+            self.assertEqual(windows.get_monitor_id(100), r"device:\\?\display#monitor-a")
+            self.assertEqual(windows.get_monitor_id(200), r"device:\\?\display#monitor-a")
+            monitor.assert_has_calls([
+                mock.call(100, windows.win32con.MONITOR_DEFAULTTONEAREST),
+                mock.call(200, windows.win32con.MONITOR_DEFAULTTONEAREST),
+            ])
+            self.assertEqual(devices.call_args_list, [
+                mock.call(r"\\.\DISPLAY1", 0, 1),
+                mock.call(r"\\.\DISPLAY3", 0, 1),
+            ])
+
+
+    def test_monitor_identity_skips_inactive_or_unidentified_devices(self):
+        """
+        略過未啟用或沒有裝置識別的螢幕
+        """
+
+        with (
+            mock.patch.object(windows.win32api, "MonitorFromWindow", return_value=10),
+            mock.patch.object(windows.win32api, "GetMonitorInfo", return_value={"Device": "display"}),
+            mock.patch.object(windows.win32api, "EnumDisplayDevices") as devices,
+        ):
+            devices.side_effect = [
+                mock.Mock(StateFlags=0, DeviceID="inactive"),
+                mock.Mock(StateFlags=1, DeviceID=""),
+                mock.Mock(StateFlags=1, DeviceID="active"),
+            ]
+
+            self.assertEqual(windows.get_monitor_id(100), "device:active")
+            self.assertEqual(devices.call_args_list, [mock.call("display", index, 1) for index in range(3)])
+
+
+    def test_monitor_identity_falls_back_to_distinct_display_names(self):
+        """
+        沒有裝置介面時仍以顯示裝置名稱區分螢幕
+        """
+
+        with (
+            mock.patch.object(windows.win32api, "MonitorFromWindow", return_value=10),
+            mock.patch.object(windows.win32api, "GetMonitorInfo") as info,
+            mock.patch.object(windows.win32api, "EnumDisplayDevices", side_effect=windows.win32api.error),
+        ):
+            info.side_effect = [{"Device": "DISPLAY1"}, {"Device": "DISPLAY2"}]
+            self.assertEqual(windows.get_monitor_id(100), "display:display1")
+            self.assertEqual(windows.get_monitor_id(200), "display:display2")
+
+
     def test_vlc_wakeup_only_posts_null_to_own_video_windows(self):
         """
         只喚醒目前程序持有的 VLC 影片視窗

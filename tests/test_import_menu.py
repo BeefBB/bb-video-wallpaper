@@ -373,12 +373,41 @@ class ImportMenuTests(unittest.TestCase):
         self.assertIn("disk full", self.tray.tray.showMessage.call_args.args[1])
 
 
+    def test_single_recent_media_can_be_cleared_without_changing_wallpapers(self):
+        """
+        只有一筆最近紀錄時仍可從選單清空, 並保留各螢幕桌布
+        """
+
+        wallpapers = {"screen-a": "sample.mp4", "screen-b": "other.png"}
+        store = self.namespace["config_store"]
+        store.load.return_value = {
+            "recentVideo": ["sample.mp4"],
+            "screenWallpapers": wallpapers.copy(),
+        }
+        self.namespace["get_media"] = mock.Mock(return_value=[])
+        self.tray.media_menu.reset_preview = mock.Mock()
+        self.namespace["Tray"].refresh_media_menu(self.tray)
+
+        clear_actions = [
+            action for action in self.tray.media_menu.actions()
+            if action.text() == self.language["clear_recent_videos"]
+        ]
+        self.assertEqual(len(clear_actions), 1)
+        self.assertTrue(clear_actions[0].isEnabled())
+        clear_actions[0].trigger()
+
+        store.save.assert_called_once()
+        saved = store.save.call_args.args[0]
+        self.assertEqual(saved["recentVideo"], [])
+        self.assertEqual(saved["screenWallpapers"], wallpapers)
+
+
     def test_bad_wallpaper_shows_localized_error_without_starting_playback(self):
         """
         媒體載入失敗時顯示對應語言的錯誤並停止後續播放
         """
 
-        self.tray.wallpaper.set_play_media.side_effect = RuntimeError("bad image")
+        self.tray.wallpaper.select_media.side_effect = RuntimeError("bad image")
         self.tray.wallpaper.enable_auto_pause = False
 
         for language_path in (ROOT / "lang").glob("*.json"):

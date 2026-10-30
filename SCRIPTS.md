@@ -84,7 +84,7 @@ Python 與 VLC 的架構需要相容, 例如搭配使用 64 位元版本. 只有
 - [config.py](./config.py): `ConfigStore` 負責設定初始化, 驗證, 讀寫與語言檔載入, 所需路徑由主程式傳入
 - [media_import.py](./media_import.py): 負責內容去重, 分塊複製, 容量檢查, 命名衝突與取消清理; 匯入目錄及翻譯函式由主程式傳入, 透過回呼回報進度與查詢取消狀態
 - [media_preview.py](./media_preview.py): `MediaPreviewMenu` 負責懸停延遲, 預覽模式, 縮圖訊號與視窗定位; 媒體目錄, 縮圖目錄與載入圖片路徑由主程式傳入, 主程式在退出時停止縮圖工作
-- [windows_integration.py](./windows_integration.py): 負責單一實例 Mutex, 桌面就緒檢查, 桌布掛載, 虛擬桌面與最大化視窗偵測, 電源通知及開機排程; 建立排程時由主程式傳入執行檔路徑
+- [windows_integration.py](./windows_integration.py): 負責單一實例 Mutex, 螢幕識別, 桌面就緒檢查, 桌布掛載, 虛擬桌面與最大化視窗偵測, 電源通知及開機排程; 建立排程時由主程式傳入執行檔路徑
 - [bb_image_display.py](./bb_image_display.py): 共用主程式的 `QApplication`, 以 `Instance` 接收桌布 HWND 並顯示圖片; 主程式管理桌布掛載與媒體切換, 模組管理圖片及內部子視窗
 - [thumbnails.py](./thumbnails.py): 負責支援的媒體格式, 縮圖產生, 快取驗證與背景排隊; 預覽選單將媒體與快取目錄傳給 `ThumbnailThread`
 
@@ -104,7 +104,7 @@ Python 與 VLC 的架構需要相容, 例如搭配使用 64 位元版本. 只有
 
 路徑          | 用途
 ---           | ---
-`config.json` | 語言, 自動暫停選項與最近使用紀錄
+`config.json` | 語言, 自動暫停選項, 各螢幕桌布與共用最近使用紀錄
 `video/`      | 媒體資料夾, 匯入的檔案放在其下的 `_imports/` 子目錄
 `thumbnails/` | 縮圖快取
 `log/log.log` | 日誌, 達到上限後輪替

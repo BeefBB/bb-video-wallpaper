@@ -27,6 +27,7 @@ from windows_integration import (
     create_task,
     delete_task,
     get_display_state,
+    get_monitor_id,
     is_already_running,
     is_any_fullscreen,
     is_on_battery,
@@ -344,18 +345,6 @@ class Wallpaper(QWidget):
         self.auto_pause_if_on_battery = config.get("autoPauseIfOnBattery", False)
 
 
-        recent = config.get("recentVideo")
-
-        if recent:
-            recent_path = MEDIA_DIR / recent[0]
-
-            if recent_path.is_file():
-                initial_media = recent_path
-
-        if not initial_media and media_files:
-            initial_media = media_files[0]
-
-
         # 建立視窗
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
@@ -368,6 +357,24 @@ class Wallpaper(QWidget):
 
         # 設成螢幕大小
         self.setGeometry(self.target_screen.geometry())
+
+
+        # 在掛入桌面前辨識目標螢幕
+        self.screen_id = get_monitor_id(int(self.winId()))
+        screen_wallpapers = config.get("screenWallpapers", {})
+        saved_media = screen_wallpapers.get(self.screen_id)
+
+        if saved_media and (MEDIA_DIR / saved_media).is_file():
+            initial_media = MEDIA_DIR / saved_media
+
+        if initial_media is None:
+            recent = config.get("recentVideo", [])
+
+            if recent and (MEDIA_DIR / recent[0]).is_file():
+                initial_media = MEDIA_DIR / recent[0]
+
+        if initial_media is None and media_files:
+            initial_media = media_files[0]
 
 
         # 螢幕解析度變更事件
@@ -408,6 +415,10 @@ class Wallpaper(QWidget):
             try:
                 self.set_play_media(initial_media)
                 self.media_play()
+
+                if self.screen_id not in screen_wallpapers:
+                    config_store.remember_wallpaper(self.screen_id, initial_media)
+
                 logger.info("init - play")
 
             except Exception:
@@ -741,7 +752,6 @@ class Wallpaper(QWidget):
         if self.is_exiting:
             return
 
-        media_path = path.relative_to(MEDIA_DIR).as_posix()
         previous_play_state = self.play_state
         is_image = path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS
 
@@ -795,12 +805,21 @@ class Wallpaper(QWidget):
                 logger.debug("set_play_media - stop")
 
 
-        config = config_store.load()
-        recent = config.get("recentVideo", [])
-        config["recentVideo"] = [media_path] + [
-            item for item in recent if item != media_path
-        ][:4]
-        config_store.save(config)
+    def select_media(self, path: Path) -> None:
+        """
+        選擇桌布, 開始播放
+        """
+
+        if self.is_exiting:
+            return
+
+        self.set_play_media(path)
+        self.media_play()
+
+        self.enable_auto_pause = True
+
+        config_store.remember_recent(path)
+        config_store.remember_wallpaper(self.screen_id, path)
 
 
     def attach_to_desktop(self) -> None:
@@ -1204,7 +1223,6 @@ class Tray:
 
         if recent:
             clear_action = QAction(tr("clear_recent_videos"), self.media_menu)
-            clear_action.setEnabled(len(recent) > 1)
             clear_action.triggered.connect(self.clear_recent_media)
             self.media_menu.addAction(clear_action)
             self.media_menu.addSeparator()
@@ -1223,11 +1241,11 @@ class Tray:
 
     def clear_recent_media(self) -> None:
         """
-        清除最近播放的媒體清單, 只保留目前播放的
+        清除最近播放的媒體清單
         """
 
         config = config_store.load()
-        config["recentVideo"] = config.get("recentVideo", [])[:1]
+        config["recentVideo"] = []
         config_store.save(config)
 
         logger.info("clear_recent_media")
@@ -1267,8 +1285,7 @@ class Tray:
 
         try:
 
-            self.wallpaper.set_play_media(path)
-            self.wallpaper.media_play()
+            self.wallpaper.select_media(path)
 
         except Exception as error:
 
@@ -1281,7 +1298,6 @@ class Tray:
             )
             return
 
-        self.wallpaper.enable_auto_pause = True
         logger.info("play_from_menu - play")
 
 

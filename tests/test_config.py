@@ -74,6 +74,7 @@ class ConfigTests(unittest.TestCase):
             **CONFIG_DEFAULTS,
             "language": "en-US",
             "recentVideo": [],
+            "screenWallpapers": {},
         }
 
         self.assertEqual(config, expected)
@@ -91,6 +92,7 @@ class ConfigTests(unittest.TestCase):
             **CONFIG_DEFAULTS,
             "language": "en-US",
             "recentVideo": [],
+            "screenWallpapers": {},
         }
 
         self.assertEqual(
@@ -169,6 +171,7 @@ class ConfigTests(unittest.TestCase):
             **CONFIG_DEFAULTS,
             "language": "en-US",
             "recentVideo": [],
+            "screenWallpapers": {},
         }
         language = json.loads(
             (self.store.lang_dir / "en-US.json").read_text(encoding="utf-8")
@@ -198,6 +201,7 @@ class ConfigTests(unittest.TestCase):
             "autoPauseIfOnBattery": True,
             "language": "ja-JP",
             "recentVideo": ["missing.mp4"],
+            "screenWallpapers": {},
             "futureOption": {"enabled": True},
         }
 
@@ -312,6 +316,106 @@ class ConfigTests(unittest.TestCase):
 
         result = self.store.validate({})
         self.assertEqual(result["recentVideo"], [])
+
+
+    def test_screen_wallpapers_validate_paths_and_preserve_missing_or_disconnected_entries(self):
+        """
+        各螢幕路徑使用相同驗證, 保留暫時不存在的檔案與未連接螢幕
+        """
+
+        paths = {
+            "screen-a": "video/first.mp4",
+            "disconnected-screen": "missing.png",
+            "normalized": "./video/second.mp4",
+            "outside": "../outside.mp4",
+            "absolute": str(self.media_dir / "absolute.mp4"),
+            "bad-value": None,
+            "bad-nul": "bad\0.png",
+            "": "empty-id.mp4",
+            "bad\0id": "bad-id.mp4",
+            123: "numeric-id.mp4",
+        }
+        result = self.store.validate({"screenWallpapers": paths, "recentVideo": ["recent.mp4"]})
+
+        self.assertEqual(result["screenWallpapers"], {
+            "screen-a": "video/first.mp4",
+            "disconnected-screen": "missing.png",
+            "normalized": "video/second.mp4",
+        })
+        self.assertEqual(result["recentVideo"], ["recent.mp4"])
+        self.assertEqual(paths["normalized"], "./video/second.mp4")
+
+        for invalid in (None, False, 123, [], "file.mp4"):
+            with self.subTest(value=invalid):
+                self.assertEqual(self.store.validate({"screenWallpapers": invalid})["screenWallpapers"], {})
+
+
+    def test_remember_wallpaper_keeps_screen_choices_independent_and_history_shared(self):
+        """
+        交錯選擇桌布時只更新指定螢幕, 最近紀錄共用並維持去重與五筆上限
+        """
+
+        for screen_id, filename in (
+            ("screen-a", "a.mp4"),
+            ("screen-b", "b.png"),
+            ("screen-a", "c.mp4"),
+            ("screen-b", "a.mp4"),
+        ):
+            path = self.media_dir / filename
+            self.store.remember_recent(path)
+            self.store.remember_wallpaper(screen_id, path)
+
+        config = self.store.load()
+        self.assertEqual(config["screenWallpapers"], {"screen-a": "c.mp4", "screen-b": "a.mp4"})
+        self.assertEqual(config["recentVideo"], ["a.mp4", "c.mp4", "b.png"])
+
+        for index in range(6):
+            path = self.media_dir / f"{index}.mp4"
+            self.store.remember_recent(path)
+            self.store.remember_wallpaper(f"screen-{index}", path)
+
+        config = self.store.load()
+        self.assertEqual(len(config["screenWallpapers"]), 8)
+        self.assertEqual(config["screenWallpapers"]["screen-a"], "c.mp4")
+        self.assertEqual(config["recentVideo"], [f"{index}.mp4" for index in range(5, 0, -1)])
+
+
+    def test_initial_selection_preserves_shared_history_and_other_settings(self):
+        """
+        初始選擇保存時保留共用最近紀錄, 其他螢幕與無關設定
+        """
+
+        self.store.save({
+            "recentVideo": ["recent.mp4", "older.png"],
+            "screenWallpapers": {"screen-a": "a.mp4"},
+            "futureOption": {"enabled": True},
+        })
+        self.store.remember_wallpaper("screen-b", self.media_dir / "older.png")
+
+        config = self.store.load()
+        self.assertEqual(config["screenWallpapers"], {"screen-a": "a.mp4", "screen-b": "older.png"})
+        self.assertEqual(config["recentVideo"], ["recent.mp4", "older.png"])
+        self.assertEqual(config["futureOption"], {"enabled": True})
+
+
+    def test_invalid_selection_does_not_overwrite_saved_config(self):
+        """
+        無效螢幕識別或越界路徑不改寫原有選擇
+        """
+
+        self.store.remember_wallpaper("screen-a", self.media_dir / "a.mp4")
+        original = self.config_path.read_bytes()
+
+        for screen_id, path in (
+            ("", self.media_dir / "b.mp4"),
+            ("bad\0id", self.media_dir / "b.mp4"),
+            ("screen-a", self.media_dir.parent / "outside.mp4"),
+            ("screen-a", self.media_dir / ".." / "outside.mp4"),
+        ):
+            with self.subTest(screen_id=screen_id, path=path):
+                with self.assertRaises(ValueError):
+                    self.store.remember_wallpaper(screen_id, path)
+                self.assertEqual(self.config_path.read_bytes(), original)
 
 
     def test_bad_json_encoding_and_root_preserve_original_file(self):

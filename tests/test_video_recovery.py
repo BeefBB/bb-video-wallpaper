@@ -60,7 +60,7 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
 
     sys.path.insert(0, str(ROOT))
     import bb_image_display
-    from windows_integration import register_taskbar_created_notification, wake_vlc_video_windows
+    from windows_integration import get_monitor_id, register_taskbar_created_notification, wake_vlc_video_windows
 
     dll_directory = os.add_dll_directory(str(VLC_DIR))
     os.environ["PYTHON_VLC_LIB_PATH"] = str(VLC_DIR / "libvlc.dll")
@@ -126,6 +126,7 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
             "register_taskbar_created_notification": register_taskbar_created_notification,
             "wake_vlc_video_windows": wake_vlc_video_windows,
             "check_desktop_ready": lambda: True,
+            "get_monitor_id": get_monitor_id,
             "set_windows_as_wallpaper": lambda hwnd: win32gui.SetParent(hwnd, host_hwnd),
             "register_power_notification": lambda hwnd: 1,
             "unregister_power_notification": lambda handle: None,

@@ -5,6 +5,8 @@
 
 import ast
 from pathlib import Path
+import sys
+import tempfile
 import threading
 import unittest
 from unittest import mock
@@ -16,6 +18,12 @@ from PySide6.QtTest import QSignalSpy, QTest
 
 ROOT = Path(__file__).resolve().parents[1]
 PLAYING_EVENT = object()
+
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(ROOT))
+
+from config import ConfigStore
 
 
 class HeadlessWidget(QObject):
@@ -277,6 +285,7 @@ class PlaybackStateTests(unittest.TestCase):
             "is_on_battery": mock.Mock(return_value=False),
             "is_any_fullscreen": mock.Mock(return_value=False),
             "check_desktop_ready": mock.Mock(return_value=True),
+            "get_monitor_id": mock.Mock(return_value="monitor-1"),
             "wake_vlc_video_windows": mock.Mock(),
             "set_windows_as_wallpaper": mock.Mock(),
             "register_power_notification": mock.Mock(return_value=2**40 + 1),
@@ -337,6 +346,118 @@ class PlaybackStateTests(unittest.TestCase):
         self.wallpaper.set_play_media(self.media_path)
         self.tray.play()
         self.assertEqual(self.player.state, "opening")
+
+
+    def create_independent_wallpaper(self, screen_id: str):
+        """
+        建立各自持有播放器與圖片輸出的桌布, 用於驗證跨螢幕保存
+        """
+
+        instance = mock.Mock()
+        instance.media_player_new.return_value = DeferredPlayer()
+        self.namespace["vlc"].Instance.return_value = instance
+        self.namespace["bb_image_display"].Instance.return_value = mock.Mock(wraps=ImageDisplay())
+        self.namespace["get_monitor_id"].return_value = screen_id
+        wallpaper = self.namespace["Wallpaper"](target_screen=HeadlessScreen(QRect(0, 0, 1920, 1080)))
+        self.addCleanup(wallpaper.deleteLater)
+        self.addCleanup(wallpaper.shutdown)
+        wallpaper.check_auto_pause_timer.stop()
+        wallpaper.fullscreen_detection_timer.stop()
+        return wallpaper
+
+
+    def test_screens_restore_their_own_wallpaper_after_shared_history_is_cleared(self):
+        """
+        兩個螢幕交錯選擇與清除共用紀錄後, 重新建立仍恢復各自桌布
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            media_dir = Path(directory) / "media"
+            media_dir.mkdir()
+            first = media_dir / "a.mp4"
+            second = media_dir / "b.png"
+            first.touch()
+            second.touch()
+            store = ConfigStore(Path(directory) / "config.json", media_dir, ROOT / "lang")
+            self.namespace["config_store"] = store
+            self.namespace["MEDIA_DIR"] = media_dir
+            self.namespace["get_media"].return_value = [first, second]
+
+            screen_a = self.create_independent_wallpaper("screen-a")
+            screen_a.select_media(first)
+            screen_b = self.create_independent_wallpaper("screen-b")
+            screen_b.select_media(second)
+            config = store.load()
+            self.assertEqual(config["screenWallpapers"], {"screen-a": "a.mp4", "screen-b": "b.png"})
+            self.assertEqual(config["recentVideo"], ["b.png", "a.mp4"])
+
+            tray = self.namespace["Tray"].__new__(self.namespace["Tray"])
+            tray.wallpaper = screen_a
+            tray.clear_recent_media()
+            self.assertEqual(store.load()["recentVideo"], [])
+            original_config = store.config_path.read_bytes()
+            screen_a.shutdown()
+            screen_b.shutdown()
+
+            restored_b = self.create_independent_wallpaper("screen-b")
+            restored_a = self.create_independent_wallpaper("screen-a")
+            self.assertEqual(restored_a.current_media, first)
+            self.assertEqual(restored_b.current_media, second)
+            restored_a.reattach_to_desktop()
+            restored_b.reattach_to_desktop()
+            self.assertEqual(store.config_path.read_bytes(), original_config)
+            self.namespace["logger"].exception.assert_not_called()
+
+
+    def test_legacy_recent_selection_is_migrated_without_reordering_history(self):
+        """
+        沒有獨立選擇的螢幕沿用舊最近桌布, 保存時不更新共用紀錄
+        """
+
+        store = self.namespace["config_store"]
+        store.load.return_value = {
+            "recentVideo": ["legacy.mp4", "older.png"],
+            "screenWallpapers": {"other-screen": "other.mp4"},
+        }
+
+        with mock.patch.object(Path, "is_file", return_value=True):
+            wallpaper = self.create_independent_wallpaper("new-screen")
+
+        self.assertEqual(wallpaper.current_media, self.namespace["MEDIA_DIR"] / "legacy.mp4")
+        store.remember_wallpaper.assert_called_once_with(
+            "new-screen", wallpaper.current_media
+        )
+        store.remember_recent.assert_not_called()
+
+
+    def test_missing_saved_media_keeps_selection_while_using_available_fallback(self):
+        """
+        保存的檔案暫時不存在時使用可用桌布, 不覆蓋原本的螢幕選擇
+        """
+
+        store = self.namespace["config_store"]
+        store.load.return_value = {"screenWallpapers": {"screen-a": "missing.mp4"}}
+        self.namespace["get_media"].return_value = [self.media_path]
+        wallpaper = self.create_independent_wallpaper("screen-a")
+
+        self.assertEqual(wallpaper.current_media, self.media_path)
+        store.remember_wallpaper.assert_not_called()
+
+
+    def test_loading_or_reattaching_does_not_save_a_selection_or_change_history(self):
+        """
+        底層載入與重掛不寫入各螢幕選擇或共用最近紀錄
+        """
+
+        store = self.namespace["config_store"]
+
+        for path in (self.media_path, self.image_path):
+            with self.subTest(path=path):
+                self.wallpaper.set_play_media(path)
+                self.wallpaper.reattach_to_desktop()
+                store.remember_wallpaper.assert_not_called()
+                store.remember_recent.assert_not_called()
+                store.save.assert_not_called()
 
 
     def test_default_target_stays_on_original_screen_after_primary_changes(self):
@@ -882,10 +1003,11 @@ class PlaybackStateTests(unittest.TestCase):
                     previous_image = self.image_output.current_image
                     previous_visible = self.image_output.visible
                     self.namespace["config_store"].save.reset_mock()
+                    self.namespace["config_store"].remember_wallpaper.reset_mock()
                     self.instance_image.set_image.side_effect = RuntimeError("bad image")
 
                     with self.assertRaisesRegex(RuntimeError, "bad image"):
-                        self.wallpaper.set_play_media(self.image_path.with_name("bad.png"))
+                        self.wallpaper.select_media(self.image_path.with_name("bad.png"))
 
                     self.assertEqual(self.wallpaper.current_media, previous_media)
                     self.assertEqual(self.wallpaper.play_state, command)
@@ -893,20 +1015,23 @@ class PlaybackStateTests(unittest.TestCase):
                     self.assertEqual(self.image_output.current_image, previous_image)
                     self.assertEqual(self.image_output.visible, previous_visible)
                     self.namespace["config_store"].save.assert_not_called()
+                    self.namespace["config_store"].remember_wallpaper.assert_not_called()
 
 
-    def test_successful_image_is_saved_in_recent_history(self):
+    def test_select_media_saves_this_screen_and_updates_shared_history(self):
         """
-        成功載入圖片後更新最近紀錄並去重
+        使用者選擇圖片成功後啟動顯示, 保存此螢幕選擇與共用最近紀錄
         """
 
-        self.namespace["config_store"].load.return_value = {
-            "recentVideo": ["sample.mp4", "sample.PNG", "other.png"],
-        }
-        self.wallpaper.set_play_media(self.image_path)
+        self.wallpaper.enable_auto_pause = False
+        self.wallpaper.select_media(self.image_path)
 
-        saved = self.namespace["config_store"].save.call_args.args[0]
-        self.assertEqual(saved["recentVideo"], ["sample.PNG", "sample.mp4", "other.png"])
+        self.assertTrue(self.image_output.visible)
+        self.assertTrue(self.wallpaper.enable_auto_pause)
+        self.namespace["config_store"].remember_recent.assert_called_once_with(self.image_path)
+        self.namespace["config_store"].remember_wallpaper.assert_called_once_with(
+            self.wallpaper.screen_id, self.image_path
+        )
 
 
     def test_attach_binds_both_outputs_to_same_hwnd(self):
@@ -1351,6 +1476,7 @@ class PlaybackStateTests(unittest.TestCase):
             self.wallpaper.media_pause()
             self.wallpaper.media_stop()
             self.wallpaper.set_play_media(self.media_path)
+            self.wallpaper.select_media(self.media_path)
             self.attach_to_desktop(self.wallpaper)
             self.wallpaper.enable_fullscreen_detection()
             self.wallpaper.check_auto_pause()

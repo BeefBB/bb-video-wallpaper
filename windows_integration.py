@@ -29,6 +29,33 @@ logger = logging.getLogger(__name__)
 TASK_NAME = "BBVideoWallpaper"
 
 
+def get_monitor_id(hwnd: int) -> str:
+    """
+    取得特定螢幕的裝置名稱
+    """
+
+    monitor = win32api.MonitorFromWindow(hwnd, win32con.MONITOR_DEFAULTTONEAREST)
+    display_name = win32api.GetMonitorInfo(monitor)["Device"]
+    index = 0
+
+    while True:
+        try:
+            # EDD_GET_DEVICE_INTERFACE_NAME = 1, 取得每個螢幕的裝置介面名稱
+            device = win32api.EnumDisplayDevices(display_name, index, 1)
+
+        except win32api.error:
+            break
+
+        # DISPLAY_DEVICE_ACTIVE = 1, 略過未啟用的螢幕
+        if device.StateFlags & 1 and device.DeviceID:
+            return f"device:{device.DeviceID.casefold()}"
+
+        index += 1
+
+    # 遠端或虛擬顯示器可能沒有裝置介面, 改以 Windows 顯示裝置名稱區分
+    return f"display:{display_name.casefold()}"
+
+
 # 單一實例
 # 唯一的 Mutex 名稱
 MUTEX_NAME = "Global\\BBVideoWallpaper_SingleInstance_Mutex"
