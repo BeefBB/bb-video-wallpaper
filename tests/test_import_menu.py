@@ -28,6 +28,9 @@ from media_import import MediaImportCancelled
 
 
 class PreviewMenu(QMenu):
+    """
+    使用模擬縮圖工作的 Qt 選單
+    """
 
     def __init__(self, title, parent, *, media_dir, thumbnail_dir, loading_image_path):
 
@@ -39,9 +42,15 @@ class PreviewMenu(QMenu):
 
 
 class ImportMenuTests(unittest.TestCase):
+    """
+    系統匣選單與背景匯入流程
+    """
 
     @classmethod
     def setUpClass(cls) -> None:
+        """
+        建立 Qt 應用程式並載入匯入執行緒與系統匣類別
+        """
 
         cls.app = QApplication.instance() or QApplication([])
 
@@ -67,6 +76,9 @@ class ImportMenuTests(unittest.TestCase):
 
 
     def setUp(self) -> None:
+        """
+        建立選單, 匯入替身與執行緒同步事件
+        """
 
         self.language = json.loads((ROOT / "lang" / "zh-TW.json").read_text(encoding="utf-8"))
         self.source = ROOT / "sample.mp4"
@@ -112,13 +124,18 @@ class ImportMenuTests(unittest.TestCase):
         self.menu = self.tray.tray.setContextMenu.call_args.args[0]
         self.tray.play_from_menu = mock.Mock()
         self.tray.refresh_media_menu = mock.Mock()
+        # 匯入工作的開始與放行事件
         self.started = threading.Event()
         self.release = threading.Event()
         self.addCleanup(self.dispose_tray)
 
 
     def dispose_tray(self) -> None:
+        """
+        結束匯入工作並釋放選單
+        """
 
+        # 放行仍在等待的匯入工作
         self.release.set()
         worker = self.tray.import_thread
 
@@ -133,6 +150,9 @@ class ImportMenuTests(unittest.TestCase):
 
 
     def visible_labels(self):
+        """
+        取得目前顯示的選單文字與分隔線
+        """
 
         return [
             "-" if action.isSeparator() else action.text()
@@ -141,6 +161,9 @@ class ImportMenuTests(unittest.TestCase):
 
 
     def assert_idle_menu(self):
+        """
+        確認選單已回到可再次匯入的閒置狀態
+        """
 
         self.assertEqual(self.visible_labels(), [
             "播放", "暫停", "停止", "-", "選擇影片", "新增影片", "開啟影片資料夾",
@@ -151,13 +174,20 @@ class ImportMenuTests(unittest.TestCase):
 
 
     def wait_for_completion(self, worker):
+        """
+        等待匯入執行緒與完成訊號處理完畢
+        """
 
         self.assertTrue(worker.wait(5000), "匯入工作未結束")
+        # 處理佇列中的完成或錯誤訊號
         self.app.processEvents()
         self.assertIsNone(self.tray.import_thread)
 
 
     def blocked_import(self, source, import_dir, *, translate, progress, cancelled):
+        """
+        暫停匯入工作, 由測試控制完成或取消
+        """
 
         self.started.set()
 
@@ -171,6 +201,9 @@ class ImportMenuTests(unittest.TestCase):
 
 
     def test_idle_and_cancelled_file_dialog_keep_original_menu(self):
+        """
+        閒置與取消選檔時維持原本選單
+        """
 
         self.assert_idle_menu()
         self.namespace["QFileDialog"].getOpenFileName.return_value = ("", "")
@@ -182,6 +215,9 @@ class ImportMenuTests(unittest.TestCase):
 
 
     def test_exit_delegates_cleanup_and_quits_even_if_shutdown_fails(self):
+        """
+        退出時清理桌布, 清理失敗仍結束應用程式
+        """
 
         operations = mock.Mock()
         operations.attach_mock(self.tray.wallpaper.shutdown, "shutdown")
@@ -197,6 +233,9 @@ class ImportMenuTests(unittest.TestCase):
 
 
     def test_startup_toggle_passes_entry_point_to_task_creation(self):
+        """
+        啟用開機啟動時傳入正確的程式路徑
+        """
 
         self.tray.toggle_startup(True)
 
@@ -209,6 +248,9 @@ class ImportMenuTests(unittest.TestCase):
 
 
     def test_preview_menu_receives_paths_and_stops_its_worker_on_quit(self):
+        """
+        預覽選單使用指定路徑, 退出時停止縮圖工作
+        """
 
         preview = self.tray.media_menu
         self.assertEqual(preview.media_dir, self.namespace["MEDIA_DIR"])
@@ -218,6 +260,9 @@ class ImportMenuTests(unittest.TestCase):
 
 
     def test_comparing_menu_has_one_extra_cancel_row_and_cancel_restores_it(self):
+        """
+        比對檔案時顯示取消項目, 取消後恢復選單
+        """
 
         self.namespace["import_media"] = self.blocked_import
         self.tray.add_media()
@@ -253,6 +298,9 @@ class ImportMenuTests(unittest.TestCase):
 
 
     def test_worker_progress_runs_on_main_thread_and_ignores_updates_after_cancel(self):
+        """
+        在主執行緒更新進度, 取消後忽略後續更新
+        """
 
         updated_on = []
         worker_threads = []
@@ -290,6 +338,9 @@ class ImportMenuTests(unittest.TestCase):
 
 
     def test_success_plays_imported_media_and_hides_cancel_action(self):
+        """
+        匯入成功後播放媒體並恢復選單
+        """
 
         self.tray.add_media()
         self.wait_for_completion(self.tray.import_thread)
@@ -309,6 +360,9 @@ class ImportMenuTests(unittest.TestCase):
 
 
     def test_failure_restores_menu_and_shows_error(self):
+        """
+        匯入失敗後恢復選單並顯示錯誤
+        """
 
         self.namespace["import_media"].side_effect = OSError("disk full")
         self.tray.add_media()
@@ -320,6 +374,9 @@ class ImportMenuTests(unittest.TestCase):
 
 
     def test_bad_wallpaper_shows_localized_error_without_starting_playback(self):
+        """
+        媒體載入失敗時顯示對應語言的錯誤並停止後續播放
+        """
 
         self.tray.wallpaper.set_play_media.side_effect = RuntimeError("bad image")
         self.tray.wallpaper.enable_auto_pause = False
@@ -339,6 +396,9 @@ class ImportMenuTests(unittest.TestCase):
 
 
     def test_quitting_requests_cancellation_before_waiting(self):
+        """
+        退出時先取消匯入再等待執行緒結束
+        """
 
         def wait_for_cancel(source, import_dir, *, translate, progress, cancelled):
 

@@ -67,6 +67,9 @@ class HeadlessScreen(QObject):
 
 
 class HeadlessDesktopEvents(QObject):
+    """
+    以 Qt 訊號模擬工作列重建通知
+    """
 
     taskbar_created = Signal()
 
@@ -200,9 +203,15 @@ class ImageDisplay:
 
 
 class PlaybackStateTests(unittest.TestCase):
+    """
+    桌布播放狀態, 重掛與資源釋放
+    """
 
     @classmethod
     def setUpClass(cls) -> None:
+        """
+        建立 Qt 應用程式並載入桌布與系統匣類別
+        """
 
         cls.app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -221,6 +230,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def setUp(self) -> None:
+        """
+        建立播放器, 圖片輸出與桌布替身
+        """
 
         self.player = DeferredPlayer()
         self.image_output = ImageDisplay()
@@ -242,6 +254,7 @@ class PlaybackStateTests(unittest.TestCase):
         application.primaryScreen.return_value = HeadlessScreen(QRect(0, 0, 1920, 1080))
 
         self.namespace = {
+            # Qt 類別與視窗替身
             "QWidget": HeadlessWidget,
             "Signal": Signal,
             "Slot": Slot,
@@ -277,6 +290,7 @@ class PlaybackStateTests(unittest.TestCase):
 
 
         wallpaper_class = self.namespace["Wallpaper"]
+        # 保留原始方法供個別案例呼叫
         self.attach_to_desktop = wallpaper_class.attach_to_desktop
         self.unregister_power_notification = wallpaper_class.unregister_power_notification
 
@@ -289,6 +303,7 @@ class PlaybackStateTests(unittest.TestCase):
         self.wallpaper.fullscreen_detection_timer.stop()
 
         tray_class = self.namespace["Tray"]
+        # 建立播放命令入口
         self.tray = tray_class.__new__(tray_class)
         self.tray.wallpaper = self.wallpaper
         self.tray.app = mock.Mock()
@@ -297,6 +312,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def dispose_wallpaper(self, wallpaper=None) -> None:
+        """
+        停止重掛排程並釋放桌布與監聽物件
+        """
 
         wallpaper = self.wallpaper if wallpaper is None else wallpaper
         wallpaper.is_exiting = True
@@ -307,10 +325,14 @@ class PlaybackStateTests(unittest.TestCase):
 
         self.player.callbacks.clear()
         wallpaper.deleteLater()
+        # 處理 deleteLater 排入的刪除事件
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
     def start_loading(self) -> None:
+        """
+        開始載入影片, 保留尚未送達的 Playing 事件
+        """
 
         self.wallpaper.set_play_media(self.media_path)
         self.tray.play()
@@ -318,6 +340,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_default_target_stays_on_original_screen_after_primary_changes(self):
+        """
+        主螢幕改變後仍使用建立時的目標螢幕
+        """
 
         application = self.namespace["QApplication"]
         original_screen = application.primaryScreen.return_value
@@ -335,6 +360,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_explicit_target_controls_geometry_crop_and_reattach(self):
+        """
+        依指定螢幕設定位置, 裁切比例與重掛目標
+        """
 
         target_screen = HeadlessScreen(QRect(-1080, -240, 1080, 1920))
         application = self.namespace["QApplication"]
@@ -359,6 +387,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_only_target_geometry_changes_reattach_with_updated_size_and_crop(self):
+        """
+        只有目標螢幕的幾何變更才觸發重掛並更新尺寸
+        """
 
         target_screen = HeadlessScreen(QRect(-1080, 0, 1080, 1920))
         wallpaper = self.namespace["Wallpaper"](target_screen=target_screen)
@@ -384,6 +415,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_no_available_screen_fails_before_creating_outputs(self):
+        """
+        找不到螢幕時在建立媒體輸出前失敗
+        """
 
         self.namespace["QApplication"].primaryScreen.return_value = None
         self.namespace["vlc"].Instance.reset_mock()
@@ -397,6 +431,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_pause_during_loading_applies_after_playing_event(self):
+        """
+        載入期間收到暫停, Playing 事件後套用暫停
+        """
 
         self.start_loading()
         self.tray.pause()
@@ -412,11 +449,15 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_playing_callback_from_worker_pauses_on_qt_thread(self):
+        """
+        背景執行緒送出 Playing 事件後由 Qt 主執行緒暫停
+        """
 
         self.start_loading()
         self.tray.pause()
         self.player.pause_calls.clear()
 
+        # 從背景執行緒送出 Playing 事件
         worker = threading.Thread(target=self.player.finish_loading)
         worker.start()
         worker.join(timeout=5)
@@ -434,6 +475,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_latest_play_or_stop_wins_over_delayed_playing_event(self):
+        """
+        延遲 Playing 事件不覆蓋較新的播放或停止命令
+        """
 
         cases = (
             ("play", "playing"),
@@ -469,6 +513,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_queued_playing_event_after_exit_does_not_touch_player(self):
+        """
+        退出後忽略已排入佇列的 Playing 事件
+        """
 
         self.start_loading()
         self.tray.pause()
@@ -485,6 +532,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_screen_change_preserves_playback_state_and_position(self):
+        """
+        螢幕變更後重掛時保留播放狀態與進度
+        """
 
         cases = (
             ("play", "playing"),
@@ -524,6 +574,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_video_reattach_stops_old_output_before_destroying_and_rebinding(self):
+        """
+        先停止舊影片輸出, 再銷毀與重新綁定視窗
+        """
 
         self.start_loading()
         self.player.finish_loading()
@@ -561,6 +614,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_reattach_stop_keeps_qt_events_running_and_ignores_pending_pause(self):
+        """
+        停止影片輸出時持續處理 Qt 事件並忽略延遲暫停
+        """
 
         self.start_loading()
         self.tray.pause()
@@ -570,6 +626,7 @@ class PlaybackStateTests(unittest.TestCase):
         self.namespace["wake_vlc_video_windows"].side_effect = woken.set
 
         def stop_waiting_for_ui():
+            # 等待 Qt 事件與 VLC 視窗喚醒
             if not processed.wait(2) or not woken.wait(2):
                 raise RuntimeError("Qt event loop blocked")
 
@@ -588,6 +645,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_failed_background_stop_preserves_window_and_schedules_retry(self):
+        """
+        背景停止失敗時保留視窗並排定重試
+        """
 
         with mock.patch.object(self.player, "stop", side_effect=RuntimeError("stop failed")):
             self.wallpaper.reattach_to_desktop()
@@ -601,6 +661,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_reattach_seeks_after_playing_when_initial_seek_is_ignored(self):
+        """
+        重掛時未能立即恢復進度, 等 Playing 事件後補套
+        """
 
         self.start_loading()
         self.player.finish_loading()
@@ -609,6 +672,7 @@ class PlaybackStateTests(unittest.TestCase):
         self.player.position = 4321
 
         def seek_when_ready(position):
+            # 載入完成後才接受進度設定
             if self.player.state in {"playing", "paused"}:
                 self.player.position = position
 
@@ -625,6 +689,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_new_media_or_stop_cancels_pending_reattach_seek(self):
+        """
+        停止或切換媒體時取消尚未套用的重掛進度
+        """
 
         for action in ("stop", "new_media"):
             with self.subTest(action=action):
@@ -644,6 +711,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_auto_pause_during_loading_applies_and_resumes(self):
+        """
+        載入期間的自動暫停會生效, 條件解除後恢復播放
+        """
 
         self.wallpaper.auto_pause_if_on_battery = True
         self.wallpaper.fullscreen_detection_ready = True
@@ -673,6 +743,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_manual_pause_survives_auto_pause_condition_clearing(self):
+        """
+        自動暫停條件解除後仍保留手動暫停
+        """
 
         self.start_loading()
         self.wallpaper.screen_off = True
@@ -689,6 +762,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_image_uses_qt_and_stop_then_play_reuses_loaded_image(self):
+        """
+        圖片使用 Qt 顯示, 停止後再播放時重用已載入的圖片
+        """
 
         self.wallpaper.set_play_media(self.image_path)
         self.tray.play()
@@ -711,6 +787,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_switching_video_image_video_stops_previous_output(self):
+        """
+        切換圖片與影片時停止並清理前一種輸出
+        """
 
         self.start_loading()
         self.player.finish_loading()
@@ -729,6 +808,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_image_switch_while_stopped_stays_hidden_until_play(self):
+        """
+        停止狀態切換媒體時不提前顯示輸出
+        """
 
         self.wallpaper.set_play_media(self.image_path)
         self.assertEqual(self.wallpaper.play_state, "stop")
@@ -740,6 +822,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_paused_video_switches_to_visible_image_and_ignores_old_event(self):
+        """
+        暫停影片切換成圖片後直接顯示並忽略舊播放事件
+        """
 
         self.start_loading()
         self.tray.pause()
@@ -760,6 +845,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_images_ignore_manual_and_auto_pause(self):
+        """
+        圖片不受手動與自動暫停影響
+        """
 
         self.wallpaper.set_play_media(self.image_path)
         self.tray.play()
@@ -775,6 +863,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_bad_image_preserves_previous_output_state_and_history(self):
+        """
+        圖片載入失敗時保留既有輸出, 狀態與最近紀錄
+        """
 
         for previous_media in (self.media_path, self.image_path):
             for command in ("play", "pause", "stop"):
@@ -805,6 +896,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_successful_image_is_saved_in_recent_history(self):
+        """
+        成功載入圖片後更新最近紀錄並去重
+        """
 
         self.namespace["config_store"].load.return_value = {
             "recentVideo": ["sample.mp4", "sample.PNG", "other.png"],
@@ -816,6 +910,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_attach_binds_both_outputs_to_same_hwnd(self):
+        """
+        圖片與影片輸出綁定同一個桌布 HWND
+        """
 
         self.attach_to_desktop(self.wallpaper)
 
@@ -827,6 +924,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_display_notification_updates_auto_pause(self):
+        """
+        螢幕亮滅通知更新自動暫停狀態
+        """
 
         self.start_loading()
 
@@ -841,6 +941,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_destroy_notification_skips_reattach_while_recreating_or_exiting(self):
+        """
+        重建或退出期間收到視窗銷毀通知時不再排定重掛
+        """
 
         self.namespace["wintypes"].MSG.from_address.return_value.message = self.namespace["WM_DESTROY"]
         timer = self.wallpaper.reattach_timer
@@ -861,6 +964,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_screen_and_destroy_events_share_one_pending_reattach(self):
+        """
+        螢幕變更與視窗銷毀通知共用一次重掛排程
+        """
 
         self.namespace["wintypes"].MSG.from_address.return_value.message = self.namespace["WM_DESTROY"]
         self.wallpaper.attach_to_desktop.reset_mock()
@@ -875,6 +981,7 @@ class PlaybackStateTests(unittest.TestCase):
         self.assertEqual(timer.timerId(), timer_id)
         self.assertEqual(timer.interval(), 200)
         self.assertTrue(timeouts.wait(1000))
+        # 確認下一個等待區間沒有重複重掛
         QTest.qWait(250)
 
         self.assertEqual(timeouts.count(), 1)
@@ -884,6 +991,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_failed_reattach_retries_twice_and_merges_new_events(self):
+        """
+        掛載失敗最多重試兩次, 新通知沿用既有排程
+        """
 
         self.namespace["wintypes"].MSG.from_address.return_value.message = self.namespace["WM_DESTROY"]
         self.wallpaper.attach_to_desktop.reset_mock()
@@ -891,6 +1001,7 @@ class PlaybackStateTests(unittest.TestCase):
         timer = self.wallpaper.reattach_timer
         self.wallpaper.on_screen_changed(mock.sentinel.geometry)
 
+        # 首次掛載加上兩次重試
         for attempt in range(3):
             with self.subTest(attempt=attempt):
                 self.assertTrue(timer.isActive())
@@ -913,6 +1024,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_taskbar_notification_recovers_without_destroy_event(self):
+        """
+        只收到工作列重建通知也能恢復桌布掛載
+        """
 
         self.wallpaper.attach_to_desktop.reset_mock()
         self.wallpaper.reattach_retry_count = 2
@@ -933,6 +1047,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_taskbar_notification_waits_for_new_desktop(self):
+        """
+        工作列重建後等待新桌面就緒再掛載
+        """
 
         self.wallpaper.attach_to_desktop.reset_mock()
         self.namespace["check_desktop_ready"].return_value = False
@@ -955,6 +1072,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_queued_taskbar_notification_does_not_restart_after_exit(self):
+        """
+        退出後不因佇列中的工作列通知重新啟動重掛
+        """
 
         self.wallpaper.attach_to_desktop.reset_mock()
         listener = self.wallpaper.desktop_events
@@ -970,6 +1090,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_listener_initialization_failure_keeps_wallpaper_available(self):
+        """
+        通知監聽初始化失敗時桌布仍可使用
+        """
 
         self.namespace["DesktopEventWindow"] = mock.Mock(side_effect=OSError("registration failed"))
         wallpaper = self.namespace["Wallpaper"]()
@@ -981,6 +1104,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_unready_desktop_preserves_output_until_ready(self):
+        """
+        等待桌面就緒期間保留既有媒體輸出
+        """
 
         self.start_loading()
         self.player.finish_loading()
@@ -1029,6 +1155,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_desktop_wait_preserves_remaining_attachment_retries(self):
+        """
+        等待桌面就緒時保留掛載失敗的重試次數
+        """
 
         self.wallpaper.attach_to_desktop.reset_mock()
         self.wallpaper.attach_to_desktop.side_effect = RuntimeError("attachment failed")
@@ -1060,6 +1189,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_exit_cancels_desktop_wait(self):
+        """
+        退出時取消等待桌面就緒
+        """
 
         self.wallpaper.attach_to_desktop.reset_mock()
         self.namespace["check_desktop_ready"].return_value = False
@@ -1078,6 +1210,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_successful_retry_clears_retry_count(self):
+        """
+        重試成功後清除重試次數
+        """
 
         self.wallpaper.attach_to_desktop.reset_mock()
         self.wallpaper.attach_to_desktop.side_effect = [RuntimeError("desktop unavailable"), None]
@@ -1096,6 +1231,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_direct_reattach_cancels_pending_timer(self):
+        """
+        直接重掛時取消尚未執行的排程
+        """
 
         self.wallpaper.attach_to_desktop.reset_mock()
         self.wallpaper.schedule_reattach(0)
@@ -1107,6 +1245,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_exit_cancels_pending_reattach_and_rejects_new_requests(self):
+        """
+        退出時取消重掛排程並拒絕新的要求
+        """
 
         self.wallpaper.attach_to_desktop.reset_mock()
         self.wallpaper.schedule_reattach(0)
@@ -1122,6 +1263,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_unregister_clears_handle_even_if_api_fails(self):
+        """
+        取消電源通知失敗時仍清除通知 handle
+        """
 
         handle = 2**40 + 1
         self.wallpaper.power_notify = handle
@@ -1135,6 +1279,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_image_reattach_rebinds_without_reload_or_vlc_seek(self):
+        """
+        圖片重掛時重新綁定目標, 不重讀圖片或調整影片進度
+        """
 
         for command in ("play", "stop"):
             with self.subTest(state=command):
@@ -1174,6 +1321,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_shutdown_is_idempotent_and_blocks_late_operations_without_quitting(self):
+        """
+        重複關閉可安全清理並阻止後續操作, 不退出 Qt 應用程式
+        """
 
         self.start_loading()
         self.wallpaper.pending_reattach_time = 4321
@@ -1236,6 +1386,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_shutdown_continues_after_listener_stop_image_and_player_release_failures(self):
+        """
+        個別清理步驟失敗時仍釋放其餘資源
+        """
 
         listener = self.wallpaper.desktop_events
         listener.close.side_effect = RuntimeError("listener close failed")
@@ -1259,6 +1412,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_shutdown_during_reattach_reuses_stop_and_prevents_rebinding(self):
+        """
+        重掛途中關閉時共用停止工作並阻止重新綁定
+        """
 
         self.start_loading()
         self.wallpaper.attach_to_desktop.reset_mock()
@@ -1292,6 +1448,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_shutdown_does_not_affect_another_wallpaper(self):
+        """
+        關閉一個桌布時不影響另一個桌布
+        """
 
         other_player = DeferredPlayer()
         other_instance = mock.Mock()
@@ -1325,6 +1484,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_image_exit_releases_image_and_vlc(self):
+        """
+        播放圖片時退出會釋放圖片與 VLC 資源
+        """
 
         self.wallpaper.set_play_media(self.image_path)
         self.tray.play()
@@ -1340,6 +1502,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_startup_displays_initial_image(self):
+        """
+        啟動時直接顯示初始圖片
+        """
 
         self.namespace["get_media"].return_value = [self.image_path]
         wallpaper = self.namespace["Wallpaper"]()
@@ -1352,6 +1517,9 @@ class PlaybackStateTests(unittest.TestCase):
 
 
     def test_bad_startup_image_keeps_app_available(self):
+        """
+        初始圖片載入失敗時應用程式仍可使用
+        """
 
         self.namespace["get_media"].return_value = [self.image_path]
         self.instance_image.set_image.side_effect = RuntimeError("bad image")

@@ -28,9 +28,15 @@ if sys.platform == "win32":
 
 @unittest.skipUnless(sys.platform == "win32", "圖片原生視窗測試需要 Windows")
 class ImageDisplayTests(unittest.TestCase):
+    """
+    圖片輸出的原生視窗生命週期
+    """
 
     @classmethod
     def setUpClass(cls) -> None:
+        """
+        建立 Qt 應用程式
+        """
 
         app = QApplication.instance() or QApplication([])
 
@@ -41,6 +47,9 @@ class ImageDisplayTests(unittest.TestCase):
 
 
     def setUp(self) -> None:
+        """
+        建立暫存圖片與隱藏的目標視窗
+        """
 
         directory = self.enterContext(tempfile.TemporaryDirectory())
         self.image_path = Path(directory) / "測試圖片.png"
@@ -56,6 +65,9 @@ class ImageDisplayTests(unittest.TestCase):
 
 
     def create_target(self) -> "QWidget":
+        """
+        建立隱藏的圖片輸出目標
+        """
 
         target = QWidget()
         target.resize(240, 135)
@@ -64,6 +76,9 @@ class ImageDisplayTests(unittest.TestCase):
 
 
     def dispose_windows(self) -> None:
+        """
+        釋放圖片輸出與測試用目標視窗
+        """
 
         self.display.close()
         self.display.deleteLater()
@@ -76,6 +91,9 @@ class ImageDisplayTests(unittest.TestCase):
 
 
     def test_show_creates_child_and_hide_then_show_reuses_it(self):
+        """
+        顯示時建立原生子視窗, 隱藏後再顯示時重用
+        """
 
         self.display.set_image(self.image_path)
         window = self.display.window
@@ -99,6 +117,9 @@ class ImageDisplayTests(unittest.TestCase):
 
 
     def test_bad_image_preserves_existing_image_window_and_visibility(self):
+        """
+        圖片載入失敗時保留既有視窗與顯示狀態
+        """
 
         self.display.set_image(self.image_path)
         self.display.show()
@@ -121,6 +142,9 @@ class ImageDisplayTests(unittest.TestCase):
 
 
     def test_detach_and_rebind_preserves_image_and_target_windows(self):
+        """
+        解除綁定後可更換目標, 保留圖片與外部視窗
+        """
 
         self.display.set_image(self.image_path)
         self.display.show()
@@ -147,6 +171,9 @@ class ImageDisplayTests(unittest.TestCase):
 
 
     def test_target_resize_updates_child_geometry(self):
+        """
+        目標視窗大小改變時同步調整子視窗
+        """
 
         self.display.set_image(self.image_path)
         self.display.show()
@@ -166,6 +193,9 @@ class ImageDisplayTests(unittest.TestCase):
 
 
     def test_close_releases_image_host_and_keeps_target_for_next_image(self):
+        """
+        關閉時釋放圖片容器並保留目標供下次使用
+        """
 
         self.display.set_image(self.image_path)
         self.display.show()

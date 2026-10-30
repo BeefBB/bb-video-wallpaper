@@ -29,6 +29,9 @@ FFMPEG = shutil.which("ffmpeg")
 
 
 def run_host() -> None:
+    """
+    在獨立程序中建立影片輸出的父視窗
+    """
 
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication, QWidget
@@ -45,6 +48,9 @@ def run_host() -> None:
 
 
 def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
+    """
+    在獨立程序中驗證 VLC 重掛與資源釋放
+    """
 
     import win32con
     import win32gui
@@ -72,6 +78,7 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
     logging.basicConfig(level=logging.INFO)
     hosts: list[subprocess.Popen[str]] = []
     wallpaper = None
+    # 探針逾時時輸出執行緒堆疊並退出
     faulthandler.dump_traceback_later(20, exit=True)
 
     def create_host() -> tuple[int, subprocess.Popen[str]]:
@@ -84,6 +91,7 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
         stdout = process.stdout
         assert stdout is not None, "測試父程序未建立標準輸出管線"
         ready: queue.Queue[str] = queue.Queue()
+        # 等待父視窗 HWND, 背景讀取避免阻塞
         threading.Thread(target=lambda: ready.put(stdout.readline()), daemon=True).start()
         return int(ready.get(timeout=8)), process
 
@@ -134,6 +142,7 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
         # 重建途中不顯示尚未掛入測試容器的頂層視窗
         wallpaper.show = lambda: None
 
+        # 分別驗證播放與暫停狀態
         for state, vlc_state in (("play", playing_state), ("pause", paused_state)):
             if state == "pause":
                 wallpaper.media_pause()
@@ -141,6 +150,7 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
             saved_time = player.get_time()
             old_hwnd = int(wallpaper.winId())
             assert win32gui.GetAncestor(old_hwnd, win32con.GA_PARENT) == host_hwnd, "影片未掛入測試父視窗"
+            # 結束父視窗程序, 讓影片輸出失效
             host_process.terminate()
             host_process.wait(timeout=5)
             wait_until(lambda: not win32gui.IsWindow(old_hwnd))
@@ -157,6 +167,7 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
             assert player.get_time() >= saved_time - 250, "播放進度未恢復"
             print(f"PASS {state}: vout={player.has_vout()}, time={player.get_time()}", flush=True)
 
+        # 父視窗失效後關閉桌布
         old_hwnd = int(wallpaper.winId())
         host_process.terminate()
         host_process.wait(timeout=5)
@@ -194,8 +205,14 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
 
 @unittest.skipUnless(sys.platform == "win32" and (VLC_DIR / "libvlc.dll").is_file() and FFMPEG is not None, "需要 Windows, VLC-lite 與 ffmpeg")
 class VideoRecoveryTests(unittest.TestCase):
+    """
+    真正的 VLC 輸出失效與重掛恢復
+    """
 
     def test_playing_and_paused_video_recover_after_host_process_ends(self):
+        """
+        父視窗程序結束後恢復播放, 暫停與進度
+        """
 
         if FFMPEG is None:
             self.skipTest("需要 ffmpeg")
@@ -207,6 +224,7 @@ class VideoRecoveryTests(unittest.TestCase):
                  "-t", "20", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(media)],
                 check=True, capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW,
             )
+            # 分別驗證直接關閉與 aboutToQuit
             for quit_application in (False, True):
                 with self.subTest(quit_application=quit_application):
                     command = [sys.executable, "-X", "utf8", __file__, "--probe", str(media)]

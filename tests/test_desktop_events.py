@@ -26,9 +26,15 @@ from windows_integration import register_taskbar_created_notification
 
 
 class DesktopEventTests(unittest.TestCase):
+    """
+    工作列通知與獨立監聽視窗
+    """
 
     @classmethod
     def setUpClass(cls) -> None:
+        """
+        建立 Qt 應用程式並載入通知監聽類別
+        """
 
         cls.app = QApplication.instance() or QApplication([])
 
@@ -51,12 +57,18 @@ class DesktopEventTests(unittest.TestCase):
 
 
     def setUp(self) -> None:
+        """
+        建立獨立的通知監聽視窗
+        """
 
         self.listener = self.listener_class()
         self.addCleanup(self.dispose_listener)
 
 
     def dispose_listener(self) -> None:
+        """
+        關閉並釋放通知監聽視窗
+        """
 
         self.listener.close()
         self.listener.deleteLater()
@@ -64,7 +76,11 @@ class DesktopEventTests(unittest.TestCase):
 
 
     def test_hidden_top_level_window_receives_only_taskbar_notification(self):
+        """
+        隱藏頂層視窗只處理註冊的工作列通知
+        """
 
+        # 確認監聽視窗保持隱藏且沒有父視窗
         hwnd = int(self.listener.winId())
         events = QSignalSpy(self.listener.taskbar_created)
         self.assertFalse(win32gui.IsWindowVisible(hwnd))
@@ -79,6 +95,9 @@ class DesktopEventTests(unittest.TestCase):
 
 
     def test_listener_survives_destruction_of_separate_wallpaper_container(self):
+        """
+        桌布容器銷毀後獨立監聽視窗仍可接收通知
+        """
 
         container = win32gui.CreateWindowEx(
             0, "Static", "", win32con.WS_OVERLAPPED,
@@ -89,6 +108,7 @@ class DesktopEventTests(unittest.TestCase):
         try:
             target_hwnd = int(target.winId())
             win32gui.SetParent(target_hwnd, container)
+            # 銷毀父容器與原生子視窗
             win32gui.DestroyWindow(container)
             self.assertFalse(win32gui.IsWindow(target_hwnd))
 

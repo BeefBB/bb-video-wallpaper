@@ -23,8 +23,14 @@ import windows_integration as windows
 
 
 class WindowsIntegrationTests(unittest.TestCase):
+    """
+    使用模擬 API 驗證 Windows 整合行為
+    """
 
     def test_vlc_wakeup_only_posts_null_to_own_video_windows(self):
+        """
+        只喚醒目前程序持有的 VLC 影片視窗
+        """
 
         error_type = windows.win32gui.error
         with (
@@ -53,7 +59,11 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_taskbar_notification_allows_only_registered_message_and_preserves_handle(self):
+        """
+        只允許註冊的工作列訊息並保留完整 HWND
+        """
 
+        # 超過 32 位元的 HWND
         hwnd = 2**40 + 1
         with (
             mock.patch.object(windows.win32gui, "RegisterWindowMessage", return_value=0xC123) as register,
@@ -67,6 +77,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_taskbar_filter_failure_keeps_message_registered(self):
+        """
+        訊息篩選設定失敗時仍保留已註冊的訊息
+        """
 
         with (
             mock.patch.object(windows.win32gui, "RegisterWindowMessage", return_value=0xC123),
@@ -80,6 +93,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_taskbar_registration_failure_does_not_allow_null_message(self):
+        """
+        工作列訊息註冊失敗時不允許空訊息
+        """
 
         with (
             mock.patch.object(windows.win32gui, "RegisterWindowMessage", return_value=0),
@@ -92,6 +108,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_single_instance_returns_mutex_handle_for_its_lifetime(self):
+        """
+        取得單一實例狀態並保留 mutex handle
+        """
 
         with (
             mock.patch.object(windows.win32event, "CreateMutex", return_value=mock.sentinel.mutex),
@@ -104,6 +123,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_task_creation_quotes_supplied_path_and_keeps_background_settings(self):
+        """
+        建立排程時正確引用程式路徑並保留背景執行設定
+        """
 
         executable = Path("C:/Apps With Spaces/BB Video Wallpaper.exe")
 
@@ -127,6 +149,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_failed_task_creation_does_not_try_to_update_settings(self):
+        """
+        排程建立失敗時不再更新排程設定
+        """
 
         error = subprocess.CalledProcessError(1, "schtasks")
 
@@ -138,6 +163,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_wallpaper_uses_existing_workerw_on_modern_desktop(self):
+        """
+        現代桌面使用既有的 WorkerW 掛載桌布
+        """
 
         with mock.patch.object(windows, "win32gui") as gui:
             gui.FindWindow.return_value = 10
@@ -153,6 +181,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_wallpaper_creates_workerw_when_modern_desktop_has_none(self):
+        """
+        現代桌面缺少 WorkerW 時建立備援容器
+        """
 
         with (
             mock.patch.object(windows, "win32gui") as gui,
@@ -169,6 +200,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_wallpaper_stays_behind_icons_on_legacy_desktop(self):
+        """
+        舊版桌面的桌布維持在圖示後方
+        """
 
         with mock.patch.object(windows, "win32gui") as gui:
             gui.FindWindow.return_value = 10
@@ -182,6 +216,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_missing_progman_does_not_change_window_parent(self):
+        """
+        找不到 Progman 時不改變視窗父層
+        """
 
         with mock.patch.object(windows, "win32gui") as gui:
             gui.FindWindow.return_value = 0
@@ -196,6 +233,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_wallpaper_warns_about_parent_mismatch_without_interrupting(self):
+        """
+        實際父層不符時記錄警告並完成掛載流程
+        """
 
         for actual_parent in (0, 10, 30):
             with self.subTest(actual_parent=actual_parent), mock.patch.object(windows, "win32gui") as gui:
@@ -218,6 +258,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_parent_query_failure_warns_without_interrupting(self):
+        """
+        無法查詢父層時記錄警告並完成掛載流程
+        """
 
         error = windows.win32gui.error(1400, "GetAncestor", "invalid window handle")
 
@@ -239,6 +282,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_wallpaper_logs_structure_and_selected_path(self):
+        """
+        記錄桌面結構與選用的掛載路徑
+        """
 
         with mock.patch.object(windows, "win32gui") as gui:
             gui.FindWindow.return_value = 10
@@ -265,6 +311,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_diagnostic_read_failure_does_not_prevent_attachment(self):
+        """
+        讀取診斷失敗時仍可完成桌布掛載
+        """
 
         with mock.patch.object(windows, "win32gui") as gui:
             gui.FindWindow.return_value = 10
@@ -283,6 +332,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_split_message_failure_is_logged_and_does_not_attempt_attachment(self):
+        """
+        桌面分離訊息失敗時記錄錯誤並停止掛載
+        """
 
         error = windows.win32gui.error(1460, "SendMessageTimeout", "timed out")
 
@@ -301,6 +353,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_attachment_error_survives_failed_diagnostics(self):
+        """
+        診斷也失敗時仍傳遞原始掛載錯誤
+        """
 
         error = windows.win32gui.error(5, "SetParent", "access denied")
 
@@ -321,6 +376,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_workerw_registration_does_not_hide_unexpected_errors(self):
+        """
+        WorkerW 類別註冊失敗時傳遞原始錯誤
+        """
 
         error = windows.win32gui.error(5, "RegisterClass", "access denied")
 
@@ -336,6 +394,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_workerw_alpha_failure_cleans_up_and_preserves_original_error(self):
+        """
+        設定透明度失敗時清理 WorkerW 並保留原始錯誤
+        """
 
         error_type = windows.win32gui.error
         error = error_type(87, "SetLayeredWindowAttributes", "invalid parameter")
@@ -358,6 +419,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_virtual_desktop_manager_is_created_on_demand_and_reused(self):
+        """
+        虛擬桌面管理物件在需要時建立並重用
+        """
 
         with (
             mock.patch.object(windows, "_virtual_desktop_manager", None),
@@ -371,6 +435,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_fullscreen_detection_ignores_windows_from_other_desktops(self):
+        """
+        全螢幕偵測忽略其他虛擬桌面的視窗
+        """
 
         with (
             mock.patch.object(windows, "win32gui") as gui,
@@ -395,6 +462,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_battery_detection_preserves_unknown_and_failed_status(self):
+        """
+        電池狀態未知或查詢失敗時不視為電池供電
+        """
 
         with mock.patch.object(windows.ctypes.windll.kernel32, "GetSystemPowerStatus") as get_status:
             for ac_line, succeeded, expected in ((0, 1, True), (1, 1, False), (255, 1, False), (0, 0, False)):
@@ -411,6 +481,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_display_notification_decodes_off_on_and_dim_states(self):
+        """
+        解析螢幕關閉, 開啟與變暗的電源通知
+        """
 
         setting = windows.POWERBROADCAST_SETTING()
         setting.PowerSetting = windows.GUID_CONSOLE_DISPLAY_STATE
@@ -427,6 +500,9 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_display_notification_ignores_other_messages_and_power_settings(self):
+        """
+        忽略其他訊息與不相關的電源設定
+        """
 
         message = wintypes.MSG()
         self.assertIsNone(windows.get_display_state(message))
@@ -441,7 +517,11 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
     def test_power_notifications_preserve_64_bit_handles(self):
+        """
+        註冊與取消電源通知時保留 64 位元 handle
+        """
 
+        # 超過 32 位元的 HWND 與通知 handle
         hwnd = 2**40 + 1
         handle = 2**40 + 2
 
@@ -462,8 +542,14 @@ class WindowsIntegrationTests(unittest.TestCase):
 
 
 class WorkerWNativeTests(unittest.TestCase):
+    """
+    使用隱藏父視窗驗證真正的 WorkerW
+    """
 
     def test_created_workerw_is_opaque_and_class_can_be_reused(self):
+        """
+        真正建立的 WorkerW 不透明且可重用視窗類別
+        """
 
         # 父視窗保持隱藏, 不接觸 Explorer 或使用者桌面
         parent = windows.win32gui.CreateWindowEx(

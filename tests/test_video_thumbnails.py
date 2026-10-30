@@ -32,7 +32,9 @@ FFMPEG = shutil.which("ffmpeg")
 
 
 def run_ffmpeg(*args, timeout: int = 30) -> subprocess.CompletedProcess:
-    """以共用選項執行 FFmpeg, 保留輸出供編碼器檢查使用"""
+    """
+    執行 FFmpeg 並保留輸出供編碼器檢查
+    """
 
     if FFMPEG is None:
         raise unittest.SkipTest("需要 ffmpeg")
@@ -68,6 +70,7 @@ def thumbnail_probe(path: str, mode: str, connection) -> None:
     """
 
     cancelled = threading.Event()
+    # 保留 C 回呼參考, 避免被回收
     callback_refs = []
 
     with video_thumbnail_environment() as vlc:
@@ -132,15 +135,22 @@ def thumbnail_probe(path: str, mode: str, connection) -> None:
     "需要 Windows, VLC-lite 與 ffmpeg"
 )
 class VideoThumbnailTests(unittest.TestCase):
+    """
+    使用 VLC 與合成影片驗證縮圖
+    """
 
     @classmethod
     def setUpClass(cls):
+        """
+        設定 VLC 路徑並建立比例與旋轉測試影片
+        """
 
         cls.enterClassContext(video_thumbnail_environment())
         cls.directory = Path(cls.enterClassContext(tempfile.TemporaryDirectory()))
         cls.has_av1_encoder = b"libaom-av1" in run_ffmpeg("-encoders", timeout=10).stdout
         cls.media = {}
 
+        # 建立像素長寬比為 1:1 與 2:1 的影片
         for sar in (1, 2):
 
             path = cls.directory / f"sar-{sar}.mp4"
@@ -174,12 +184,18 @@ class VideoThumbnailTests(unittest.TestCase):
 
 
     def require_av1_encoder(self) -> None:
+        """
+        缺少 AV1 編碼器時跳過案例
+        """
 
         if not self.has_av1_encoder:
             self.skipTest("目前 FFmpeg 不支援測試使用的 AV1 編碼器")
 
 
     def create_av1_video(self, path: Path) -> None:
+        """
+        建立 AV1 編碼的測試影片
+        """
 
         run_ffmpeg(
             "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30",
@@ -188,6 +204,9 @@ class VideoThumbnailTests(unittest.TestCase):
 
 
     def isolated_thumbnail(self, path: Path, mode: str = "render") -> dict:
+        """
+        在獨立程序中擷取縮圖並檢查逾時
+        """
 
         context = multiprocessing.get_context("spawn")
         receiver, sender = context.Pipe(duplex=False)
@@ -217,6 +236,9 @@ class VideoThumbnailTests(unittest.TestCase):
 
 
     def test_av1_thumbnails_finish_without_hanging(self):
+        """
+        AV1 的 MP4 與 MKV 縮圖皆可正常完成
+        """
 
         self.require_av1_encoder()
 
@@ -233,6 +255,9 @@ class VideoThumbnailTests(unittest.TestCase):
 
 
     def test_default_video_track_determines_size_and_pixels(self):
+        """
+        依預設影像軌決定縮圖尺寸與內容
+        """
 
         for codec in ("libx264", "libaom-av1"):
 
@@ -272,6 +297,9 @@ class VideoThumbnailTests(unittest.TestCase):
 
 
     def test_av1_cancellation_and_setup_failure_finish(self):
+        """
+        AV1 取消或設定失敗後可正常結束
+        """
 
         self.require_av1_encoder()
 
@@ -292,6 +320,9 @@ class VideoThumbnailTests(unittest.TestCase):
 
 
     def test_visible_height_excludes_decoder_padding(self):
+        """
+        縮圖高度不包含解碼器的補齊範圍
+        """
 
         image = create_video_thumbnail(self.media[1], lambda: False)
 
@@ -300,6 +331,9 @@ class VideoThumbnailTests(unittest.TestCase):
 
 
     def test_non_square_pixels_use_display_aspect_ratio(self):
+        """
+        非正方形像素依實際顯示比例產生縮圖
+        """
 
         image = create_video_thumbnail(self.media[2], lambda: False)
 
@@ -308,6 +342,9 @@ class VideoThumbnailTests(unittest.TestCase):
 
 
     def test_cancellation_stops_media_parsing(self):
+        """
+        取消時停止進行中的媒體解析
+        """
 
         media = mock.Mock()
         media.parse_with_options.return_value = 0
@@ -321,8 +358,12 @@ class VideoThumbnailTests(unittest.TestCase):
 
 
     def test_rotated_videos_preserve_size_and_pixel_orientation(self):
+        """
+        旋轉影片的縮圖尺寸與像素方向正確
+        """
 
         red, green, blue, yellow = (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0)
+        # 預期色塊順序: 左上, 右上, 左下, 右下
         expected = {
             90: (533, (green, yellow, red, blue)),
             180: (169, (yellow, blue, green, red)),
@@ -342,6 +383,7 @@ class VideoThumbnailTests(unittest.TestCase):
                     pixel = image.pixelColor(image.width() * x // 4, image.height() * y // 4)
                     actual = (pixel.red(), pixel.green(), pixel.blue())
 
+                    # 容許影片壓縮造成的色偏
                     for actual_channel, expected_channel in zip(actual, color):
                         self.assertLessEqual(abs(actual_channel - expected_channel), 30)
 

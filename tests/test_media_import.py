@@ -30,8 +30,14 @@ from media_import import MediaImportCancelled, import_media
 
 @unittest.skipUnless(os.name == "nt", "需要 Windows 的 rename 不覆寫語意")
 class MediaImportTests(unittest.TestCase):
+    """
+    媒體匯入, 容量檢查與檔名衝突處理
+    """
 
     def setUp(self) -> None:
+        """
+        建立暫存來源與匯入目錄, 固定可用容量及語言
+        """
 
         self.temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
@@ -41,6 +47,7 @@ class MediaImportTests(unittest.TestCase):
         self.import_dir = self.media_dir / "_imports"
         self.import_dir.mkdir(parents=True)
 
+        # 模擬可用容量
         disk_usage_patch = mock.patch.object(shutil, "disk_usage")
         self.disk_usage = disk_usage_patch.start()
         self.addCleanup(disk_usage_patch.stop)
@@ -55,6 +62,9 @@ class MediaImportTests(unittest.TestCase):
 
 
     def test_insufficient_space_is_rejected_before_creating_or_copying_a_file(self):
+        """
+        容量不足時在建立暫存檔與複製前停止
+        """
 
         contents = b"new"
 
@@ -63,6 +73,7 @@ class MediaImportTests(unittest.TestCase):
                 source = self.source_dir / f"sample{suffix}"
                 source.write_bytes(contents)
 
+                # 來源檔案大小加上 100 MB 保留空間
                 for free_space in (0, len(contents) - 1, len(contents), 100 * 1024 * 1024 + len(contents) - 1):
                     with self.subTest(suffix=suffix, free_space=free_space):
                         self.disk_usage.return_value.free = free_space
@@ -78,6 +89,9 @@ class MediaImportTests(unittest.TestCase):
 
 
     def test_import_succeeds_with_exactly_100_mb_reserved_or_more(self):
+        """
+        匯入後仍有至少 100 MB 保留空間時允許複製
+        """
 
         for extra_bytes in (0, 1):
             with self.subTest(extra_bytes=extra_bytes):
@@ -96,6 +110,9 @@ class MediaImportTests(unittest.TestCase):
 
 
     def test_identical_content_is_reused_even_when_disk_is_full(self):
+        """
+        磁碟已滿時仍可重用內容相同的既有檔案
+        """
 
         source = self.source_dir / "sample.mp4"
         source.write_bytes(b"same")
@@ -112,6 +129,9 @@ class MediaImportTests(unittest.TestCase):
 
 
     def test_file_already_in_import_directory_is_reused_even_when_disk_is_full(self):
+        """
+        檔案已在匯入目錄時直接重用
+        """
 
         source = self.import_dir / "sample.mp4"
         source.write_bytes(b"same")
@@ -126,6 +146,9 @@ class MediaImportTests(unittest.TestCase):
 
 
     def test_disk_usage_failure_stops_before_creating_or_copying_a_file(self):
+        """
+        無法查詢容量時在建立暫存檔與複製前停止
+        """
 
         source = self.source_dir / "sample.mp4"
         source.write_bytes(b"new")
@@ -144,6 +167,9 @@ class MediaImportTests(unittest.TestCase):
 
 
     def test_disk_filling_during_copy_cleans_up_partial_file(self):
+        """
+        複製途中磁碟已滿時清除暫存檔並保留既有檔案
+        """
 
         source = self.source_dir / "sample.mp4"
         source.write_bytes(b"new contents")
@@ -161,6 +187,7 @@ class MediaImportTests(unittest.TestCase):
 
                     def write_until_full(chunk):
 
+                        # 寫入部分資料後模擬磁碟已滿
                         file.write(chunk[:3])
                         raise OSError(errno.ENOSPC, "No space left on device")
 
@@ -185,6 +212,9 @@ class MediaImportTests(unittest.TestCase):
 
 
     def test_copy_reports_increasing_progress_and_finishes_after_rename(self):
+        """
+        進度持續遞增, 正式檔案就位後才回報完成
+        """
 
         source = self.source_dir / "sample.mp4"
         contents = b"video" * (1024 * 1024)
@@ -195,6 +225,7 @@ class MediaImportTests(unittest.TestCase):
 
             updates.append(percent)
 
+            # 完成時正式檔案已就位
             if percent == 100:
                 self.assertTrue((self.import_dir / source.name).is_file())
                 self.assertFalse(list(self.import_dir.glob(".import-*.tmp")))
@@ -211,6 +242,9 @@ class MediaImportTests(unittest.TestCase):
 
 
     def test_empty_file_reports_zero_and_completion(self):
+        """
+        空檔案仍回報開始與完成進度
+        """
 
         source = self.source_dir / "empty.mp4"
         source.touch()
@@ -223,6 +257,9 @@ class MediaImportTests(unittest.TestCase):
 
 
     def test_cancel_before_start_does_not_create_a_file(self):
+        """
+        開始前取消時不建立檔案或回報進度
+        """
 
         source = self.source_dir / "sample.mp4"
         source.write_bytes(b"new contents")
@@ -238,6 +275,9 @@ class MediaImportTests(unittest.TestCase):
 
 
     def test_cancel_during_hashing_source_or_candidate(self):
+        """
+        計算來源或既有檔案的雜湊時可取消
+        """
 
         source = self.source_dir / "sample.mp4"
         source.write_bytes(b"new contents")
@@ -245,6 +285,7 @@ class MediaImportTests(unittest.TestCase):
         existing.write_bytes(b"old contents")
         real_sha256 = hashlib.sha256
 
+        # 依序取消來源與既有檔案的雜湊
         for cancel_hash_number in (1, 2):
             with self.subTest(cancel_hash_number=cancel_hash_number):
                 cancelled = False
@@ -283,6 +324,9 @@ class MediaImportTests(unittest.TestCase):
 
 
     def test_cancel_during_copy_or_before_rename_cleans_up_partial_file(self):
+        """
+        複製中或更名前取消時清除暫存檔
+        """
 
         source = self.source_dir / "sample.mp4"
         contents = b"new" * (1024 * 1024)
@@ -314,6 +358,9 @@ class MediaImportTests(unittest.TestCase):
 
 
     def test_insufficient_space_message_includes_capacity_in_every_language(self):
+        """
+        各語系的容量不足訊息包含正確的 MB 數值
+        """
 
         source = self.source_dir / "sample.mp4"
 
@@ -339,6 +386,9 @@ class MediaImportTests(unittest.TestCase):
 
 
     def test_long_name_without_collision_is_preserved(self):
+        """
+        沒有同名衝突時保留完整長檔名
+        """
 
         source = self.source_dir / ("a" * 251 + ".mp4")
         source.write_bytes(b"new")
@@ -351,6 +401,9 @@ class MediaImportTests(unittest.TestCase):
 
 
     def test_short_name_collisions_keep_existing_files(self):
+        """
+        同名時依序加入編號並保留既有檔案
+        """
 
         source = self.source_dir / "sample.mp4"
         original = self.import_dir / source.name
@@ -371,6 +424,9 @@ class MediaImportTests(unittest.TestCase):
 
 
     def test_truncation_reserves_four_units_only_when_required(self):
+        """
+        需要截短檔名時才為衝突編號保留長度
+        """
 
         for suffix in (".mp4", ".jpeg"):
             for length, expected_length in ((252, 255), (253, 251), (255, 251)):
@@ -393,6 +449,9 @@ class MediaImportTests(unittest.TestCase):
 
 
     def test_chinese_and_emoji_names_use_utf16_without_splitting_characters(self):
+        """
+        依 UTF-16 長度截短中文與 emoji 檔名, 不切斷字元
+        """
 
         cases = (
             ("chinese", "桌" * 251, "桌" * 244),
@@ -416,6 +475,9 @@ class MediaImportTests(unittest.TestCase):
 
 
     def test_number_growing_to_two_digits_truncates_and_preserves_collisions(self):
+        """
+        編號增為兩位數時重新截短檔名並保留既有檔案
+        """
 
         stem = "a" * 248
         source = self.source_dir / f"{stem}.mp4"
@@ -437,6 +499,9 @@ class MediaImportTests(unittest.TestCase):
 
 
     def test_reimport_after_truncation_reuses_identical_content(self):
+        """
+        再次匯入時重用先前已截短檔名的相同內容
+        """
 
         source = self.source_dir / ("a" * 251 + ".mp4")
         source.write_bytes(b"new")

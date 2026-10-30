@@ -23,8 +23,14 @@ from config import CONFIG_DEFAULTS, SUPPORTED_LANGUAGES, ConfigStore
 
 
 class ConfigTests(unittest.TestCase):
+    """
+    設定檔的初始化, 驗證與儲存
+    """
 
     def setUp(self) -> None:
+        """
+        建立暫存設定檔路徑並固定系統語系
+        """
 
         self.temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
@@ -46,6 +52,9 @@ class ConfigTests(unittest.TestCase):
 
 
     def test_source_compiles(self):
+        """
+        檢查主要模組的語法
+        """
 
         for name in ("bb-video-wallpaper.py", "config.py", "thumbnails.py"):
 
@@ -56,6 +65,9 @@ class ConfigTests(unittest.TestCase):
 
 
     def test_missing_file_uses_defaults_without_writing(self):
+        """
+        缺少設定檔時使用預設值, 不寫入檔案
+        """
 
         config = self.store.load()
         expected = {
@@ -69,6 +81,9 @@ class ConfigTests(unittest.TestCase):
 
 
     def test_initialization_creates_complete_defaults(self):
+        """
+        初始化時寫入完整的預設設定
+        """
 
         self.store.initialize_if_missing()
 
@@ -87,6 +102,9 @@ class ConfigTests(unittest.TestCase):
 
 
     def test_initialization_preserves_existing_files(self):
+        """
+        保留已存在的設定檔, 包含損壞或空白檔案
+        """
 
         existing = json.dumps({
             "autoPauseIfFullscreen": False,
@@ -109,6 +127,9 @@ class ConfigTests(unittest.TestCase):
 
 
     def test_initialization_uses_installer_language(self):
+        """
+        初始化時採用安裝程式指定的語言
+        """
 
         lang_dir = Path(self.temp_dir.name) / "lang"
         lang_dir.mkdir()
@@ -125,6 +146,9 @@ class ConfigTests(unittest.TestCase):
 
 
     def test_initialization_skips_inaccessible_path(self):
+        """
+        無法存取設定檔路徑時略過初始化
+        """
 
         with (
             mock.patch.object(Path, "stat", side_effect=PermissionError),
@@ -137,6 +161,9 @@ class ConfigTests(unittest.TestCase):
 
 
     def test_initialization_write_failure_keeps_defaults_available(self):
+        """
+        初始化寫入失敗後仍可讀取預設設定與語言
+        """
 
         expected = {
             **CONFIG_DEFAULTS,
@@ -161,6 +188,9 @@ class ConfigTests(unittest.TestCase):
 
 
     def test_only_invalid_boolean_is_replaced(self):
+        """
+        只修復無效的布林值, 保留其他設定
+        """
 
         baseline = {
             "autoPauseIfFullscreen": False,
@@ -184,6 +214,9 @@ class ConfigTests(unittest.TestCase):
 
 
     def test_language_validation(self):
+        """
+        保留支援的語言, 無效值改用預設語言
+        """
 
         for language in SUPPORTED_LANGUAGES.values():
             result = self.store.validate({"language": language})
@@ -197,6 +230,9 @@ class ConfigTests(unittest.TestCase):
 
 
     def test_unsupported_or_unavailable_system_locale(self):
+        """
+        系統語系不支援或無法取得時使用預設語言
+        """
 
         for system_locale in ("fr_FR", None):
 
@@ -214,6 +250,9 @@ class ConfigTests(unittest.TestCase):
 
 
     def test_legacy_recent_video_and_invalid_types(self):
+        """
+        相容舊版最近紀錄格式, 排除無效型別
+        """
 
         result = self.store.validate({"recentVideo": "video/old.mp4"})
         self.assertEqual(result["recentVideo"], ["video/old.mp4"])
@@ -226,6 +265,9 @@ class ConfigTests(unittest.TestCase):
 
 
     def test_recent_video_filters_paths_and_keeps_missing_files(self):
+        """
+        排除無效或越界路徑, 保留尚不存在的媒體紀錄
+        """
 
         recent = [
             "video/first.mp4",
@@ -253,6 +295,9 @@ class ConfigTests(unittest.TestCase):
 
 
     def test_recent_video_deduplicates_and_limits_to_five(self):
+        """
+        最近紀錄去重後最多保留五筆
+        """
 
         recent = ["first.mp4", "./first.mp4"] + [f"{i}.mp4" for i in range(7)]
 
@@ -270,6 +315,9 @@ class ConfigTests(unittest.TestCase):
 
 
     def test_bad_json_encoding_and_root_preserve_original_file(self):
+        """
+        設定檔格式損壞時使用預設值並保留原檔
+        """
 
         for contents in (b"", b"{broken", b"\xff", b"[]", b"null", b"1", b'"text"'):
 
@@ -284,6 +332,9 @@ class ConfigTests(unittest.TestCase):
 
 
     def test_load_repairs_only_in_memory(self):
+        """
+        讀取時只修復記憶體中的設定
+        """
 
         contents = json.dumps({
             "autoPauseIfFullscreen": "false",
@@ -303,6 +354,9 @@ class ConfigTests(unittest.TestCase):
 
 
     def test_read_error_uses_defaults(self):
+        """
+        讀取設定檔失敗時使用預設值
+        """
 
         with mock.patch("builtins.open", side_effect=PermissionError):
             result = self.store.load()
@@ -311,6 +365,9 @@ class ConfigTests(unittest.TestCase):
 
 
     def test_language_load_uses_validated_config(self):
+        """
+        依驗證後的設定載入語言檔
+        """
 
         path = self.store.lang_dir / "en-US.json"
         expected = json.loads(path.read_text(encoding="utf-8"))
@@ -324,6 +381,9 @@ class ConfigTests(unittest.TestCase):
 
 
     def test_save_round_trip_and_replace_failure(self):
+        """
+        確認儲存結果可回讀, 更名失敗時保留原檔
+        """
 
         original = self.store.validate({"language": "zh-TW"})
         self.store.save(original)

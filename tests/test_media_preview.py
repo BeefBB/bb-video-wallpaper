@@ -25,6 +25,9 @@ import media_preview
 
 
 class ThumbnailWorker(QObject):
+    """
+    由測試控制縮圖請求與結果訊號
+    """
 
     thumbnail_ready = Signal(str, QImage)
 
@@ -35,9 +38,15 @@ class ThumbnailWorker(QObject):
 
 
 class MediaPreviewTests(unittest.TestCase):
+    """
+    媒體預覽選單的懸停狀態與縮圖顯示
+    """
 
     @classmethod
     def setUpClass(cls) -> None:
+        """
+        建立 Qt 應用程式
+        """
 
         cls.app = QApplication.instance() or QApplication([])
 
@@ -46,6 +55,9 @@ class MediaPreviewTests(unittest.TestCase):
 
 
     def setUp(self) -> None:
+        """
+        建立隱藏預覽選單並固定游標與螢幕範圍
+        """
 
         directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.media_dir = directory / "media"
@@ -73,6 +85,7 @@ class MediaPreviewTests(unittest.TestCase):
         self.disabled = self.add_media_action("missing.mp4")
         self.disabled.setEnabled(False)
 
+        # 固定選單位置, 游標與螢幕範圍
         self.visible = self.enterContext(mock.patch.object(self.menu, "isVisible", return_value=True))
         self.action_at = self.enterContext(mock.patch.object(self.menu, "actionAt", return_value=self.first))
         self.frame_rect = QRect(200, 100, 160, 80)
@@ -87,6 +100,9 @@ class MediaPreviewTests(unittest.TestCase):
 
 
     def dispose_menu(self) -> None:
+        """
+        停止預覽並釋放選單與縮圖工作物件
+        """
 
         self.menu.reset_preview()
         self.menu.close()
@@ -96,6 +112,9 @@ class MediaPreviewTests(unittest.TestCase):
 
 
     def add_media_action(self, name):
+        """
+        建立帶有媒體路徑的選單項目
+        """
 
         action = QAction(name, self.menu)
         action.setData(str(self.media_dir / name))
@@ -104,6 +123,9 @@ class MediaPreviewTests(unittest.TestCase):
 
 
     def hover(self, action):
+        """
+        模擬游標移到指定選單項目
+        """
 
         self.action_at.return_value = action
         event = QMouseEvent(
@@ -118,15 +140,22 @@ class MediaPreviewTests(unittest.TestCase):
 
 
     def activate_preview(self, action=None):
+        """
+        模擬懸停並進入預覽模式
+        """
 
         self.hover(action if action is not None else self.first)
         if self.menu.preview_timer.isActive():
+            # 直接觸發懸停計時器
             self.menu.preview_timer.stop()
             self.menu.preview_timer.timeout.emit()
         self.assertTrue(self.menu.preview_mode)
 
 
     def thumbnail(self, width=120, height=60):
+        """
+        建立指定尺寸的測試縮圖
+        """
 
         image = QImage(width, height, QImage.Format.Format_RGB32)
         image.fill(Qt.GlobalColor.blue)
@@ -134,6 +163,9 @@ class MediaPreviewTests(unittest.TestCase):
 
 
     def test_constructor_uses_supplied_paths_without_creating_directories(self):
+        """
+        建構時使用指定路徑但不建立目錄
+        """
 
         self.worker_class.assert_called_once_with(self.media_dir, self.thumbnail_dir, self.menu)
         self.assertEqual((self.menu.loading_pixmap.width(), self.menu.loading_pixmap.height()), (300, 150))
@@ -142,6 +174,9 @@ class MediaPreviewTests(unittest.TestCase):
 
 
     def test_missing_loading_image_uses_fallback(self):
+        """
+        載入圖片不存在時使用備援畫面
+        """
 
         menu = media_preview.MediaPreviewMenu(
             "Media",
@@ -157,6 +192,9 @@ class MediaPreviewTests(unittest.TestCase):
 
 
     def test_first_hover_waits_before_requesting_thumbnail(self):
+        """
+        首次懸停經過延遲後才請求縮圖
+        """
 
         self.hover(self.first)
 
@@ -174,6 +212,9 @@ class MediaPreviewTests(unittest.TestCase):
 
 
     def test_switch_in_preview_mode_requests_immediately_and_clears_old_image(self):
+        """
+        預覽模式切換項目時立即請求並清除舊縮圖
+        """
 
         self.activate_preview()
         self.worker.thumbnail_ready.emit(self.first.data(), self.thumbnail())
@@ -190,6 +231,9 @@ class MediaPreviewTests(unittest.TestCase):
 
 
     def test_return_before_reset_is_immediate_and_return_after_reset_waits(self):
+        """
+        重設前返回可立即預覽, 重設後重新等待懸停
+        """
 
         self.activate_preview()
         self.menu.leave_preview()
@@ -217,6 +261,9 @@ class MediaPreviewTests(unittest.TestCase):
 
 
     def test_non_media_disabled_and_empty_areas_hide_preview(self):
+        """
+        停用項目, 非媒體項目與空白區域會隱藏預覽
+        """
 
         for action in (None, self.non_media, self.disabled):
             with self.subTest(action=action):
@@ -230,6 +277,9 @@ class MediaPreviewTests(unittest.TestCase):
 
 
     def test_stale_null_and_inactive_results_do_not_replace_preview(self):
+        """
+        過期, 空白與預覽結束後的結果不更新畫面
+        """
 
         self.activate_preview(self.second)
         loading_key = self.menu.preview_pixmap.cacheKey()
@@ -247,6 +297,9 @@ class MediaPreviewTests(unittest.TestCase):
 
 
     def test_background_result_updates_preview_on_qt_main_thread(self):
+        """
+        背景縮圖結果由 Qt 主執行緒更新預覽
+        """
 
         self.activate_preview()
         displayed_on = []
@@ -264,6 +317,7 @@ class MediaPreviewTests(unittest.TestCase):
         thread.start()
         thread.join(timeout=5)
         self.assertFalse(thread.is_alive())
+        # 尚未處理 Qt 事件佇列
         self.assertEqual(displayed_on, [])
 
         self.app.processEvents()
@@ -273,6 +327,9 @@ class MediaPreviewTests(unittest.TestCase):
 
 
     def test_preview_scales_and_stays_inside_screen_edges(self):
+        """
+        依螢幕範圍縮放並調整預覽位置
+        """
 
         self.activate_preview()
 
@@ -295,6 +352,9 @@ class MediaPreviewTests(unittest.TestCase):
 
 
     def test_hidden_menu_or_changed_hover_does_not_request_thumbnail(self):
+        """
+        選單隱藏或懸停項目改變後不發出舊縮圖請求
+        """
 
         self.menu.preview_action = self.first
         self.visible.return_value = False
@@ -308,6 +368,9 @@ class MediaPreviewTests(unittest.TestCase):
 
 
     def test_hiding_menu_resets_mode_timers_and_preview(self):
+        """
+        隱藏選單時重設預覽模式並停止計時器
+        """
 
         self.activate_preview()
         self.menu.leave_preview()
