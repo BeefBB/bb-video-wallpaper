@@ -12,7 +12,7 @@ if (-not (Test-Path -LiteralPath $transformPlugin -PathType Leaf)) {
     throw "VLC video transform plugin was not found: $transformPlugin"
 }
 
-# This program uses libVLC only for silent, local image/video wallpaper playback.
+# This program uses libVLC only for silent, local video wallpaper playback.
 # Retain all modules in the selected playback-related categories so libVLC can
 # fall back safely for different local files and Windows GPU configurations.
 # Selected categories still include some audio, network, disc, and subtitle
