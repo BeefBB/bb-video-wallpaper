@@ -12,7 +12,7 @@ import time
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import QCoreApplication, QEvent, QThread, Qt, Signal
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QThread, Qt, Signal
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
@@ -39,6 +39,14 @@ class PreviewMenu(QMenu):
         self.thumbnail_dir = thumbnail_dir
         self.loading_image_path = loading_image_path
         self.thumbnail_thread = mock.Mock()
+
+
+class ReattachNotifier(QObject):
+    """
+    以真正 Qt 訊號通知當次重掛結束
+    """
+
+    reattach_finished = Signal()
 
 
 class ImportMenuTests(unittest.TestCase):
@@ -120,6 +128,9 @@ class ImportMenuTests(unittest.TestCase):
 
         wallpaper = mock.Mock()
         wallpaper.is_exiting = False
+        wallpaper.is_recreating = False
+        self.reattach_notifier = ReattachNotifier()
+        wallpaper.reattach_finished = self.reattach_notifier.reattach_finished
         self.tray = self.namespace["Tray"](mock.Mock(), wallpaper)
         self.menu = self.tray.tray.setContextMenu.call_args.args[0]
         self.tray.play_from_menu = mock.Mock()
@@ -371,6 +382,57 @@ class ImportMenuTests(unittest.TestCase):
         self.assert_idle_menu()
         self.tray.play_from_menu.assert_not_called()
         self.assertIn("disk full", self.tray.tray.showMessage.call_args.args[1])
+
+
+    def test_completed_import_waits_for_reattach_and_plays_only_once(self):
+        """
+        匯入完成時若正在重掛, 保留結果並在重掛結束後只套用一次
+        """
+
+        self.tray.wallpaper.is_recreating = True
+        self.tray.add_media()
+        worker = self.tray.import_thread
+        self.assertTrue(worker.wait(5000))
+        self.app.processEvents()
+        self.assertIs(self.tray.import_thread, worker)
+        self.tray.play_from_menu.assert_not_called()
+
+        # 等待中的回呼若又遇上重掛, 繼續等下一次結束訊號
+        self.reattach_notifier.reattach_finished.emit()
+        self.app.processEvents()
+        self.assertIs(self.tray.import_thread, worker)
+        self.tray.wallpaper.is_recreating = False
+        self.reattach_notifier.reattach_finished.emit()
+        self.reattach_notifier.reattach_finished.emit()
+        self.app.processEvents()
+
+        self.assertIsNone(self.tray.import_thread)
+        self.assert_idle_menu()
+        self.tray.play_from_menu.assert_called_once_with(self.destination)
+        self.tray.refresh_media_menu.assert_called_once_with()
+
+
+    def test_quitting_discards_import_deferred_during_reattach(self):
+        """
+        匯入完成後等待重掛期間退出, 不因延後回呼重新播放
+        """
+
+        self.tray.wallpaper.is_recreating = True
+        self.tray.add_media()
+        worker = self.tray.import_thread
+        self.assertTrue(worker.wait(5000))
+        self.app.processEvents()
+        self.assertIs(self.tray.import_thread, worker)
+
+        self.tray.wallpaper.is_exiting = True
+        self.tray.wallpaper.is_recreating = False
+        self.reattach_notifier.reattach_finished.emit()
+        self.app.processEvents()
+
+        self.assertIsNone(self.tray.import_thread)
+        self.tray.play_from_menu.assert_not_called()
+        self.tray.media_menu.thumbnail_thread.request.assert_not_called()
+        self.tray.tray.showMessage.assert_not_called()
 
 
     def test_single_recent_media_can_be_cleared_without_changing_wallpapers(self):
