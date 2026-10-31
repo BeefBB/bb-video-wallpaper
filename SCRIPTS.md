@@ -86,6 +86,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 測試使用 Python 內建的 `unittest`, 在 Windows 與專案套件準備完成後執行:
 
 ```powershell
+.\test.bat
+```
+
+[test.bat](./test.bat) 會切換到專案根目錄, 必要時建立虛擬環境並安裝套件, 再執行全部測試. 結束後會保留視窗方便查看結果, 並回傳測試的結束碼
+
+也可直接執行:
+
+```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
