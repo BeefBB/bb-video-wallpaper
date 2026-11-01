@@ -112,7 +112,7 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
         source_path = ROOT / "bb-video-wallpaper.py"
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
         nodes = ast.Module(
-            body=[node for node in tree.body if isinstance(node, ast.ClassDef) and node.name in {"VlcStopThread", "DesktopEventWindow", "Wallpaper"}],
+            body=[node for node in tree.body if isinstance(node, ast.ClassDef) and node.name in {"VlcStopThread", "DesktopEventWindow", "Wallpaper", "Tray"}],
             type_ignores=[],
         )
         # exec 使用的命名空間混合類別, 模組與測試替身
@@ -132,6 +132,7 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
             "unregister_power_notification": lambda handle: None,
             "get_display_state": lambda message: None, "is_on_battery": lambda: False,
             "is_any_fullscreen": lambda hwnd: False, "logger": logging.getLogger("video-recovery-test"),
+            "tr": lambda key: key,
         }
         exec(compile(nodes, str(source_path), "exec"), namespace)
         wallpaper = namespace["Wallpaper"]()
@@ -157,16 +158,79 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
             wait_until(lambda: not win32gui.IsWindow(old_hwnd))
             host_hwnd, host_process = create_host()
             listener = wallpaper.desktop_events
-            win32gui.SendMessage(int(listener.winId()), listener.taskbar_created_message, 0, 0)
-            app.processEvents()
-            assert wallpaper.reattach_timer.isActive(), "通知沒有排定重掛"
-            wait_until(lambda: not wallpaper.is_recreating and not wallpaper.reattach_timer.isActive())
+            # 模擬首次掛載失敗, 檢查重試後的播放狀態與進度
+            with (
+                mock.patch.object(
+                    wallpaper, "attach_to_desktop", wraps=wallpaper.attach_to_desktop,
+                    side_effect=[RuntimeError("simulated attachment failure"), mock.DEFAULT],
+                ) as attach,
+                mock.patch.object(namespace["logger"], "exception") as recovery_error,
+            ):
+                win32gui.SendMessage(int(listener.winId()), listener.taskbar_created_message, 0, 0)
+                app.processEvents()
+                assert wallpaper.reattach_timer.isActive(), "通知沒有排定重掛"
+                wait_until(lambda: not wallpaper.is_recreating and not wallpaper.reattach_timer.isActive())
+                assert attach.call_count == 2, "沒有完成一次失敗後的重試"
+                recovery_error.assert_called_once()
             wait_until(lambda: player.has_vout() > 0 and player.get_state() == vlc_state)
             wait_until(lambda: player.get_time() >= saved_time - 250)
             assert win32gui.GetAncestor(int(wallpaper.winId()), win32con.GA_PARENT) == host_hwnd
             assert wallpaper.play_state == state
             assert player.get_time() >= saved_time - 250, "播放進度未恢復"
             print(f"PASS {state}: vout={player.has_vout()}, time={player.get_time()}", flush=True)
+
+        # 模擬背景停止期間匯入完成, 檢查新影片從頭播放
+        imported = media.with_name("imported.mp4")
+        shutil.copyfile(media, imported)
+        tray = namespace["Tray"].__new__(namespace["Tray"])
+        tray.wallpaper = wallpaper
+        tray.import_thread = mock.Mock(destination=imported, cancelled=False)
+        tray.add_media_action = mock.Mock()
+        tray.cancel_import_action = mock.Mock()
+        tray.media_menu = mock.Mock()
+        tray.refresh_media_menu = mock.Mock()
+        tray.tray = mock.Mock()
+        import_processed = threading.Event()
+        import_errors = []
+        seeks = []
+        saved_time = player.get_time()
+        stop_thread = namespace["VlcStopThread"]
+        original_run = stop_thread.run
+        original_seek = player.set_time
+
+        def stop_after_import(worker):
+            if not import_processed.wait(2):
+                worker.error = RuntimeError("import callback was not processed")
+                return
+            original_run(worker)
+
+        def finish_import_during_stop():
+            try:
+                assert wallpaper.is_recreating, "匯入完成未發生於重掛期間"
+                tray.finish_import()
+                assert tray.import_thread is not None, "匯入結果提早套用"
+                assert wallpaper.current_media == media, "停止尚未完成就切換媒體"
+            except Exception as error:
+                import_errors.append(str(error))
+            finally:
+                import_processed.set()
+
+        def record_seek(position):
+            seeks.append((wallpaper.current_media, position))
+            return original_seek(position)
+
+        QTimer.singleShot(0, finish_import_during_stop)
+        with (
+            mock.patch.object(stop_thread, "run", stop_after_import),
+            mock.patch.object(player, "set_time", side_effect=record_seek),
+        ):
+            wallpaper.reattach_to_desktop()
+            wait_until(lambda: wallpaper.current_media == imported and player.has_vout() > 0 and player.get_state() == playing_state)
+            assert not import_errors, import_errors
+            assert tray.import_thread is None, "重掛後未完成匯入處理"
+            assert all(path != imported for path, _ in seeks), "新影片被套用舊進度"
+            assert player.get_time() < saved_time, "匯入影片沒有從頭播放"
+        print("PASS import: new media starts without old seek", flush=True)
 
         # 父視窗失效後關閉桌布
         old_hwnd = int(wallpaper.winId())
@@ -241,6 +305,7 @@ class VideoRecoveryTests(unittest.TestCase):
                     self.assertIn("PASS play:", result.stdout)
                     self.assertIn("PASS shutdown:", result.stdout)
                     self.assertIn("PASS pause:", result.stdout)
+                    self.assertIn("PASS import:", result.stdout)
 
 
 if __name__ == "__main__":

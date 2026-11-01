@@ -283,7 +283,10 @@ class Wallpaper(QWidget):
     桌布視窗
     """
 
+    # 影片開始播放訊號
     playback_started = Signal()
+    # 重掛完成訊號
+    reattach_finished = Signal()
 
 
     def __init__(self, target_screen: QScreen | None = None) -> None:
@@ -328,6 +331,8 @@ class Wallpaper(QWidget):
         # 播放狀態: "play", "pause", "stop"
         self.play_state = "stop"
         self.pending_reattach_time: int | None = None
+        # 重掛載時的媒體與進度
+        self._reattach_position: tuple[Path, int] | None = None
         # 啟用自動暫停
         self.enable_auto_pause = True
 
@@ -513,7 +518,7 @@ class Wallpaper(QWidget):
         self.apply_pending_pause()
 
 
-    def media_stop(self) -> None:
+    def media_stop(self, *, preserve_reattach_position: bool = False) -> None:
         """
         停止播放
         """
@@ -522,6 +527,8 @@ class Wallpaper(QWidget):
             return
 
         self.pending_reattach_time = None
+        if not preserve_reattach_position:
+            self._reattach_position = None
 
         if self.is_image():
             self.instance_image.hide()
@@ -685,8 +692,9 @@ class Wallpaper(QWidget):
 
         try:
 
-            # 桌面尚未就緒時只等待, 保留視窗與掛載失敗的重試次數
+            # 桌面尚未就緒時只等待, 保留掛載失敗的重試次數
             if not check_desktop_ready():
+
                 self.is_recreating = False
                 logger.debug("桌面尚未就緒, 2 秒後再嘗試重掛")
                 self.schedule_reattach(2000)
@@ -695,12 +703,19 @@ class Wallpaper(QWidget):
             logger.info("reattach_to_desktop - start")
 
 
-            # 紀錄當前播放時間進度
-            curr_time = self.instance_vlc_player.get_time() if not self.is_image() else -1
-
             # 先停止舊影片輸出再換綁 HWND, 避免 VLC 在換綁後停止時卡住
             # 直接停止播放器, 保留 play_state 供重掛後恢復
             if not self.is_image():
+                if self.current_media and self._reattach_position is None:
+                    # 尚未完成的 seek 比新輸出回報的起始進度優先
+                    curr_time = self.pending_reattach_time
+                    if curr_time is None:
+                        curr_time = self.instance_vlc_player.get_time()
+                    if curr_time >= 0:
+                        self._reattach_position = (self.current_media, curr_time)
+
+                # 舊輸出的 Playing 通知不能消耗等待重試的進度
+                self.pending_reattach_time = None
                 self.stop_video_output()
 
             # 停止輸出的事件迴圈可能已處理關閉要求
@@ -746,7 +761,12 @@ class Wallpaper(QWidget):
 
                 else:
 
-                    self.set_play_media(self.current_media)
+                    self.set_play_media(self.current_media, preserve_reattach_position=True)
+
+                    if self._reattach_position is not None and self._reattach_position[0] == self.current_media:
+                        curr_time = self._reattach_position[1]
+                    else:
+                        curr_time = -1
 
                     if curr_time > 0:
                         self.instance_vlc_player.set_time(curr_time)
@@ -755,6 +775,7 @@ class Wallpaper(QWidget):
                             self.pending_reattach_time = curr_time
 
 
+            self._reattach_position = None
             logger.info("reattach_to_desktop - finish")
             self.is_recreating = False
             self.reattach_retry_count = 0
@@ -775,6 +796,10 @@ class Wallpaper(QWidget):
             else:
                 logger.error("重新掛載桌布失敗")
 
+        finally:
+            self.is_recreating = False
+            self.reattach_finished.emit()
+
 
     def on_screen_changed(self, geometry) -> None:
         """
@@ -789,7 +814,7 @@ class Wallpaper(QWidget):
         self.schedule_reattach()
 
 
-    def set_play_media(self, path: Path) -> None:
+    def set_play_media(self, path: Path, *, preserve_reattach_position: bool = False) -> None:
         """
         圖片交給 Qt 顯示, 影片交給 VLC, 保留原本的播放或停止狀態
         """
@@ -805,7 +830,7 @@ class Wallpaper(QWidget):
             self.instance_image.set_image(path)
 
 
-        self.media_stop()
+        self.media_stop(preserve_reattach_position=preserve_reattach_position)
         logger.debug("set_play_media - stop")
 
 
@@ -846,7 +871,7 @@ class Wallpaper(QWidget):
 
             elif previous_play_state == "stop":
 
-                self.media_stop()
+                self.media_stop(preserve_reattach_position=preserve_reattach_position)
                 logger.debug("set_play_media - stop")
 
 
@@ -981,6 +1006,7 @@ class Wallpaper(QWidget):
         self.enable_auto_pause = False
         self.fullscreen_detection_ready = False
         self.pending_reattach_time = None
+        self._reattach_position = None
         self.play_state = "stop"
         self.current_media = None
 
@@ -1380,6 +1406,16 @@ class Tray:
         worker = self.import_thread
 
         if worker is None:
+            return
+
+        # 巢狀事件迴圈仍會收到匯入完成訊號, 等當次重掛離開後才切換媒體
+        if self.wallpaper.is_recreating:
+            self.wallpaper.reattach_finished.connect(
+                self.finish_import,
+                Qt.ConnectionType(
+                    Qt.ConnectionType.QueuedConnection.value | Qt.ConnectionType.SingleShotConnection.value
+                ),
+            )
             return
 
         self.import_thread = None
