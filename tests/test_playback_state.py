@@ -14,6 +14,7 @@ from unittest import mock
 from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QObject, QRect, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QScreen
 from PySide6.QtTest import QSignalSpy, QTest
+from shiboken6 import isValid
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -315,7 +316,14 @@ class PlaybackStateTests(unittest.TestCase):
         tray_class = self.namespace["Tray"]
         # 建立播放命令入口
         self.tray = tray_class.__new__(tray_class)
-        self.tray.wallpaper = self.wallpaper
+        self.tray.wallpapers = {self.wallpaper.screen_id: self.wallpaper}
+        self.tray.is_exiting = False
+        self.tray.import_thread = None
+        self.tray.import_screen_id = self.wallpaper.screen_id
+        self.tray.import_applies_to_all = False
+        self.tray.media_menu = mock.Mock()
+        self.tray.thumbnail_thread = mock.Mock()
+        self.tray.screen_menus = {}
         self.tray.app = mock.Mock()
         self.media_path = self.namespace["MEDIA_DIR"] / "sample.mp4"
         self.image_path = self.namespace["MEDIA_DIR"] / "sample.PNG"
@@ -327,6 +335,10 @@ class PlaybackStateTests(unittest.TestCase):
         """
 
         wallpaper = self.wallpaper if wallpaper is None else wallpaper
+
+        if not isValid(wallpaper):
+            return
+
         wallpaper.is_exiting = True
         wallpaper.reattach_timer.stop()
 
@@ -393,7 +405,7 @@ class PlaybackStateTests(unittest.TestCase):
             self.assertEqual(config["recentVideo"], ["b.png", "a.mp4"])
 
             tray = self.namespace["Tray"].__new__(self.namespace["Tray"])
-            tray.wallpaper = screen_a
+            tray.wallpapers = {"screen-a": screen_a, "screen-b": screen_b}
             tray.clear_recent_media()
             self.assertEqual(store.load()["recentVideo"], [])
             original_config = store.config_path.read_bytes()
@@ -981,10 +993,12 @@ class PlaybackStateTests(unittest.TestCase):
                         "image": self.image_path,
                     }[kind]
                     worker = mock.Mock(destination=destination, cancelled=False)
+                    worker.isRunning.return_value = False
                     self.tray.import_thread = worker
                     self.tray.add_media_action = mock.Mock()
                     self.tray.cancel_import_action = mock.Mock()
                     self.tray.media_menu = mock.Mock()
+                    self.tray.thumbnail_thread = mock.Mock()
                     self.tray.refresh_media_menu = mock.Mock()
                     self.tray.tray = mock.Mock()
                     self.namespace["tr"] = lambda key: key
@@ -1025,7 +1039,7 @@ class PlaybackStateTests(unittest.TestCase):
                     self.assertIsNone(self.tray.import_thread)
                     worker.deleteLater.assert_called_once_with()
                     self.assertEqual(self.wallpaper.current_media, destination)
-                    self.tray.media_menu.thumbnail_thread.request.assert_called_once_with(destination)
+                    self.tray.thumbnail_thread.request.assert_called_once_with(destination)
                     self.tray.refresh_media_menu.assert_called_once_with()
                     if fail_attach:
                         self.wallpaper.reattach_timer.start(0)
@@ -1782,6 +1796,40 @@ class PlaybackStateTests(unittest.TestCase):
         self.wallpaper.create.assert_not_called()
         self.wallpaper.destroy.assert_called_once_with(True, True)
         self.namespace["logger"].exception.assert_not_called()
+
+
+    def test_screen_removal_during_reattach_defers_qobject_deletion_until_reattach_returns(self):
+
+        self.start_loading()
+        self.tray.rebuild_screen_menus = mock.Mock()
+        continue_stop = threading.Event()
+        original_stop = self.player.stop
+        errors = []
+
+        def stop_waiting_for_removal():
+            if not continue_stop.wait(2):
+                raise RuntimeError("screen removal was not processed")
+            original_stop()
+
+        def remove_during_stop():
+            continue_stop.set()
+            self.tray.remove_screen(self.wallpaper.target_screen)
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            if not isValid(self.wallpaper):
+                errors.append("wallpaper was deleted while reattachment was still using it")
+
+        QTimer.singleShot(0, remove_during_stop)
+        with mock.patch.object(self.player, "stop", side_effect=stop_waiting_for_removal) as stop:
+            self.wallpaper.reattach_to_desktop()
+
+        self.assertEqual(errors, [])
+        self.assertEqual(self.tray.wallpapers, {})
+        self.assertEqual(self.player.state, "released")
+        stop.assert_called_once_with()
+        self.namespace["logger"].exception.assert_not_called()
+        self.app.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        self.assertFalse(isValid(self.wallpaper))
 
 
     def test_shutdown_does_not_affect_another_wallpaper(self):

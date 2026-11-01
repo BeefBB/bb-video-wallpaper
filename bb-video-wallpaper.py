@@ -21,6 +21,7 @@ from thumbnails import (
     SUPPORTED_VIDEO_EXTENSIONS,
     SUPPORTED_IMAGE_EXTENSIONS,
     SUPPORTED_MEDIA_EXTENSIONS,
+    ThumbnailThread,
 )
 from windows_integration import (
     check_desktop_ready,
@@ -1054,10 +1055,12 @@ class Wallpaper(QWidget):
 
 class Tray:
 
-    def __init__(self, app, wallpaper) -> None:
+    def __init__(self, app: "QApplication") -> None:
 
         self.app = app
-        self.wallpaper = wallpaper
+        self.wallpapers: dict[str, Wallpaper] = {}
+        self.screen_menus: dict[str, MediaPreviewMenu] = {}
+        self.is_exiting = False
 
         # 系統匣圖示與選單
         self.tray = QSystemTrayIcon()
@@ -1066,7 +1069,12 @@ class Tray:
 
         # 匯入媒體的背景執行緒
         self.import_thread: MediaImportThread | None = None
-        self.app.aboutToQuit.connect(self.wait_for_import)
+        self.import_screen_id: str | None = None
+        self.import_applies_to_all = False
+        self.app.aboutToQuit.connect(self.shutdown)
+
+        # 共用縮圖工作
+        self.thumbnail_thread = ThumbnailThread(MEDIA_DIR, THUMBNAIL_DIR)
 
         # 設定檔
         config = config_store.load()
@@ -1075,7 +1083,7 @@ class Tray:
         self.current_language_code = config.get("language", "zh-TW")
 
 
-        menu = QMenu()
+        self.menu = menu = QMenu()
 
         play_action = QAction(tr("play"), menu)
         pause_action = QAction(tr("pause"), menu)
@@ -1083,24 +1091,12 @@ class Tray:
         exit_action = QAction(tr("exit"), menu)
 
 
-        for action, state in (
+        self.playback_actions: tuple[tuple[QAction, str], ...] = (
             (play_action, "play"),
             (pause_action, "pause"),
             (stop_action, "stop"),
-        ):
-            action.setCheckable(True)
-
-            menu.aboutToShow.connect(
-                lambda a=action, s=state: a.setChecked(self.wallpaper.play_state == s)
-            )
-
-        # 播放圖片時停用暫停按鈕
-        menu.aboutToShow.connect(
-            lambda: pause_action.setEnabled(
-                bool(self.wallpaper.current_media) and
-                self.wallpaper.current_media.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
-            )
         )
+        menu.aboutToShow.connect(self.refresh_playback_actions)
 
 
         self.media_menu = MediaPreviewMenu(
@@ -1108,11 +1104,10 @@ class Tray:
             menu,
             media_dir=MEDIA_DIR,
             thumbnail_dir=THUMBNAIL_DIR,
-            loading_image_path=LOADING_IMAGE_PATH
+            loading_image_path=LOADING_IMAGE_PATH,
+            thumbnail_thread=self.thumbnail_thread
         )
         self.media_menu.aboutToShow.connect(self.refresh_media_menu)
-
-        self.app.aboutToQuit.connect(self.media_menu.thumbnail_thread.stop)
 
 
         self.add_media_action = QAction(tr("add_media"), menu)
@@ -1149,9 +1144,9 @@ class Tray:
         startup_action.setChecked(task_exists())
 
 
-        play_action.triggered.connect(self.play)
-        pause_action.triggered.connect(self.pause)
-        stop_action.triggered.connect(self.stop)
+        play_action.triggered.connect(lambda checked=False: self.play())
+        pause_action.triggered.connect(lambda checked=False: self.pause())
+        stop_action.triggered.connect(lambda checked=False: self.stop())
         exit_action.triggered.connect(self.exit)
 
 
@@ -1223,22 +1218,170 @@ class Tray:
         self.options_language_menu.aboutToShow.connect(self.refresh_language_menu)
 
         self.tray.setContextMenu(menu)
+
+        self.app.screenAdded.connect(self.add_screen)
+        self.app.screenRemoved.connect(self.remove_screen)
+
+        for screen in self.app.screens():
+            self.add_screen(screen, refresh=False)
+
+        self.rebuild_screen_menus()
         self.tray.show()
 
 
-    def play(self) -> None:
+    def add_screen(self, screen: QScreen, *, refresh: bool = True) -> None:
+        """
+        為新螢幕建立桌布, 重複通知不重建既有桌布
+        """
 
-        self.wallpaper.manual_play()
+        if self.is_exiting or any(w.target_screen is screen for w in self.wallpapers.values()):
+            return
+
+        try:
+            wallpaper = Wallpaper(target_screen=screen)
+
+        except Exception:
+            logger.exception("建立螢幕桌布失敗 - %s", screen.name())
+            return
+
+        if self.is_exiting or screen not in self.app.screens() or wallpaper.screen_id in self.wallpapers:
+            wallpaper.shutdown()
+            wallpaper.deleteLater()
+            return
+
+        self.wallpapers[wallpaper.screen_id] = wallpaper
+        wallpaper.show()
+
+        if refresh:
+            self.rebuild_screen_menus()
 
 
-    def pause(self) -> None:
+    def remove_screen(self, screen: QScreen) -> None:
+        """
+        移除已拔除螢幕的桌布並釋放資源
+        """
 
-        self.wallpaper.manual_pause()
+        if self.is_exiting:
+            return
+
+        for screen_id, wallpaper in tuple(self.wallpapers.items()):
+            if wallpaper.target_screen is not screen:
+                continue
+
+            del self.wallpapers[screen_id]
+            self.rebuild_screen_menus()
+
+            try:
+                wallpaper.shutdown()
+
+            except Exception:
+                logger.exception("釋放已拔除螢幕的桌布失敗 - %s", screen_id)
+
+            finally:
+                # 重掛仍持有桌布與子計時器, 等流程離開後才刪除 Qt 物件
+                if wallpaper.is_recreating:
+                    wallpaper.reattach_finished.connect(
+                        wallpaper.deleteLater,
+                        Qt.ConnectionType(
+                            Qt.ConnectionType.QueuedConnection.value | Qt.ConnectionType.SingleShotConnection.value
+                        ),
+                    )
+                else:
+                    wallpaper.deleteLater()
+
+            # 匯入結果可能正在等待已拔除桌布的重掛訊號
+            if self.import_thread is not None and not self.import_thread.isRunning():
+                self.finish_import(self.import_thread)
+            break
 
 
-    def stop(self) -> None:
+    def rebuild_screen_menus(self) -> None:
+        """
+        依目前螢幕數切換單螢幕選單與各螢幕子選單
+        """
 
-        self.wallpaper.manual_stop()
+        self.media_menu.reset_preview()
+        self.menu.removeAction(self.media_menu.menuAction())
+
+        for menu in self.screen_menus.values():
+            self.menu.removeAction(menu.menuAction())
+            menu.close()
+            menu.reset_preview()
+            menu.deleteLater()
+
+        self.screen_menus.clear()
+
+        if len(self.wallpapers) == 1:
+            self.menu.insertMenu(self.add_media_action, self.media_menu)
+
+        elif len(self.wallpapers) > 1:
+            for number, screen_id in enumerate(self.wallpapers, start=1):
+                menu = MediaPreviewMenu(
+                    f'{tr("monitor")} {number}',
+                    self.menu,
+                    media_dir=MEDIA_DIR,
+                    thumbnail_dir=THUMBNAIL_DIR,
+                    loading_image_path=LOADING_IMAGE_PATH,
+                    thumbnail_thread=self.thumbnail_thread
+                )
+                menu.aboutToShow.connect(
+                    lambda s=screen_id, m=menu: self.refresh_screen_menu(s, m)
+                )
+                self.screen_menus[screen_id] = menu
+                self.menu.insertMenu(self.add_media_action, menu)
+
+        self.refresh_playback_actions()
+
+
+    def refresh_playback_actions(self) -> None:
+
+        multiple = len(self.wallpapers) > 1
+        wallpaper = next(iter(self.wallpapers.values()), None)
+        has_video = any(
+            w.current_media and w.current_media.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
+            for w in self.wallpapers.values()
+        )
+
+        for action, state in self.playback_actions:
+            action.setText(tr(f"all_{state}" if multiple else state))
+            action.setCheckable(not multiple)
+            action.setChecked(bool(not multiple and wallpaper and wallpaper.play_state == state))
+            action.setEnabled(bool(has_video if state == "pause" else self.wallpapers))
+
+
+    def get_wallpapers(self, screen_id: str | None = None) -> tuple["Wallpaper", ...]:
+
+        if self.is_exiting:
+            return ()
+
+        if screen_id is None:
+            return tuple(self.wallpapers.values())
+
+        wallpaper = self.wallpapers.get(screen_id)
+        return (wallpaper,) if wallpaper is not None else ()
+
+
+    def play(self, screen_id: str | None = None) -> None:
+
+        for wallpaper in self.get_wallpapers(screen_id):
+            wallpaper.manual_play()
+
+
+    def pause(self, screen_id: str | None = None) -> None:
+
+        for wallpaper in self.get_wallpapers(screen_id):
+            if (
+                screen_id is None and len(self.wallpapers) > 1 and wallpaper.play_state == "stop" and
+                wallpaper.current_media and wallpaper.current_media.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
+            ):
+                wallpaper.manual_play()
+            wallpaper.manual_pause()
+
+
+    def stop(self, screen_id: str | None = None) -> None:
+
+        for wallpaper in self.get_wallpapers(screen_id):
+            wallpaper.manual_stop()
 
 
     def refresh_language_menu(self) -> None:
@@ -1262,35 +1405,84 @@ class Tray:
             self.options_language_menu.addAction(action)
 
 
+    def refresh_screen_menu(self, screen_id: str, menu: "MediaPreviewMenu") -> None:
+        """
+        重新建立指定螢幕的操作與媒體選單
+        """
+
+        menu.reset_preview()
+        menu.clear()
+        self.add_playback_actions(menu, screen_id)
+        menu.addSeparator()
+        self.add_media_menu_actions(menu, screen_id)
+
+
+    def add_playback_actions(self, menu: "QMenu", screen_id: str) -> None:
+        """
+        新增指定螢幕的播放控制項目
+        """
+
+        wallpaper = self.wallpapers.get(screen_id)
+
+        for state, command in (
+            ("play", self.play),
+            ("pause", self.pause),
+            ("stop", self.stop),
+        ):
+            action = QAction(tr(state), menu)
+            action.setCheckable(True)
+            action.setChecked(bool(wallpaper and wallpaper.play_state == state))
+            action.setEnabled(bool(
+                wallpaper and (
+                    state != "pause" or (
+                        wallpaper.current_media and
+                        wallpaper.current_media.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
+                    )
+                )
+            ))
+            action.triggered.connect(
+                lambda checked=False, s=screen_id, callback=command: callback(s)
+            )
+            menu.addAction(action)
+
+
     def refresh_media_menu(self) -> None:
         """
-        重新建立媒體選單
+        重新建立單螢幕的媒體選單
         """
 
         self.media_menu.reset_preview()
         self.media_menu.clear()
+        screen_id = next(iter(self.wallpapers)) if len(self.wallpapers) == 1 else None
+        self.add_media_menu_actions(self.media_menu, screen_id)
+
+
+    def add_media_menu_actions(self, menu: "MediaPreviewMenu", screen_id: str | None) -> None:
+        """
+        新增最近紀錄與媒體清單項目
+        """
 
         recent = config_store.load().get("recentVideo", [])[:5]
 
         for media_path in recent:
-            self.add_media_menu_action(MEDIA_DIR / media_path)
+            self.add_media_menu_action(MEDIA_DIR / media_path, screen_id, menu)
 
         if recent:
-            clear_action = QAction(tr("clear_recent_videos"), self.media_menu)
+            clear_action = QAction(tr("clear_recent_videos"), menu)
             clear_action.triggered.connect(self.clear_recent_media)
-            self.media_menu.addAction(clear_action)
-            self.media_menu.addSeparator()
+            menu.addAction(clear_action)
+            menu.addSeparator()
 
         media_files = get_media()
 
         if not media_files:
-            action = QAction(tr("no_video"), self.media_menu)
+            action = QAction(tr("no_video"), menu)
             action.setEnabled(False)
-            self.media_menu.addAction(action)
+            menu.addAction(action)
             return
 
         for media_path in media_files:
-            self.add_media_menu_action(media_path)
+            self.add_media_menu_action(media_path, screen_id, menu)
 
 
     def clear_recent_media(self) -> None:
@@ -1305,23 +1497,30 @@ class Tray:
         logger.info("clear_recent_media")
 
 
-    def add_media_menu_action(self, media_path: Path) -> None:
+    def add_media_menu_action(
+        self,
+        media_path: Path,
+        screen_id: str | None = None,
+        menu: "MediaPreviewMenu | None" = None
+    ) -> None:
         """
         新增媒體選單項目
         """
 
-        action = QAction(media_path.name, self.media_menu)
+        menu = self.media_menu if menu is None else menu
+        wallpaper = self.wallpapers.get(screen_id) if screen_id is not None else None
+        action = QAction(media_path.name, menu)
         action.setData(str(media_path))
 
         action.triggered.connect(
-            lambda checked=False, v=media_path: self.play_from_menu(v)
+            lambda checked=False, v=media_path, s=screen_id: self.play_from_menu(v, s)
         )
 
         action.setCheckable(True)
-        action.setChecked(media_path == self.wallpaper.current_media)
-        action.setEnabled(media_path.is_file())
+        action.setChecked(bool(wallpaper and media_path == wallpaper.current_media))
+        action.setEnabled(wallpaper is not None and media_path.is_file())
 
-        self.media_menu.addAction(action)
+        menu.addAction(action)
 
 
     def set_language(self, language_code: str) -> None:
@@ -1335,11 +1534,22 @@ class Tray:
         logger.info("set_language - %s", language_code)
 
 
-    def play_from_menu(self, path: Path) -> None:
+    def play_from_menu(self, path: Path, screen_id: str | None = None) -> None:
+
+        if screen_id is None and len(self.wallpapers) == 1:
+            screen_id = next(iter(self.wallpapers))
+
+        if self.is_exiting or screen_id is None:
+            return
+
+        wallpaper = self.wallpapers.get(screen_id)
+
+        if wallpaper is None or wallpaper.is_exiting:
+            return
 
         try:
 
-            self.wallpaper.select_media(path)
+            wallpaper.select_media(path)
 
         except Exception as error:
 
@@ -1357,7 +1567,7 @@ class Tray:
 
     def add_media(self) -> None:
 
-        if self.import_thread is not None:
+        if self.is_exiting or self.import_thread is not None:
             return
 
         self.add_media_action.setEnabled(False)
@@ -1381,10 +1591,12 @@ class Tray:
         self.add_media_action.setText(tr("comparing_media"))
         self.cancel_import_action.setEnabled(True)
         self.cancel_import_action.setVisible(True)
+        self.import_screen_id = next(iter(self.wallpapers)) if len(self.wallpapers) == 1 else None
+        self.import_applies_to_all = len(self.wallpapers) > 1 and not get_media()
 
         self.import_thread = MediaImportThread(Path(filename))
         self.import_thread.progress.connect(self.update_import_progress, Qt.ConnectionType.QueuedConnection)
-        self.import_thread.finished.connect(self.finish_import)
+        self.import_thread.finished.connect(lambda w=self.import_thread: self.finish_import(w))
         self.import_thread.start()
 
 
@@ -1401,22 +1613,37 @@ class Tray:
             self.cancel_import_action.setEnabled(False)
 
 
-    def finish_import(self) -> None:
+    def finish_import(self, expected_worker: "MediaImportThread | None" = None) -> None:
 
         worker = self.import_thread
 
-        if worker is None:
+        if worker is None or (expected_worker is not None and worker is not expected_worker):
             return
 
+        screen_ids: tuple[str, ...] = ()
+
+        if self.import_applies_to_all:
+            screen_ids = tuple(self.wallpapers)
+
+        elif self.import_screen_id is not None and self.import_screen_id in self.wallpapers:
+            screen_ids = (self.import_screen_id,)
+
         # 巢狀事件迴圈仍會收到匯入完成訊號, 等當次重掛離開後才切換媒體
-        if self.wallpaper.is_recreating:
-            self.wallpaper.reattach_finished.connect(
-                self.finish_import,
-                Qt.ConnectionType(
-                    Qt.ConnectionType.QueuedConnection.value | Qt.ConnectionType.SingleShotConnection.value
-                ),
-            )
-            return
+        if (
+            screen_ids and not self.is_exiting and
+            not worker.cancelled and worker.destination is not None
+        ):
+            for screen_id in screen_ids:
+                wallpaper = self.wallpapers.get(screen_id)
+
+                if wallpaper is not None and wallpaper.is_recreating and not wallpaper.is_exiting:
+                    wallpaper.reattach_finished.connect(
+                        lambda w=worker: self.finish_import(w),
+                        Qt.ConnectionType(
+                            Qt.ConnectionType.QueuedConnection.value | Qt.ConnectionType.SingleShotConnection.value
+                        ),
+                    )
+                    return
 
         self.import_thread = None
         worker.deleteLater()
@@ -1425,13 +1652,17 @@ class Tray:
         self.add_media_action.setEnabled(True)
         self.cancel_import_action.setVisible(False)
 
-        if self.wallpaper.is_exiting or worker.cancelled:
+        if self.is_exiting or worker.cancelled:
             return
 
         if worker.destination is not None:
 
-            self.media_menu.thumbnail_thread.request(worker.destination)
-            self.play_from_menu(worker.destination)
+            self.thumbnail_thread.request(worker.destination)
+            config_store.remember_recent(worker.destination)
+
+            for screen_id in screen_ids:
+                self.play_from_menu(worker.destination, screen_id)
+
             self.refresh_media_menu()
 
         else:
@@ -1464,10 +1695,11 @@ class Tray:
         config[config_key] = checked
         config_store.save(config)
 
-        setattr(self.wallpaper, attribute, checked)
+        for wallpaper in self.get_wallpapers():
+            setattr(wallpaper, attribute, checked)
 
 
-    def toggle_startup(self, checked) -> None:
+    def toggle_startup(self, checked: bool) -> None:
 
         if checked:
             create_task(FILE)
@@ -1475,13 +1707,45 @@ class Tray:
             delete_task()
 
 
-    def exit(self) -> None:
+    def shutdown(self) -> None:
+        """
+        停止共用背景工作並逐台釋放桌布, 重複呼叫不重複清理
+        """
+
+        if self.is_exiting:
+            return
+
+        self.is_exiting = True
+        self.wait_for_import()
+
+        if self.import_thread is not None:
+            self.import_thread.deleteLater()
+            self.import_thread = None
 
         try:
-            self.wallpaper.shutdown()
+            self.thumbnail_thread.stop()
 
         except Exception:
-            logger.exception("退出時發生錯誤")
+            logger.exception("退出時停止縮圖工作失敗")
+
+        for menu in self.screen_menus.values():
+            menu.reset_preview()
+
+        self.media_menu.reset_preview()
+        wallpapers = tuple(self.wallpapers.items())
+        self.wallpapers.clear()
+
+        for screen_id, wallpaper in wallpapers:
+            try:
+                wallpaper.shutdown()
+
+            except Exception:
+                logger.exception("退出時釋放桌布失敗 - %s", screen_id)
+
+
+    def exit(self) -> None:
+
+        self.shutdown()
 
         self.app.quit()
         logger.info("exit")
@@ -1519,13 +1783,8 @@ if __name__ == "__main__":
     app.setFont(font)
 
 
-    # 建立播放器
-    w = Wallpaper(target_screen=app.primaryScreen())
-    app.aboutToQuit.connect(w.shutdown)
-    w.show()
-
-
-    tray = Tray(app, w)
+    # 建立系統匣
+    tray = Tray(app)
 
 
     # Qt 主迴圈

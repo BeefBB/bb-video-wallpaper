@@ -122,6 +122,38 @@ class MediaPreviewTests(unittest.TestCase):
         return action
 
 
+    def test_multiple_menus_share_one_thumbnail_worker_and_receive_its_results(self):
+
+        other = media_preview.MediaPreviewMenu(
+            "Other screen",
+            media_dir=self.media_dir,
+            thumbnail_dir=self.thumbnail_dir,
+            loading_image_path=self.loading_path,
+            thumbnail_thread=self.worker  # type: ignore
+        )
+        self.addCleanup(other.deleteLater)
+        self.assertIs(other.thumbnail_thread, self.menu.thumbnail_thread)
+        self.worker_class.assert_called_once()
+
+        action = other.addAction("first.mp4")
+        action.setData(self.first.data())
+        self.menu.preview_action = self.first
+        self.menu.preview_mode = True
+        other.preview_action = action
+        other.preview_mode = True
+        self.menu.display_preview = mock.Mock()
+        other.display_preview = mock.Mock()
+        image = QImage(80, 40, QImage.Format.Format_RGB32)
+        image.fill(Qt.GlobalColor.red)
+
+        self.worker.thumbnail_ready.emit(self.first.data(), image)
+
+        self.menu.display_preview.assert_called_once_with()
+        other.display_preview.assert_called_once_with()
+        self.assertEqual(self.menu.preview_pixmap.size(), image.size())
+        self.assertEqual(other.preview_pixmap.size(), image.size())
+
+
     def hover(self, action):
         """
         模擬游標移到指定選單項目

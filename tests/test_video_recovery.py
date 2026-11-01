@@ -183,11 +183,15 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
         imported = media.with_name("imported.mp4")
         shutil.copyfile(media, imported)
         tray = namespace["Tray"].__new__(namespace["Tray"])
-        tray.wallpaper = wallpaper
+        tray.wallpapers = {wallpaper.screen_id: wallpaper}
+        tray.is_exiting = False
+        tray.import_screen_id = wallpaper.screen_id
+        tray.import_applies_to_all = False
         tray.import_thread = mock.Mock(destination=imported, cancelled=False)
         tray.add_media_action = mock.Mock()
         tray.cancel_import_action = mock.Mock()
         tray.media_menu = mock.Mock()
+        tray.thumbnail_thread = mock.Mock()
         tray.refresh_media_menu = mock.Mock()
         tray.tray = mock.Mock()
         import_processed = threading.Event()
