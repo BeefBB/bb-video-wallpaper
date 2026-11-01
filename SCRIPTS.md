@@ -67,6 +67,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 ---                                                | ---
 [bb-video-wallpaper.py](./bb-video-wallpaper.py)   | 主程式組裝, VLC 初始化, 桌布生命週期, 系統匣與匯入介面, 自動暫停及桌面重建恢復
 [config.py](./config.py)                           | 設定初始化, 驗證與讀寫, 語言檔載入
+[playback.py](./playback.py)                       | 不可變播放意圖與暫停原因, 單螢幕及跟隨群組共用的自動暫停判斷
 [screen_follow.py](./screen_follow.py)             | 跟隨關係與循環驗證, 群組自動暫停, 媒體及播放進度同步
 [media_import.py](./media_import.py)               | 媒體內容去重, 分塊複製, 容量檢查, 命名衝突與取消清理
 [media_preview.py](./media_preview.py)             | 預覽選單, 懸停時序, 縮圖訊號與預覽視窗定位

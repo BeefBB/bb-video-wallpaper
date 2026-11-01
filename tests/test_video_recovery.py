@@ -138,7 +138,7 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
         # 分別驗證播放與暫停狀態
         for state, vlc_state in (("play", playing_state), ("pause", paused_state)):
             if state == "pause":
-                wallpaper.media_pause()
+                wallpaper.manual_pause()
                 wait_until(lambda: player.get_state() == vlc_state)
             saved_time = player.get_time()
             old_hwnd = int(wallpaper.winId())
@@ -256,7 +256,7 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
             abs(follower_player.get_time() - player.get_time()) <= 500
         ))
         assert follower.current_media == imported, "跟隨沒有複製來源影片"
-        assert not follower.enable_auto_pause, "跟隨沒有複製手動暫停狀態"
+        assert follower.playback_state.requested_state == "pause", "跟隨沒有複製手動暫停狀態"
 
         assert follower.seek_time(1000)
         wait_until(lambda: abs(follower_player.get_time() - 1000) < 300)

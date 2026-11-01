@@ -24,6 +24,7 @@ if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
 from config import ConfigStore
+from playback import PlaybackState
 from app_loader import load_app_module
 
 
@@ -429,7 +430,7 @@ class PlaybackStateTests(unittest.TestCase):
         player.finish_loading()
         self.app.processEvents()
         self.assertEqual((player.state, player.position), ("paused", 6500))
-        self.assertFalse(follower.enable_auto_pause)
+        self.assertEqual(follower.playback_state, PlaybackState("pause"))
 
 
     def test_follow_local_command_splits_chain_and_global_commands_keep_relationships(self):
@@ -470,6 +471,7 @@ class PlaybackStateTests(unittest.TestCase):
 
         self.wallpaper.check_auto_pause()
         self.assertEqual([self.wallpaper.play_state, follower.play_state], ["play", "play"])
+        self.assertEqual(self.wallpaper.playback_state, PlaybackState("play"))
         blocked[2] = True
         follower.check_auto_pause()
         self.assertEqual([self.player.state, follower.instance_vlc_player.state], ["paused", "paused"])
@@ -497,6 +499,48 @@ class PlaybackStateTests(unittest.TestCase):
         self.app.processEvents()
         self.assertIsNone(self.wallpaper.pending_reattach_time)
         self.assertEqual(follower.instance_vlc_player.position, 7500)
+
+
+    def test_manual_pause_overrides_group_auto_pause_and_play_reenables_it(self):
+
+        self.start_loading()
+        self.player.finish_loading()
+        follower = self.add_following_wallpaper()
+        controller = self.tray.follow_controller
+        controller.follow(follower.screen_id, self.wallpaper.screen_id)
+        follower.instance_vlc_player.finish_loading()
+        self.app.processEvents()
+        members = (self.wallpaper, follower)
+
+        for member in members:
+            member.screen_off = True
+        self.wallpaper.check_auto_pause()
+        self.tray.pause(self.wallpaper.screen_id)
+        for member in members:
+            member.screen_off = False
+        follower.check_auto_pause()
+        for member in members:
+            self.assertEqual(member.playback_state, PlaybackState("pause"))
+            self.assertEqual(member.instance_vlc_player.state, "paused")
+
+        self.tray.play()
+        self.assertEqual(controller.graph.sources, {follower.screen_id: self.wallpaper.screen_id})
+        for member in members:
+            self.assertEqual(member.playback_state, PlaybackState("play"))
+            self.assertEqual(member.instance_vlc_player.state, "playing")
+            member.screen_off = True
+        self.wallpaper.check_auto_pause()
+        for member in members:
+            self.assertEqual(member.playback_state.requested_state, "play")
+            self.assertEqual(member.instance_vlc_player.state, "paused")
+
+        self.tray.stop()
+        for member in members:
+            member.screen_off = False
+        self.wallpaper.check_auto_pause()
+        for member in members:
+            self.assertEqual(member.playback_state, PlaybackState("stop"))
+            self.assertEqual(member.instance_vlc_player.state, "stopped")
 
 
     def test_follow_new_local_media_ignores_queued_source_ready_events(self):
@@ -730,6 +774,7 @@ class PlaybackStateTests(unittest.TestCase):
 
         self.assertEqual(self.player.state, "paused")
         self.assertEqual(self.wallpaper.play_state, "pause")
+        self.assertEqual(self.wallpaper.playback_state, PlaybackState("pause"))
 
 
     def test_playing_callback_from_worker_pauses_on_qt_thread(self):
@@ -1223,6 +1268,9 @@ class PlaybackStateTests(unittest.TestCase):
 
                 self.wallpaper.check_auto_pause()
                 self.assertEqual(self.wallpaper.play_state, "pause")
+                self.assertEqual(self.wallpaper.playback_state, PlaybackState(
+                    "play", ((self.wallpaper.screen_id, reason),)
+                ))
                 self.player.finish_loading()
                 self.app.processEvents()
                 self.assertEqual(self.player.state, "paused")
@@ -1234,6 +1282,53 @@ class PlaybackStateTests(unittest.TestCase):
 
                 self.assertEqual(self.wallpaper.play_state, "play")
                 self.assertEqual(self.player.state, "playing")
+                self.assertEqual(self.wallpaper.playback_state, PlaybackState("play"))
+
+
+    def test_auto_pause_reason_updates_without_reapplying_unchanged_output(self):
+
+        self.start_loading()
+        self.player.finish_loading()
+        self.app.processEvents()
+        self.wallpaper.auto_pause_if_on_battery = True
+        self.wallpaper.screen_off = True
+        self.namespace["is_on_battery"].return_value = True
+        self.wallpaper.check_auto_pause()
+        self.namespace["is_on_battery"].assert_not_called()
+
+        self.wallpaper.screen_off = False
+        with mock.patch.object(self.player, "set_pause", wraps=self.player.set_pause) as pause:
+            self.wallpaper.check_auto_pause()
+            self.wallpaper.check_auto_pause()
+            pause.assert_not_called()
+
+        self.assertEqual(self.wallpaper.playback_state, PlaybackState(
+            "play", ((self.wallpaper.screen_id, "battery"),)
+        ))
+        self.assertEqual(self.player.state, "paused")
+        self.namespace["is_any_fullscreen"].assert_not_called()
+
+
+    def test_auto_paused_recovery_keeps_play_intent_and_resumes_when_condition_clears(self):
+
+        self.start_loading()
+        self.player.finish_loading()
+        self.app.processEvents()
+        self.player.position = 4321
+        self.wallpaper.screen_off = True
+        self.wallpaper.check_auto_pause()
+        state = self.wallpaper.playback_state
+
+        self.wallpaper.reattach_to_desktop()
+        self.assertEqual(self.wallpaper.playback_state, state)
+        self.player.finish_loading()
+        self.app.processEvents()
+        self.assertEqual((self.player.state, self.player.position), ("paused", 4321))
+
+        self.wallpaper.screen_off = False
+        self.wallpaper.check_auto_pause()
+        self.assertEqual(self.wallpaper.playback_state, PlaybackState("play"))
+        self.assertEqual(self.player.state, "playing")
 
 
     def test_manual_pause_survives_auto_pause_condition_clearing(self):
@@ -1252,7 +1347,7 @@ class PlaybackStateTests(unittest.TestCase):
 
         self.assertEqual(self.wallpaper.play_state, "pause")
         self.assertEqual(self.player.state, "paused")
-        self.assertFalse(self.wallpaper.enable_auto_pause)
+        self.assertEqual(self.wallpaper.playback_state, PlaybackState("pause"))
 
 
     def test_image_uses_qt_and_stop_then_play_reuses_loaded_image(self):
@@ -1329,6 +1424,7 @@ class PlaybackStateTests(unittest.TestCase):
         self.app.processEvents()
 
         self.assertEqual(self.wallpaper.play_state, "play")
+        self.assertEqual(self.wallpaper.playback_state, PlaybackState("play"))
         self.assertTrue(self.image_output.visible)
         self.assertEqual(self.player.state, "stopped")
         self.assertEqual(self.player.pause_calls, pause_calls)
@@ -1345,7 +1441,7 @@ class PlaybackStateTests(unittest.TestCase):
 
         self.wallpaper.set_play_media(self.image_path)
         self.tray.play()
-        self.wallpaper.media_pause()
+        self.wallpaper.manual_pause()
         self.wallpaper.screen_off = True
         self.wallpaper.check_auto_pause()
 
@@ -1396,11 +1492,11 @@ class PlaybackStateTests(unittest.TestCase):
         使用者選擇圖片成功後啟動顯示, 保存此螢幕選擇與共用最近紀錄
         """
 
-        self.wallpaper.enable_auto_pause = False
+        self.wallpaper.manual_stop()
         self.wallpaper.select_media(self.image_path)
 
         self.assertTrue(self.image_output.visible)
-        self.assertTrue(self.wallpaper.enable_auto_pause)
+        self.assertEqual(self.wallpaper.playback_state, PlaybackState("play"))
         self.namespace["config_store"].remember_recent.assert_called_once_with(self.image_path)
         self.namespace["config_store"].remember_wallpaper.assert_called_once_with(
             self.wallpaper.screen_id, self.image_path
@@ -1824,9 +1920,10 @@ class PlaybackStateTests(unittest.TestCase):
 
             self.wallpaper.shutdown()
             self.wallpaper.shutdown()
-            self.wallpaper.media_play()
-            self.wallpaper.media_pause()
-            self.wallpaper.media_stop()
+            self.wallpaper.manual_play()
+            self.wallpaper.manual_pause()
+            self.wallpaper.manual_stop()
+            self.wallpaper.apply_playback_state(PlaybackState("play"), force=True)
             self.wallpaper.set_play_media(self.media_path)
             self.wallpaper.select_media(self.media_path)
             self.attach_to_desktop(self.wallpaper)
@@ -1977,8 +2074,8 @@ class PlaybackStateTests(unittest.TestCase):
         self.addCleanup(other.deleteLater)
         self.addCleanup(other.shutdown)
         other.set_play_media(self.media_path)
-        other.media_play()
-        other.media_pause()
+        other.manual_play()
+        other.manual_pause()
         other_image.close.reset_mock()
 
         self.wallpaper.shutdown()

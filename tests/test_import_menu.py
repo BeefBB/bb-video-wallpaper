@@ -185,9 +185,9 @@ class ImportMenuTests(unittest.TestCase):
         wallpaper.play_state = "play"
         wallpaper.is_exiting = False
         wallpaper.is_recreating = False
-        wallpaper.enable_auto_pause = True
+        wallpaper.playback_state = self.namespace["PlaybackState"]("play")
         wallpaper.is_image.return_value = False
-        wallpaper.needs_auto_pause.return_value = False
+        wallpaper.get_auto_pause_reason.return_value = None
         wallpaper.get_playback_time.return_value = 2000
         wallpaper.get_playback_length.return_value = 10000
         wallpaper.seek_time.return_value = True
@@ -519,7 +519,7 @@ class ImportMenuTests(unittest.TestCase):
         """
 
         self.wallpaper.select_media.side_effect = RuntimeError("bad image")
-        self.wallpaper.enable_auto_pause = False
+        self.wallpaper.playback_state = self.namespace["PlaybackState"]("pause")
 
         for language_path in (ROOT / "lang").glob("*.json"):
             with self.subTest(language=language_path.name):
@@ -527,8 +527,8 @@ class ImportMenuTests(unittest.TestCase):
                 self.tray.tray.showMessage.reset_mock()
                 self.namespace["Tray"].play_from_menu(self.tray, self.source)
 
-                self.wallpaper.media_play.assert_not_called()
-                self.assertFalse(self.wallpaper.enable_auto_pause)
+                self.wallpaper.manual_play.assert_not_called()
+                self.assertEqual(self.wallpaper.playback_state.requested_state, "pause")
                 self.assertEqual(
                     self.tray.tray.showMessage.call_args.args[1],
                     self.namespace["LANG"]["media_load_failed"].format(error="bad image")

@@ -21,6 +21,7 @@ import bb_image_display
 from config import CONFIG_DEFAULTS, ConfigStore, SUPPORTED_LANGUAGES
 from media_import import MediaImportCancelled, import_media
 from media_preview import MediaPreviewMenu
+from playback import AutoPauseReason, PlaybackState, update_auto_pause
 from screen_follow import AutoPauseHandler, FollowController, RESTORE_DELAY_MS, SYNC_INTERVAL_MS
 from thumbnails import (
     SUPPORTED_VIDEO_EXTENSIONS,
@@ -343,11 +344,10 @@ class Wallpaper(QWidget):
 
         # 播放狀態: "play", "pause", "stop"
         self.play_state = "stop"
+        self.playback_state = PlaybackState()
         self.pending_reattach_time: int | None = None
         # 重掛載時的媒體與進度
         self._reattach_position: tuple[Path, int] | None = None
-        # 啟用自動暫停
-        self.enable_auto_pause = True
         self.auto_pause_handler: AutoPauseHandler | None = None
 
         # 全螢幕檢測就緒
@@ -433,7 +433,7 @@ class Wallpaper(QWidget):
 
             try:
                 self.set_play_media(initial_media)
-                self.media_play()
+                self.manual_play()
 
                 if self.screen_id not in screen_wallpapers:
                     config_store.remember_wallpaper(self.screen_id, initial_media)
@@ -503,38 +503,47 @@ class Wallpaper(QWidget):
         )
 
 
-    def media_play(self) -> None:
+    def apply_playback_state(self, state: PlaybackState | None = None, *, force: bool = False) -> None:
         """
-        播放
+        統一套用手動, 自動暫停與跟隨要求的播放狀態
         """
 
-        if not self.current_media or self.is_exiting:
+        if self.is_exiting:
+            return
+
+        if state is not None:
+            self.playback_state = state
+
+        if self.is_image():
+            # 圖片沒有暫停狀態, 清除影片的暫停意圖與原因
+            requested = "stop" if self.playback_state.requested_state == "stop" else "play"
+            self.playback_state = PlaybackState(requested)
+
+        target = self.playback_state.effective_state
+        if not force and target == self.play_state:
+            return
+
+        if target == "stop":
+            self._stop_media_output()
+            return
+
+        if not self.current_media:
             return
 
         if self.is_image():
             self.instance_image.show()
 
-        else:
+        elif target == "play" or self.play_state == "stop" or force:
             self.instance_vlc_player.play()
 
-        self.play_state = "play"
+        self.play_state = target
+        if target == "pause":
+            self.apply_pending_pause()
 
 
-    def media_pause(self) -> None:
+    def _stop_media_output(self, *, preserve_reattach_position: bool = False) -> None:
         """
-        暫停播放
-        """
-
-        if self.is_exiting or not self.current_media or self.is_image():
-            return
-
-        self.play_state = "pause"
-        self.apply_pending_pause()
-
-
-    def media_stop(self, *, preserve_reattach_position: bool = False) -> None:
-        """
-        停止播放
+        停止目前輸出, 媒體切換時保留播放意圖
         """
 
         if self.is_exiting:
@@ -555,20 +564,19 @@ class Wallpaper(QWidget):
 
     def manual_play(self) -> None:
         """
-        手動播放, 恢復自動暫停
+        手動播放, 清除先前的自動暫停判斷
         """
 
         if self.is_exiting or not self.current_media:
             return
 
-        self.media_play()
-        self.enable_auto_pause = True
+        self.apply_playback_state(PlaybackState("play"), force=True)
         logger.info("manual - play")
 
 
     def manual_pause(self) -> None:
         """
-        手動暫停, 停用自動暫停
+        手動暫停, 不由自動暫停條件恢復
         """
 
         if self.is_exiting:
@@ -577,24 +585,22 @@ class Wallpaper(QWidget):
         if (
             self.current_media and
             self.current_media.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS and
-            self.play_state == "play"
+            self.play_state != "stop"
         ):
-            self.media_pause()
+            self.apply_playback_state(PlaybackState("pause"))
 
-        self.enable_auto_pause = False
         logger.info("manual - pause")
 
 
     def manual_stop(self) -> None:
         """
-        手動停止, 停用自動暫停
+        手動停止, 清除進度恢復與自動暫停
         """
 
         if self.is_exiting:
             return
 
-        self.media_stop()
-        self.enable_auto_pause = False
+        self.apply_playback_state(PlaybackState("stop"), force=True)
         logger.info("manual - stop")
 
 
@@ -807,7 +813,7 @@ class Wallpaper(QWidget):
                 if self.is_image():
 
                     if self.play_state == "play":
-                        self.media_play()
+                        self.apply_playback_state(force=True)
 
                 else:
 
@@ -872,7 +878,6 @@ class Wallpaper(QWidget):
         if self.is_exiting:
             return
 
-        previous_play_state = self.play_state
         is_image = path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS
 
         # 先讀取圖片, 失敗時保留原本的輸出與播放狀態
@@ -880,7 +885,7 @@ class Wallpaper(QWidget):
             self.instance_image.set_image(path)
 
 
-        self.media_stop(preserve_reattach_position=preserve_reattach_position)
+        self._stop_media_output(preserve_reattach_position=preserve_reattach_position)
         logger.debug("set_play_media - stop")
 
 
@@ -902,27 +907,7 @@ class Wallpaper(QWidget):
         self.current_media = path
         logger.info("set_play_media - %s", path)
 
-        if is_image:
-
-            # 圖片沒有暫停狀態, 從暫停中的影片切換時直接顯示
-            if previous_play_state != "stop":
-                self.media_play()
-
-        else:
-
-            # 讓影片畫面出現後再回復原本的狀態
-            self.media_play()
-            logger.debug("set_play_media - play")
-
-            if previous_play_state == "pause":
-
-                self.media_pause()
-                logger.debug("set_play_media - pause")
-
-            elif previous_play_state == "stop":
-
-                self.media_stop(preserve_reattach_position=preserve_reattach_position)
-                logger.debug("set_play_media - stop")
+        self.apply_playback_state()
 
 
     def select_media(self, path: Path) -> None:
@@ -1001,40 +986,23 @@ class Wallpaper(QWidget):
         if self.auto_pause_handler is not None and self.auto_pause_handler(self, from_timer=from_timer):
             return
 
-        if not self.enable_auto_pause:
-            return
-
-        # 圖片不需要暫停
-        if self.is_image():
-            return
+        if update_auto_pause((self,)):
+            logger.info("auto_pause - %s", self.play_state)
 
 
-        need_auto_pause = self.needs_auto_pause()
-
-
-        if need_auto_pause:
-            if self.play_state == "play":
-
-                self.media_pause()
-                logger.info("auto_pause - pause")
-
-        else:
-            if self.play_state == "pause":
-
-                self.media_play()
-                logger.info("auto_pause - play")
-
-
-    def needs_auto_pause(self) -> bool:
+    def get_auto_pause_reason(self) -> AutoPauseReason | None:
         """
-        回報目前螢幕是否符合任一自動暫停條件
+        優先回報不需掃描視窗的暫停原因
         """
 
-        return bool(
-            (self.auto_pause_if_screen_off and self.screen_off) or
-            (self.auto_pause_if_on_battery and is_on_battery()) or
-            (self.auto_pause_if_fullscreen and self.fullscreen_detection_ready and is_any_fullscreen(int(self.winId())))
-        )
+        if self.auto_pause_if_screen_off and self.screen_off:
+            return "screen_off"
+        if self.auto_pause_if_on_battery and is_on_battery():
+            return "battery"
+        if self.auto_pause_if_fullscreen and self.fullscreen_detection_ready and is_any_fullscreen(int(self.winId())):
+            return "fullscreen"
+
+        return None
 
 
     def unregister_power_notification(self) -> None:
@@ -1065,7 +1033,7 @@ class Wallpaper(QWidget):
         self._shutdown_started = True
         self.is_exiting = True
         self.auto_pause_handler = None
-        self.enable_auto_pause = False
+        self.playback_state = PlaybackState()
         self.fullscreen_detection_ready = False
         self.pending_reattach_time = None
         self._reattach_position = None

@@ -9,6 +9,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, TypeGuard, cast
 
+from playback import PlaybackTarget, update_auto_pause
+
 if TYPE_CHECKING:
     from config import ConfigStore
 
@@ -20,42 +22,15 @@ SYNC_TOLERANCE_MS = 500
 RESTORE_DELAY_MS = 3_000
 
 
-class FollowWallpaper(Protocol):
-
-    @property
-    def screen_id(self) -> str: ...
-
-    @property
-    def current_media(self) -> Path | None: ...
-
-    @property
-    def play_state(self) -> str: ...
-
-    @property
-    def is_exiting(self) -> bool: ...
-
-    @property
-    def is_recreating(self) -> bool: ...
-
-    enable_auto_pause: bool
+class FollowWallpaper(PlaybackTarget, Protocol):
 
     def set_play_media(self, path: Path, /) -> None: ...
-
-    def media_play(self) -> None: ...
-
-    def media_pause(self) -> None: ...
-
-    def media_stop(self) -> None: ...
-
-    def is_image(self) -> bool: ...
 
     def get_playback_time(self) -> int | None: ...
 
     def get_playback_length(self) -> int: ...
 
     def seek_time(self, position: int) -> bool: ...
-
-    def needs_auto_pause(self) -> bool: ...
 
 
 class AutoPauseHandler(Protocol):
@@ -337,16 +312,7 @@ class FollowController:
                 ):
                     continue
 
-                target.enable_auto_pause = source.enable_auto_pause
-                if target.play_state != source.play_state:
-                    if source.play_state == "stop":
-                        target.media_stop()
-                    elif source.play_state == "pause":
-                        if target.play_state == "stop":
-                            target.media_play()
-                        target.media_pause()
-                    else:
-                        target.media_play()
+                target.apply_playback_state(source.playback_state)
 
                 if changed_media or screen_id in self._pending_selection:
                     self.config_store.remember_wallpaper(screen_id, source_media)
@@ -374,7 +340,7 @@ class FollowController:
 
     def check_auto_pause(self, wallpaper: FollowWallpaper, *, from_timer: bool = False) -> bool:
         """
-        檢查群組暫停條件, 未處理時回傳 False
+        檢查指定桌布所在群組, 未登錄的桌布交回呼叫端處理
         """
 
         if self.is_exiting or self.wallpapers.get(wallpaper.screen_id) is not wallpaper:
@@ -382,32 +348,12 @@ class FollowController:
 
         root = self.graph.root(wallpaper.screen_id)
         members = [self.wallpapers[screen_id] for screen_id in self.graph.subtree(root) if screen_id in self.wallpapers]
-        if len(members) < 2:
-            return False
-
         # 跟隨者的計時通知不重複掃描同一群組
         if from_timer and wallpaper.screen_id != root:
             return True
 
-        source = self.wallpapers.get(root)
-        if (
-            source is None or not source.enable_auto_pause or source.is_image() or
-            any(member.is_exiting or member.is_recreating or not member.current_media for member in members)
-        ):
-            return True
-
-        need_pause = all(member.needs_auto_pause() for member in members)
-        changed = False
-
-        for member in members:
-            if need_pause and member.play_state == "play":
-                member.media_pause()
-                changed = True
-            elif not need_pause and member.play_state == "pause":
-                member.media_play()
-                changed = True
-
-        if changed:
+        if update_auto_pause(members):
+            logger.info("auto_pause - %s", members[0].play_state)
             self.synchronize(root)
 
         return True

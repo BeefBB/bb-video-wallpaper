@@ -14,6 +14,7 @@ if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
 from config import ConfigStore
+from playback import AutoPauseReason, PlaybackState
 from screen_follow import FollowController, FollowGraph
 
 
@@ -27,7 +28,7 @@ class Playback:
         self.screen_id = screen_id
         self.current_media = media
         self.play_state = "play"
-        self.enable_auto_pause = True
+        self.playback_state = PlaybackState("play")
         self.is_exiting = False
         self.is_recreating = False
         self.ready = True
@@ -50,20 +51,11 @@ class Playback:
         self.position = 0
 
 
-    def media_play(self) -> None:
+    def apply_playback_state(self, state: PlaybackState | None = None) -> None:
 
-        self.play_state = "play"
-
-
-    def media_pause(self) -> None:
-
-        if not self.is_image():
-            self.play_state = "pause"
-
-
-    def media_stop(self) -> None:
-
-        self.play_state = "stop"
+        if state is not None:
+            self.playback_state = state
+        self.play_state = self.playback_state.effective_state
 
 
     def get_playback_time(self) -> int | None:
@@ -86,9 +78,9 @@ class Playback:
         return True
 
 
-    def needs_auto_pause(self) -> bool:
+    def get_auto_pause_reason(self) -> AutoPauseReason | None:
 
-        return self.blocked
+        return "fullscreen" if self.blocked else None
 
 
 class FollowGraphTests(unittest.TestCase):
@@ -156,10 +148,9 @@ class FollowControllerTests(unittest.TestCase):
 
         source, follower = self.screens["a"], self.screens["b"]
         source.position = 3500
-        source.play_state = "pause"
-        source.enable_auto_pause = False
+        source.apply_playback_state(PlaybackState("pause"))
         self.assertTrue(self.controller.follow("b", "a"))
-        self.assertEqual((follower.play_state, follower.enable_auto_pause, follower.position), ("pause", False, 3500))
+        self.assertEqual((follower.play_state, follower.playback_state.requested_state, follower.position), ("pause", "pause", 3500))
         config = self.store.load()
         self.assertEqual(config["screenFollows"], {"b": "a"})
         self.assertEqual(config["screenWallpapers"], {"b": "sample.mp4"})
@@ -233,8 +224,7 @@ class FollowControllerTests(unittest.TestCase):
         self.screens["b"].blocked = False
         self.controller.check_auto_pause(self.screens["a"])
         self.assertEqual([self.screens[key].play_state for key in "abc"], ["play"] * 3)
-        self.screens["a"].play_state = "pause"
-        self.screens["a"].enable_auto_pause = False
+        self.screens["a"].apply_playback_state(PlaybackState("pause"))
         self.controller.synchronize("a")
         self.controller.check_auto_pause(self.screens["b"])
         self.assertEqual([self.screens[key].play_state for key in "abc"], ["pause"] * 3)
@@ -245,7 +235,7 @@ class FollowControllerTests(unittest.TestCase):
 
         source = self.screens["a"]
         source.blocked = True
-        source.play_state = "pause"
+        source.apply_playback_state(PlaybackState("play", (("a", "fullscreen"),)))
         self.controller.follow("b", "a")
         self.assertEqual(source.play_state, "play")
         self.assertEqual(self.screens["b"].play_state, "play")
@@ -256,8 +246,8 @@ class FollowControllerTests(unittest.TestCase):
         self.controller.follow("b", "a")
         source, follower = self.screens["a"], self.screens["b"]
         with (
-            mock.patch.object(source, "needs_auto_pause", return_value=True) as first,
-            mock.patch.object(follower, "needs_auto_pause", return_value=True) as second,
+            mock.patch.object(source, "get_auto_pause_reason", return_value="fullscreen") as first,
+            mock.patch.object(follower, "get_auto_pause_reason", return_value="fullscreen") as second,
         ):
             self.controller.check_auto_pause(follower, from_timer=True)
             first.assert_not_called()
@@ -266,9 +256,53 @@ class FollowControllerTests(unittest.TestCase):
             first.assert_called_once()
             second.assert_called_once()
             self.assertEqual(source.play_state, "pause")
-            second.return_value = False
+            second.return_value = None
             self.controller.check_auto_pause(follower)
             self.assertEqual(source.play_state, "play")
+
+
+    def test_single_screen_uses_the_same_pause_policy_and_skips_manual_states(self) -> None:
+
+        source = self.screens["a"]
+        source.blocked = True
+        self.assertTrue(self.controller.check_auto_pause(source))
+        self.assertEqual(source.play_state, "pause")
+        self.assertEqual(source.playback_state, PlaybackState("play", (("a", "fullscreen"),)))
+
+        for requested in ("pause", "stop"):
+            with self.subTest(requested=requested):
+                source.apply_playback_state(PlaybackState(requested))
+                with mock.patch.object(source, "get_auto_pause_reason") as detection:
+                    self.controller.check_auto_pause(source)
+                    detection.assert_not_called()
+                self.assertEqual(source.play_state, requested)
+
+
+    def test_group_records_each_reason_and_local_commands_do_not_mutate_source_intent(self) -> None:
+
+        self.controller.follow("b", "a")
+        source, follower = self.screens["a"], self.screens["b"]
+        with (
+            mock.patch.object(source, "get_auto_pause_reason", return_value="screen_off") as first,
+            mock.patch.object(follower, "get_auto_pause_reason", return_value="battery") as second,
+        ):
+            self.controller.check_auto_pause(follower)
+            expected = PlaybackState("play", (("a", "screen_off"), ("b", "battery")))
+            self.assertEqual(source.playback_state, expected)
+            self.assertEqual(follower.playback_state, expected)
+            self.assertEqual([source.play_state, follower.play_state], ["pause", "pause"])
+
+            first.return_value = None
+            second.reset_mock()
+            self.controller.check_auto_pause(source)
+            second.assert_not_called()
+            self.assertEqual(source.playback_state, PlaybackState("play"))
+            self.assertEqual(follower.playback_state, PlaybackState("play"))
+
+        self.controller.detach("b")
+        follower.apply_playback_state(PlaybackState("pause"))
+        self.assertEqual(source.playback_state, PlaybackState("play"))
+        self.assertEqual(follower.playback_state, PlaybackState("pause"))
 
 
     def test_relation_change_during_media_copy_does_not_overwrite_local_output(self) -> None:
@@ -281,14 +315,13 @@ class FollowControllerTests(unittest.TestCase):
         def select_locally(media: Path) -> None:
             self.controller.detach("b")
             follower.current_media = local
-            follower.play_state = "stop"
-            follower.enable_auto_pause = False
+            follower.apply_playback_state(PlaybackState("stop"))
 
         with mock.patch.object(follower, "set_play_media", side_effect=select_locally):
             self.controller.synchronize()
 
         self.controller.on_ready("a", source)
-        self.assertEqual((follower.current_media, follower.play_state, follower.enable_auto_pause), (local, "stop", False))
+        self.assertEqual((follower.current_media, follower.play_state, follower.playback_state.requested_state), (local, "stop", "stop"))
         self.assertEqual(self.store.load()["screenWallpapers"], {"b": "sample.mp4"})
         self.assertEqual(self.store.load()["screenFollows"], {})
 
@@ -324,8 +357,7 @@ class FollowControllerTests(unittest.TestCase):
         for image in (True, False):
             with self.subTest(image=image):
                 source.current_media = self.media.with_suffix(".png") if image else self.media
-                source.play_state = "stop"
-                source.enable_auto_pause = False
+                source.apply_playback_state(PlaybackState("stop"))
                 with mock.patch.object(source, "get_playback_time", side_effect=AssertionError("unexpected seek")):
                     self.controller.follow("b", "a")
                 self.assertEqual(self.screens["b"].current_media, source.current_media)
