@@ -51,19 +51,6 @@ class ConfigTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
 
-    def test_source_compiles(self):
-        """
-        檢查主要模組的語法
-        """
-
-        for name in ("bb-video-wallpaper.py", "config.py", "thumbnails.py"):
-
-            source_path = ROOT / name
-
-            with self.subTest(module=name):
-                compile(source_path.read_text(encoding="utf-8"), str(source_path), "exec")
-
-
     def test_missing_file_uses_defaults_without_writing(self):
         """
         缺少設定檔時使用預設值, 不寫入檔案

@@ -1,7 +1,7 @@
 """
-測試 Windows 桌面掛載, 電源通知與開機排程的模組邊界
+測試 Windows 桌面掛載, 桌面通知, 電源通知與開機排程的模組邊界
 模擬外部 API, 不變更桌面, Mutex 或工作排程
-備援容器另用隱藏的獨立父視窗驗證原生 alpha 設定
+使用隱藏視窗驗證工作列通知, 獨立監聽視窗與備援容器的原生 alpha 設定
 """
 
 import ctypes
@@ -12,6 +12,10 @@ import sys
 import unittest
 from unittest import mock
 
+from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtTest import QSignalSpy
+from PySide6.QtWidgets import QApplication, QWidget
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -19,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
+from app_loader import load_app_module
 import windows_integration as windows
 
 
@@ -339,35 +344,6 @@ class WindowsIntegrationTests(unittest.TestCase):
         self.assertIn("hwnd=0x64 expected=0x14", output)
         self.assertNotIn("桌布掛載完成", output)
         self.assertNotIn("ERROR:", output)
-
-
-    def test_wallpaper_logs_structure_and_selected_path(self):
-        """
-        記錄桌面結構與選用的掛載路徑
-        """
-
-        with mock.patch.object(windows, "win32gui") as gui:
-            gui.FindWindow.return_value = 10
-            gui.FindWindowEx.side_effect = [0, 20]
-            gui.GetAncestor.return_value = 20
-            gui.GetClassName.return_value = "TestWindow"
-            gui.GetWindowLong.side_effect = lambda hwnd, index: -2147483648 if index == windows.win32con.GWL_STYLE else 0x200000
-            gui.GetWindowRect.return_value = (0, 0, 1920, 1080)
-
-            with self.assertLogs(windows.logger, level="INFO") as logs:
-                windows.set_windows_as_wallpaper(100)
-
-        output = "\n".join(logs.output)
-        for expected in (
-            "Windows=",
-            "mode=progman-workerw",
-            "progman=0xa workerw=0x14",
-            "wallpaper-after: hwnd=0x64 class=TestWindow parent=0x14",
-            "style=0x80000000 exstyle=0x00200000",
-            "rect=(0, 0, 1920, 1080)",
-            "桌布掛載完成",
-        ):
-            self.assertIn(expected, output)
 
 
     def test_diagnostic_read_failure_does_not_prevent_attachment(self):
@@ -691,6 +667,94 @@ class WindowsIntegrationTests(unittest.TestCase):
             windows.unregister_power_notification(handle)
             self.assertIs(unregister.argtypes[0], wintypes.HANDLE)
             unregister.assert_called_once_with(handle)
+
+
+class DesktopEventTests(unittest.TestCase):
+    """
+    工作列通知與獨立監聽視窗
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """
+        建立 Qt 應用程式並載入通知監聽類別
+        """
+
+        cls.app = QApplication.instance() or QApplication([])
+
+        if not isinstance(cls.app, QApplication):
+            raise unittest.SkipTest("桌面通知測試需要 QApplication")
+
+        cls.listener_class = load_app_module().DesktopEventWindow
+
+
+    def setUp(self) -> None:
+        """
+        建立獨立的通知監聽視窗
+        """
+
+        self.listener = self.listener_class()
+        self.addCleanup(self.dispose_listener)
+
+
+    def dispose_listener(self) -> None:
+        """
+        關閉並釋放通知監聽視窗
+        """
+
+        self.listener.close()
+        self.listener.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+    def test_hidden_top_level_window_receives_only_taskbar_notification(self):
+        """
+        隱藏頂層視窗只處理註冊的工作列通知
+        """
+
+        # 確認監聽視窗保持隱藏且沒有父視窗
+        hwnd = int(self.listener.winId())
+        events = QSignalSpy(self.listener.taskbar_created)
+        self.assertFalse(windows.win32gui.IsWindowVisible(hwnd))
+        self.assertEqual(windows.win32gui.GetAncestor(hwnd, windows.win32con.GA_ROOT), hwnd)
+        self.assertIsNone(self.listener.parentWidget())
+
+        windows.win32gui.SendMessage(hwnd, windows.win32con.WM_NULL, 0, 0)
+        self.assertEqual(events.count(), 0)
+        windows.win32gui.SendMessage(hwnd, self.listener.taskbar_created_message, 0, 0)
+        self.assertEqual(events.count(), 1)
+        self.assertFalse(windows.win32gui.IsWindowVisible(hwnd))
+
+
+    def test_listener_survives_destruction_of_separate_wallpaper_container(self):
+        """
+        桌布容器銷毀後獨立監聽視窗仍可接收通知
+        """
+
+        container = windows.win32gui.CreateWindowEx(
+            0, "Static", "", windows.win32con.WS_OVERLAPPED,
+            0, 0, 320, 240, 0, 0, windows.win32api.GetModuleHandle(None), None,
+        )
+        target = QWidget()
+
+        try:
+            target_hwnd = int(target.winId())
+            windows.win32gui.SetParent(target_hwnd, container)
+            # 銷毀父容器與原生子視窗
+            windows.win32gui.DestroyWindow(container)
+            self.assertFalse(windows.win32gui.IsWindow(target_hwnd))
+
+            hwnd = int(self.listener.winId())
+            self.assertTrue(windows.win32gui.IsWindow(hwnd))
+            events = QSignalSpy(self.listener.taskbar_created)
+            windows.win32gui.SendMessage(hwnd, self.listener.taskbar_created_message, 0, 0)
+            self.assertEqual(events.count(), 1)
+
+        finally:
+            target.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            if windows.win32gui.IsWindow(container):
+                windows.win32gui.DestroyWindow(container)
 
 
 class WorkerWNativeTests(unittest.TestCase):

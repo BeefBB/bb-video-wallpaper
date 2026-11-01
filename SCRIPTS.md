@@ -114,12 +114,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 [test_import_menu.py](./tests/test_import_menu.py)                 | 匯入選單排列, 主執行緒進度更新, 取消及退出處理
 [test_media_preview.py](./tests/test_media_preview.py)             | 懸停時序, 預覽模式, 過期縮圖, Qt 訊號與螢幕邊界
 [test_playback_state.py](./tests/test_playback_state.py)           | 媒體切換與暫停, 載入時序, 桌布重掛排程, 重試及退出取消
-[test_desktop_events.py](./tests/test_desktop_events.py)           | 隱藏頂層視窗接收桌面重建通知, 桌布容器銷毀後仍能接收通知
 [test_video_recovery.py](./tests/test_video_recovery.py)           | 主程式實際載入 VLC, 影片輸出失效後的重建, 播放及暫停狀態與進度恢復
-[test_windows_integration.py](./tests/test_windows_integration.py) | 模擬掛載, 螢幕識別, 電源及排程 API, 以隱藏視窗驗證備援容器
+[test_windows_integration.py](./tests/test_windows_integration.py) | 模擬掛載, 螢幕識別, 電源及排程 API, 以隱藏視窗驗證桌面重建通知, 獨立監聽視窗與備援容器
 [test_image_display.py](./tests/test_image_display.py)             | 圖片讀取, 隱藏及顯示, 原生子視窗重綁與釋放
-[test_thumbnails.py](./tests/test_thumbnails.py)                   | 快取命名, 獨立性, 舊快取替換, 清理範圍與儲存失敗處理
-[test_video_thumbnails.py](./tests/test_video_thumbnails.py)       | 實際影片縮圖比例, 非正方形像素, 旋轉方向, 多影像軌, 取消及錯誤處理
+[test_thumbnails.py](./tests/test_thumbnails.py)                   | 快取命名與清理, 舊快取替換, 儲存失敗處理, 實際影片縮圖比例, 非正方形像素, 旋轉方向, 多影像軌, 取消及錯誤處理
 
 ### 測試環境與執行影響
 

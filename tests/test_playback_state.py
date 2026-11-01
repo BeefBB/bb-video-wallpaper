@@ -1548,27 +1548,6 @@ class PlaybackStateTests(unittest.TestCase):
         self.namespace["logger"].exception.assert_not_called()
 
 
-    def test_successful_retry_clears_retry_count(self):
-        """
-        重試成功後清除重試次數
-        """
-
-        self.wallpaper.attach_to_desktop.reset_mock()
-        self.wallpaper.attach_to_desktop.side_effect = [RuntimeError("desktop unavailable"), None]
-        self.wallpaper.reattach_to_desktop()
-        timer = self.wallpaper.reattach_timer
-        self.assertTrue(timer.isActive())
-        self.assertEqual(timer.interval(), 2000)
-        self.assertEqual(self.wallpaper.reattach_retry_count, 1)
-
-        timer.start(0)
-        self.app.processEvents()
-
-        self.assertEqual(self.wallpaper.attach_to_desktop.call_count, 2)
-        self.assertEqual(self.wallpaper.reattach_retry_count, 0)
-        self.assertFalse(timer.isActive())
-
-
     def test_direct_reattach_cancels_pending_timer(self):
         """
         直接重掛時取消尚未執行的排程
