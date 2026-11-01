@@ -1,4 +1,5 @@
 import ctypes
+from collections.abc import Sequence
 import sys
 import os
 from ctypes import wintypes
@@ -1118,17 +1119,10 @@ class Tray:
 
         self.menu = menu = QMenu()
 
-        play_action = QAction(tr("play"), menu)
-        pause_action = QAction(tr("pause"), menu)
-        stop_action = QAction(tr("stop"), menu)
+        self.playback_actions = self.add_playback_actions(menu)
         exit_action = QAction(tr("exit"), menu)
 
 
-        self.playback_actions: tuple[tuple[QAction, str], ...] = (
-            (play_action, "play"),
-            (pause_action, "pause"),
-            (stop_action, "stop"),
-        )
         menu.aboutToShow.connect(self.refresh_playback_actions)
 
 
@@ -1159,9 +1153,6 @@ class Tray:
         startup_action.setChecked(task_exists())
 
 
-        play_action.triggered.connect(lambda checked=False: self.play())
-        pause_action.triggered.connect(lambda checked=False: self.pause())
-        stop_action.triggered.connect(lambda checked=False: self.stop())
         exit_action.triggered.connect(self.exit)
 
 
@@ -1170,10 +1161,6 @@ class Tray:
 
         # 主要選單
         # ################
-        menu.addAction(play_action)
-        menu.addAction(pause_action)
-        menu.addAction(stop_action)
-
         menu.addSeparator()
 
         menu.addMenu(self.media_menu)
@@ -1371,20 +1358,27 @@ class Tray:
         self.refresh_playback_actions()
 
 
-    def refresh_playback_actions(self) -> None:
+    def refresh_playback_actions(
+        self,
+        actions: Sequence[tuple[QAction, str]] | None = None,
+        screen_id: str | None = None,
+    ) -> None:
 
-        multiple = len(self.wallpapers) > 1
-        wallpaper = next(iter(self.wallpapers.values()), None)
+        wallpapers = self.get_wallpapers(screen_id)
+        multiple = screen_id is None and len(wallpapers) > 1
+        wallpaper = wallpapers[0] if wallpapers else None
+        following = screen_id in self.follow_controller.graph.sources
         has_video = any(
             w.current_media and w.current_media.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
-            for w in self.wallpapers.values()
+            for w in wallpapers
         )
 
-        for action, state in self.playback_actions:
+        actions = self.playback_actions if actions is None else actions
+        for action, state in actions:
             action.setText(tr(f"all_{state}" if multiple else state))
             action.setCheckable(not multiple)
-            action.setChecked(bool(not multiple and wallpaper and wallpaper.play_state == state))
-            action.setEnabled(bool(has_video if state == "pause" else self.wallpapers))
+            action.setChecked(bool(not multiple and not following and wallpaper and wallpaper.play_state == state))
+            action.setEnabled(bool(has_video if state == "pause" else wallpapers))
 
 
     def get_wallpapers(self, screen_id: str | None = None) -> tuple["Wallpaper", ...]:
@@ -1500,36 +1494,27 @@ class Tray:
             )
 
 
-    def add_playback_actions(self, menu: "QMenu", screen_id: str) -> None:
+    def add_playback_actions(self, menu: "QMenu", screen_id: str | None = None) -> tuple[tuple[QAction, str], ...]:
         """
-        新增指定螢幕的播放控制項目
+        新增播放控制項目並回傳動作與狀態的對應
         """
 
-        wallpaper = self.wallpapers.get(screen_id)
-
+        actions = []
         for state, command in (
             ("play", self.play),
             ("pause", self.pause),
             ("stop", self.stop),
         ):
-            action = QAction(tr(state), menu)
-            action.setCheckable(True)
-            action.setChecked(bool(
-                wallpaper and wallpaper.play_state == state and
-                screen_id not in self.follow_controller.graph.sources
-            ))
-            action.setEnabled(bool(
-                wallpaper and (
-                    state != "pause" or (
-                        wallpaper.current_media and
-                        wallpaper.current_media.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
-                    )
-                )
-            ))
+            action = QAction(menu)
             action.triggered.connect(
                 lambda checked=False, s=screen_id, callback=command: callback(s)
             )
             menu.addAction(action)
+            actions.append((action, state))
+
+        self.refresh_playback_actions(actions, screen_id)
+
+        return tuple(actions)
 
 
     def refresh_media_menu(self) -> None:

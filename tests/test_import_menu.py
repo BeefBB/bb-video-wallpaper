@@ -680,6 +680,55 @@ class ImportMenuTests(unittest.TestCase):
         self.wallpaper.manual_play.assert_called_once_with()
 
 
+    def test_pause_availability_uses_each_menu_scope_when_media_changes(self):
+
+        other = self.add_screen("screen-b")
+        self.wallpaper.current_media = self.source.with_suffix(".png")
+
+        for media, can_pause in ((self.source, True), (self.source.with_suffix(".png"), False), (None, False)):
+            with self.subTest(media=media):
+                other.current_media = media
+                self.menu.aboutToShow.emit()
+                first = self.tray.screen_menus["screen-a"]
+                second = self.tray.screen_menus["screen-b"]
+                first.aboutToShow.emit()
+                second.aboutToShow.emit()
+
+                self.assertEqual(self.menu.actions()[1].text(), "全部暫停")
+                self.assertEqual(self.menu.actions()[1].isEnabled(), can_pause)
+                self.assertFalse(first.actions()[1].isEnabled())
+                self.assertEqual(second.actions()[1].isEnabled(), can_pause)
+                self.assertTrue(all(not action.isCheckable() for action in self.menu.actions()[:3]))
+
+        self.tray.app.screens.return_value.remove(other.target_screen)
+        self.screen_notifications.screenRemoved.emit(other.target_screen)
+        self.menu.aboutToShow.emit()
+        self.assertEqual(self.menu.actions()[1].text(), "暫停")
+        self.assertFalse(self.menu.actions()[1].isEnabled())
+        self.assertTrue(self.menu.actions()[0].isChecked())
+        self.assertTrue(self.menu.actions()[0].isEnabled())
+        self.assertTrue(self.menu.actions()[2].isEnabled())
+
+
+    def test_root_playback_actions_keep_global_scope_when_screen_count_changes(self):
+
+        with mock.patch.object(self.tray.follow_controller, "detach") as detach:
+            for count in (1, 2):
+                with self.subTest(count=count):
+                    if count == 2:
+                        self.add_screen("screen-b")
+                    self.menu.aboutToShow.emit()
+                    for wallpaper in self.tray.wallpapers.values():
+                        for command in ("play", "pause", "stop"):
+                            getattr(wallpaper, f"manual_{command}").reset_mock()
+
+                    for action, command in zip(self.menu.actions()[:3], ("play", "pause", "stop")):
+                        action.trigger()
+                        for wallpaper in self.tray.wallpapers.values():
+                            getattr(wallpaper, f"manual_{command}").assert_called_once_with()
+                    detach.assert_not_called()
+
+
     def test_pause_all_starts_stopped_videos_before_pausing_them(self):
 
         other = self.add_screen("screen-b")
