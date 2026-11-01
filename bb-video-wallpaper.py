@@ -1527,6 +1527,13 @@ class Tray:
         """
 
         menu.reset_preview()
+
+        # clear() 只移除子選單入口, 子選單本體需另外釋放
+        for action in menu.actions():
+            submenu = action.menu()
+            if submenu is not None:
+                submenu.deleteLater()
+
         menu.clear()
         self.add_playback_actions(menu, screen_id)
         menu.addSeparator()
