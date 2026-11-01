@@ -10,7 +10,7 @@ import os
 from configparser import ConfigParser, Error as ConfigParserError
 from pathlib import Path
 
-from screen_follow import FollowGraph
+from screen_follow import FollowGraph, valid_screen_id
 
 
 logger = logging.getLogger(__name__)
@@ -66,6 +66,19 @@ class ConfigStore:
             return None
 
         return path.as_posix()
+
+
+    def _relative_media_path(self, path: Path) -> str:
+        """
+        將媒體路徑轉為可保存的相對路徑, 無效時拒絕保存
+        """
+
+        media_path = self._normalize_media_path(path.relative_to(self.media_dir).as_posix())
+
+        if media_path is None:
+            raise ValueError("桌布路徑必須位於媒體資料夾內")
+
+        return media_path
 
 
     def validate(self, raw) -> dict:
@@ -168,7 +181,7 @@ class ConfigStore:
 
         if isinstance(screen_wallpapers, dict):
             for screen_id, media_path in screen_wallpapers.items():
-                if not isinstance(screen_id, str) or not screen_id.strip() or "\0" in screen_id:
+                if not valid_screen_id(screen_id):
                     continue
 
                 normalized = self._normalize_media_path(media_path)
@@ -196,12 +209,7 @@ class ConfigStore:
         保存最近紀錄
         """
 
-        media_path = self._normalize_media_path(path.relative_to(self.media_dir).as_posix())
-
-        if media_path is None:
-            raise ValueError("桌布路徑必須位於媒體資料夾內")
-
-
+        media_path = self._relative_media_path(path)
         config = self.load()
         recent = config["recentVideo"]
         config["recentVideo"] = [media_path] + [
@@ -216,15 +224,10 @@ class ConfigStore:
         保存單一螢幕的選擇
         """
 
-        if not isinstance(screen_id, str) or not screen_id.strip() or "\0" in screen_id:
+        if not valid_screen_id(screen_id):
             raise ValueError("無效的螢幕識別")
 
-        media_path = self._normalize_media_path(path.relative_to(self.media_dir).as_posix())
-
-        if media_path is None:
-            raise ValueError("桌布路徑必須位於媒體資料夾內")
-
-
+        media_path = self._relative_media_path(path)
         config = self.load()
         config["screenWallpapers"][screen_id] = media_path
         self.save(config)

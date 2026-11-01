@@ -18,7 +18,7 @@ from PySide6.QtCore import QEventLoop, Qt, QTimer, QThread, Slot, Signal
 from PySide6.QtGui import QAction, QIcon, QFont, QScreen
 
 import bb_image_display
-from config import ConfigStore, SUPPORTED_LANGUAGES
+from config import CONFIG_DEFAULTS, ConfigStore, SUPPORTED_LANGUAGES
 from media_import import MediaImportCancelled, import_media
 from media_preview import MediaPreviewMenu
 from screen_follow import AutoPauseHandler, FollowController, RESTORE_DELAY_MS, SYNC_INTERVAL_MS
@@ -1186,24 +1186,6 @@ class Tray:
         open_media_action.triggered.connect(self.open_media_folder)
 
 
-        auto_pause_if_fullscreen_action = QAction(tr("auto_pause_fullscreen"), menu)
-        auto_pause_if_fullscreen_action.setCheckable(True)
-        auto_pause_if_fullscreen_action.setChecked(
-            config.get("autoPauseIfFullscreen", True)
-        )
-
-        auto_pause_if_screen_off_action = QAction(tr("auto_pause_screen_off"), menu)
-        auto_pause_if_screen_off_action.setCheckable(True)
-        auto_pause_if_screen_off_action.setChecked(
-            config.get("autoPauseIfScreenOff", True)
-        )
-
-        auto_pause_if_on_battery_action = QAction(tr("auto_pause_battery"), menu)
-        auto_pause_if_on_battery_action.setCheckable(True)
-        auto_pause_if_on_battery_action.setChecked(
-            config.get("autoPauseIfOnBattery", False)
-        )
-
         startup_action = QAction(tr("startup"), menu)
         startup_action.setCheckable(True)
         startup_action.setChecked(task_exists())
@@ -1214,28 +1196,6 @@ class Tray:
         stop_action.triggered.connect(lambda checked=False: self.stop())
         exit_action.triggered.connect(self.exit)
 
-
-        auto_pause_if_fullscreen_action.triggered.connect(
-            lambda checked: self.set_auto_pause_option(
-                "autoPauseIfFullscreen",
-                "auto_pause_if_fullscreen",
-                checked
-            )
-        )
-        auto_pause_if_screen_off_action.triggered.connect(
-            lambda checked: self.set_auto_pause_option(
-                "autoPauseIfScreenOff",
-                "auto_pause_if_screen_off",
-                checked
-            )
-        )
-        auto_pause_if_on_battery_action.triggered.connect(
-            lambda checked: self.set_auto_pause_option(
-                "autoPauseIfOnBattery",
-                "auto_pause_if_on_battery",
-                checked
-            )
-        )
 
         startup_action.triggered.connect(self.toggle_startup)
 
@@ -1265,9 +1225,18 @@ class Tray:
 
         # 選項子選單
         # ################
-        self.options_menu.addAction(auto_pause_if_fullscreen_action)
-        self.options_menu.addAction(auto_pause_if_screen_off_action)
-        self.options_menu.addAction(auto_pause_if_on_battery_action)
+        for text_key, config_key, attribute in (
+            ("auto_pause_fullscreen", "autoPauseIfFullscreen", "auto_pause_if_fullscreen"),
+            ("auto_pause_screen_off", "autoPauseIfScreenOff", "auto_pause_if_screen_off"),
+            ("auto_pause_battery", "autoPauseIfOnBattery", "auto_pause_if_on_battery"),
+        ):
+            action = QAction(tr(text_key), self.options_menu)
+            action.setCheckable(True)
+            action.setChecked(config.get(config_key, CONFIG_DEFAULTS[config_key]))
+            action.triggered.connect(
+                lambda checked, key=config_key, attr=attribute: self.set_auto_pause_option(key, attr, checked)
+            )
+            self.options_menu.addAction(action)
 
         self.options_menu.addSeparator()
 

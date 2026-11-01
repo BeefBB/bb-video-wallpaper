@@ -177,10 +177,12 @@ class FollowControllerTests(unittest.TestCase):
         for key in "bc":
             target = self.screens[key]
             self.assertEqual(target.current_media, source.current_media)
-            self.assertIn(key, self.controller.pending_sync)
+            self.assertEqual(target.position, 0)
+            self.assertEqual(target.seeks, [])
             target.ready = True
             self.controller.on_ready(key, target)
             self.assertEqual(target.position, 4500)
+            self.assertEqual(target.seeks, [4500])
 
         self.assertEqual(self.store.load()["screenWallpapers"], {"b": "new.mp4", "c": "new.mp4"})
 
@@ -285,9 +287,10 @@ class FollowControllerTests(unittest.TestCase):
         with mock.patch.object(follower, "set_play_media", side_effect=select_locally):
             self.controller.synchronize()
 
+        self.controller.on_ready("a", source)
         self.assertEqual((follower.current_media, follower.play_state, follower.enable_auto_pause), (local, "stop", False))
         self.assertEqual(self.store.load()["screenWallpapers"], {"b": "sample.mp4"})
-        self.assertNotIn("b", self.controller.pending_sync)
+        self.assertEqual(self.store.load()["screenFollows"], {})
 
 
     def test_removing_middle_screen_keeps_output_and_does_not_refollow_on_reconnection(self) -> None:
@@ -336,15 +339,18 @@ class FollowControllerTests(unittest.TestCase):
         self.screens["a"].position = 6000
         self.screens["b"].seekable = False
         self.controller.synchronize()
-        self.assertIn("b", self.controller.pending_sync)
+        self.assertEqual(self.screens["b"].position, 2000)
+        self.assertEqual(self.screens["b"].seeks, [])
         self.assertEqual(self.screens["c"].position, 6000)
         self.screens["b"].seekable = True
         self.controller.synchronize()
-        self.assertNotIn("b", self.controller.pending_sync)
+        self.assertEqual(self.screens["b"].position, 6000)
+        self.assertEqual(self.screens["b"].seeks, [6000])
 
         self.screens["a"].position = 8000
         with mock.patch.object(self.screens["b"], "seek_time", side_effect=RuntimeError("seek failed")):
             self.controller.synchronize()
+        self.assertEqual(self.screens["b"].position, 6000)
         self.assertEqual(self.screens["c"].position, 8000)
 
 

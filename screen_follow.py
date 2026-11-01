@@ -189,7 +189,7 @@ class FollowGraph:
 
 class FollowController:
     """
-    保存待同步螢幕並套用來源的媒體, 狀態與進度
+    依跟隨關係套用來源的媒體, 狀態與進度
     """
 
     def __init__(self, wallpapers: Mapping[str, FollowWallpaper], config_store: ConfigStore) -> None:
@@ -197,7 +197,6 @@ class FollowController:
         self.wallpapers = wallpapers
         self.config_store = config_store
         self.graph = FollowGraph()
-        self.pending_sync: set[str] = set()
         self._pending_selection: set[str] = set()
         self._syncing: set[str] = set()
         self.is_exiting = False
@@ -256,7 +255,6 @@ class FollowController:
         if self.graph.detach(screen_id):
             self.save()
 
-        self.pending_sync.intersection_update(self.graph.sources)
         self._pending_selection.intersection_update(self.graph.sources)
 
 
@@ -268,7 +266,6 @@ class FollowController:
         if self.graph.remove_screen(screen_id):
             self.save()
 
-        self.pending_sync.intersection_update(self.graph.sources)
         self._pending_selection.intersection_update(self.graph.sources)
 
 
@@ -309,7 +306,6 @@ class FollowController:
         if source is None or source.is_exiting or not followers:
             return
 
-        self.pending_sync.update(followers)
         if source.is_recreating or source.current_media is None:
             return
 
@@ -357,7 +353,6 @@ class FollowController:
                     self._pending_selection.discard(screen_id)
 
                 if source.is_image() or source.play_state == "stop":
-                    self.pending_sync.discard(screen_id)
                     continue
 
                 source_time = source.get_playback_time()
@@ -370,10 +365,8 @@ class FollowController:
                 if length > 0 and difference <= length:
                     difference = min(difference, length - difference)
 
-                if difference > SYNC_TOLERANCE_MS and not target.seek_time(source_time):
-                    continue
-
-                self.pending_sync.discard(screen_id)
+                if difference > SYNC_TOLERANCE_MS:
+                    target.seek_time(source_time)
 
             except Exception:
                 logger.exception("同步跟隨螢幕失敗 - %s -> %s", screen_id, root)
@@ -423,5 +416,4 @@ class FollowController:
     def shutdown(self) -> None:
 
         self.is_exiting = True
-        self.pending_sync.clear()
         self._pending_selection.clear()

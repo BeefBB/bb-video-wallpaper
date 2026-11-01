@@ -660,9 +660,22 @@ class ImportMenuTests(unittest.TestCase):
         other.manual_stop.assert_called_once_with()
         self.assertTrue(all(not action.isCheckable() for action, _ in self.tray.playback_actions))
 
-        self.tray.set_auto_pause_option("autoPauseIfFullscreen", "auto_pause_if_fullscreen", False)
-        self.assertFalse(self.wallpaper.auto_pause_if_fullscreen)
-        self.assertFalse(other.auto_pause_if_fullscreen)
+        options = (
+            ("auto_pause_fullscreen", "autoPauseIfFullscreen", "auto_pause_if_fullscreen", True),
+            ("auto_pause_screen_off", "autoPauseIfScreenOff", "auto_pause_if_screen_off", True),
+            ("auto_pause_battery", "autoPauseIfOnBattery", "auto_pause_if_on_battery", False),
+        )
+        for action, (text_key, config_key, attribute, default) in zip(self.tray.options_menu.actions(), options):
+            with self.subTest(option=config_key):
+                self.assertEqual(action.text(), self.language[text_key])
+                self.assertTrue(action.isCheckable())
+                self.assertEqual(action.isChecked(), default)
+                action.trigger()
+                saved = self.namespace["config_store"].save.call_args.args[0]
+                self.assertEqual(saved[config_key], not default)
+                self.assertIs(getattr(self.wallpaper, attribute), not default)
+                self.assertIs(getattr(other, attribute), not default)
+
         self.tray.play("removed-screen")
         self.wallpaper.manual_play.assert_called_once_with()
 
