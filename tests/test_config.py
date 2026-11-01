@@ -62,6 +62,7 @@ class ConfigTests(unittest.TestCase):
             "language": "en-US",
             "recentVideo": [],
             "screenWallpapers": {},
+            "screenFollows": {},
         }
 
         self.assertEqual(config, expected)
@@ -80,6 +81,7 @@ class ConfigTests(unittest.TestCase):
             "language": "en-US",
             "recentVideo": [],
             "screenWallpapers": {},
+            "screenFollows": {},
         }
 
         self.assertEqual(
@@ -159,6 +161,7 @@ class ConfigTests(unittest.TestCase):
             "language": "en-US",
             "recentVideo": [],
             "screenWallpapers": {},
+            "screenFollows": {},
         }
         language = json.loads(
             (self.store.lang_dir / "en-US.json").read_text(encoding="utf-8")
@@ -190,6 +193,7 @@ class ConfigTests(unittest.TestCase):
             "recentVideo": ["missing.mp4"],
             "screenWallpapers": {},
             "futureOption": {"enabled": True},
+            "screenFollows": {},
         }
 
         for key, default in CONFIG_DEFAULTS.items():
@@ -335,6 +339,16 @@ class ConfigTests(unittest.TestCase):
         for invalid in (None, False, 123, [], "file.mp4"):
             with self.subTest(value=invalid):
                 self.assertEqual(self.store.validate({"screenWallpapers": invalid})["screenWallpapers"], {})
+
+
+    def test_screen_follows_validate_ids_and_cycles_without_requiring_connected_screens(self):
+
+        raw = {"b": "a", "c": "b", "missing": "offline", "x": "y", "y": "x",
+               "self": "self", "blank": " ", "type": [], "nul\0": "a"}
+        self.store.save({"screenFollows": raw})
+        original = self.config_path.read_bytes()
+        self.assertEqual(self.store.load()["screenFollows"], {"b": "a", "c": "b", "missing": "offline"})
+        self.assertEqual(self.config_path.read_bytes(), original)
 
 
     def test_remember_wallpaper_keeps_screen_choices_independent_and_history_shared(self):

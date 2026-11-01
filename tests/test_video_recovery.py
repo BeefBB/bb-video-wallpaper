@@ -75,6 +75,7 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
     logging.basicConfig(level=logging.INFO)
     hosts: list[subprocess.Popen[str]] = []
     wallpaper = None
+    follower = None
     # 探針逾時時輸出執行緒堆疊並退出
     faulthandler.dump_traceback_later(20, exit=True)
 
@@ -175,6 +176,7 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
         tray = namespace["Tray"].__new__(namespace["Tray"])
         tray.wallpapers = {wallpaper.screen_id: wallpaper}
         tray.is_exiting = False
+        tray.follow_controller = namespace["FollowController"](tray.wallpapers, config)
         tray.import_screen_id = wallpaper.screen_id
         tray.import_applies_to_all = False
         tray.import_thread = mock.Mock(destination=imported, cancelled=False)
@@ -226,6 +228,47 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
             assert player.get_time() < saved_time, "匯入影片沒有從頭播放"
         print("PASS import: new media starts without old seek", flush=True)
 
+        # 第二個輸出掛入同一個畫面外容器
+        with mock.patch.dict(namespace, {"get_monitor_id": lambda hwnd: "test-follower"}):
+            follower = namespace["Wallpaper"]()
+        follower.check_auto_pause_timer.stop()
+        follower.fullscreen_detection_timer.stop()
+        follower.setGeometry(0, 0, 320, 180)
+        follower.show()
+        tray.wallpapers[follower.screen_id] = follower
+        controller = tray.follow_controller
+        for output in (wallpaper, follower):
+            output.auto_pause_handler = controller.check_auto_pause
+            for signal in (output.playback_started, output.reattach_finished):
+                signal.connect(
+                    lambda s=output.screen_id, w=output: controller.on_ready(s, w),
+                    Qt.ConnectionType.QueuedConnection,
+                )
+
+        tray.pause(wallpaper.screen_id)
+        wait_until(lambda: player.get_state() == paused_state)
+        assert wallpaper.seek_time(8000), "來源影片尚未能接受 seek"
+        wait_until(lambda: abs(player.get_time() - 8000) < 300)
+        assert controller.follow(follower.screen_id, wallpaper.screen_id)
+        follower_player = follower.instance_vlc_player
+        wait_until(lambda: (
+            follower_player.get_state() == paused_state and
+            abs(follower_player.get_time() - player.get_time()) <= 500
+        ))
+        assert follower.current_media == imported, "跟隨沒有複製來源影片"
+        assert not follower.enable_auto_pause, "跟隨沒有複製手動暫停狀態"
+
+        assert follower.seek_time(1000)
+        wait_until(lambda: abs(follower_player.get_time() - 1000) < 300)
+        controller.synchronize()
+        wait_until(lambda: abs(follower_player.get_time() - player.get_time()) <= 500)
+        tray.stop(wallpaper.screen_id)
+        wait_until(lambda: follower_player.get_state() == getattr(vlc.State, "Stopped"))
+        assert controller.graph.sources == {follower.screen_id: wallpaper.screen_id}
+        print("PASS follow: paused join, progress correction, immediate stop", flush=True)
+        controller.shutdown()
+        follower.shutdown()
+
         # 父視窗失效後關閉桌布
         old_hwnd = int(wallpaper.winId())
         host_process.terminate()
@@ -250,6 +293,8 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
         # 桌布自行停止輸出並釋放資源, 父程序由測試清理
         if wallpaper is not None:
             wallpaper.shutdown()
+        if follower is not None:
+            follower.shutdown()
         for process in hosts:
             if process.poll() is None:
                 process.terminate()
@@ -300,6 +345,7 @@ class VideoRecoveryTests(unittest.TestCase):
                     self.assertIn("PASS shutdown:", result.stdout)
                     self.assertIn("PASS pause:", result.stdout)
                     self.assertIn("PASS import:", result.stdout)
+                    self.assertIn("PASS follow:", result.stdout)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ import bb_image_display
 from config import ConfigStore, SUPPORTED_LANGUAGES
 from media_import import MediaImportCancelled, import_media
 from media_preview import MediaPreviewMenu
+from screen_follow import AutoPauseHandler, FollowController, RESTORE_DELAY_MS, SYNC_INTERVAL_MS
 from thumbnails import (
     SUPPORTED_VIDEO_EXTENSIONS,
     SUPPORTED_IMAGE_EXTENSIONS,
@@ -347,6 +348,7 @@ class Wallpaper(QWidget):
         self._reattach_position: tuple[Path, int] | None = None
         # 啟用自動暫停
         self.enable_auto_pause = True
+        self.auto_pause_handler: AutoPauseHandler | None = None
 
         # 全螢幕檢測就緒
         self.fullscreen_detection_ready = False
@@ -448,7 +450,7 @@ class Wallpaper(QWidget):
         self.fullscreen_detection_timer.start(10000)
 
         self.check_auto_pause_timer = QTimer(self)
-        self.check_auto_pause_timer.timeout.connect(self.check_auto_pause)
+        self.check_auto_pause_timer.timeout.connect(lambda: self.check_auto_pause(from_timer=True))
         self.check_auto_pause_timer.start(500)
 
         # 保持獨立頂層 HWND, 不掛在桌布視窗或 Explorer 之下
@@ -619,6 +621,42 @@ class Wallpaper(QWidget):
         # 載入完成後依最新狀態補套暫停, 不覆蓋後續的播放或停止要求
         if not self.is_exiting and not self.is_recreating and not self.is_image() and self.play_state == "pause":
             self.instance_vlc_player.set_pause(1)
+
+
+    def get_playback_time(self) -> int | None:
+        """
+        取得播放中或暫停中的進度, 尚未就緒時回傳 None
+        """
+
+        if (
+            self.is_exiting or self.is_recreating or self.is_image() or not self.current_media or
+            self.play_state == "stop" or self.pending_reattach_time is not None or
+            self._reattach_position is not None
+        ):
+            return None
+
+        # python-vlc 在執行時建立列舉成員
+        playing_state: vlc.State = getattr(vlc.State, "Playing")
+        paused_state: vlc.State = getattr(vlc.State, "Paused")
+        if self.instance_vlc_player.get_state() not in (playing_state, paused_state):
+            return None
+
+        position = self.instance_vlc_player.get_time()
+        return position if position >= 0 else None
+
+
+    def get_playback_length(self) -> int:
+
+        return self.instance_vlc_player.get_length()
+
+
+    def seek_time(self, position: int) -> bool:
+
+        if position < 0 or self.get_playback_time() is None or not self.instance_vlc_player.is_seekable():
+            return False
+
+        self.instance_vlc_player.set_time(position)
+        return True
 
 
     @Slot()
@@ -952,12 +990,15 @@ class Wallpaper(QWidget):
         logger.debug("fullscreen detection - ready")
 
 
-    def check_auto_pause(self) -> None:
+    def check_auto_pause(self, *, from_timer: bool = False) -> None:
         """
         檢查是否需要自動暫停
         """
 
         if self.is_exiting or self.is_recreating:
+            return
+
+        if self.auto_pause_handler is not None and self.auto_pause_handler(self, from_timer=from_timer):
             return
 
         if not self.enable_auto_pause:
@@ -968,11 +1009,7 @@ class Wallpaper(QWidget):
             return
 
 
-        need_auto_pause = (
-            (self.auto_pause_if_screen_off and self.screen_off) or
-            (self.auto_pause_if_on_battery and is_on_battery()) or
-            (self.auto_pause_if_fullscreen and self.fullscreen_detection_ready and is_any_fullscreen(int(self.winId())))
-        )
+        need_auto_pause = self.needs_auto_pause()
 
 
         if need_auto_pause:
@@ -986,6 +1023,18 @@ class Wallpaper(QWidget):
 
                 self.media_play()
                 logger.info("auto_pause - play")
+
+
+    def needs_auto_pause(self) -> bool:
+        """
+        回報目前螢幕是否符合任一自動暫停條件
+        """
+
+        return bool(
+            (self.auto_pause_if_screen_off and self.screen_off) or
+            (self.auto_pause_if_on_battery and is_on_battery()) or
+            (self.auto_pause_if_fullscreen and self.fullscreen_detection_ready and is_any_fullscreen(int(self.winId())))
+        )
 
 
     def unregister_power_notification(self) -> None:
@@ -1015,6 +1064,7 @@ class Wallpaper(QWidget):
 
         self._shutdown_started = True
         self.is_exiting = True
+        self.auto_pause_handler = None
         self.enable_auto_pause = False
         self.fullscreen_detection_ready = False
         self.pending_reattach_time = None
@@ -1089,6 +1139,10 @@ class Tray:
 
         # 設定檔
         config = config_store.load()
+
+        self.follow_controller = FollowController(self.wallpapers, config_store)
+        self.saved_follows: dict[str, str] = config.get("screenFollows", {})
+        self.waiting_for_screens = bool(self.saved_follows)
 
         # 語言代碼
         self.current_language_code = config.get("language", "zh-TW")
@@ -1230,14 +1284,43 @@ class Tray:
 
         self.tray.setContextMenu(menu)
 
+        self.follow_sync_timer = QTimer(menu)
+        self.follow_sync_timer.timeout.connect(self.follow_controller.synchronize)
+        self.follow_sync_timer.start(SYNC_INTERVAL_MS)
+
+        self.follow_restore_timer = QTimer(menu)
+        self.follow_restore_timer.setSingleShot(True)
+        self.follow_restore_timer.timeout.connect(self.initialize_screens)
+
         self.app.screenAdded.connect(self.add_screen)
         self.app.screenRemoved.connect(self.remove_screen)
 
-        for screen in self.app.screens():
-            self.add_screen(screen, refresh=False)
+        if self.waiting_for_screens:
+            # 等待螢幕列舉穩定後再建立桌布
+            self.follow_restore_timer.start(RESTORE_DELAY_MS)
+        else:
+            self.initialize_screens()
 
         self.rebuild_screen_menus()
         self.tray.show()
+
+
+    def initialize_screens(self) -> None:
+        """
+        列舉目前螢幕並還原已保存的跟隨關係
+        """
+
+        if self.is_exiting:
+            return
+
+        self.follow_restore_timer.stop()
+        self.waiting_for_screens = False
+        for screen in self.app.screens():
+            self.add_screen(screen, refresh=False)
+
+        self.follow_controller.restore(self.saved_follows)
+        self.saved_follows = {}
+        self.rebuild_screen_menus()
 
 
     def add_screen(self, screen: QScreen, *, refresh: bool = True) -> None:
@@ -1245,7 +1328,7 @@ class Tray:
         為新螢幕建立桌布, 重複通知不重建既有桌布
         """
 
-        if self.is_exiting or any(w.target_screen is screen for w in self.wallpapers.values()):
+        if self.is_exiting or self.waiting_for_screens or any(w.target_screen is screen for w in self.wallpapers.values()):
             return
 
         try:
@@ -1261,6 +1344,12 @@ class Tray:
             return
 
         self.wallpapers[wallpaper.screen_id] = wallpaper
+        wallpaper.auto_pause_handler = self.follow_controller.check_auto_pause
+        for signal in (wallpaper.playback_started, wallpaper.reattach_finished):
+            signal.connect(
+                lambda s=wallpaper.screen_id, w=wallpaper: self.follow_controller.on_ready(s, w),
+                Qt.ConnectionType.QueuedConnection,
+            )
         wallpaper.show()
 
         if refresh:
@@ -1280,6 +1369,7 @@ class Tray:
                 continue
 
             del self.wallpapers[screen_id]
+            self.follow_controller.remove_screen(screen_id)
             self.rebuild_screen_menus()
 
             try:
@@ -1374,11 +1464,19 @@ class Tray:
 
     def play(self, screen_id: str | None = None) -> None:
 
+        if screen_id is not None:
+            self.follow_controller.detach(screen_id)
+
         for wallpaper in self.get_wallpapers(screen_id):
             wallpaper.manual_play()
 
+        self.follow_controller.synchronize(screen_id)
+
 
     def pause(self, screen_id: str | None = None) -> None:
+
+        if screen_id is not None:
+            self.follow_controller.detach(screen_id)
 
         for wallpaper in self.get_wallpapers(screen_id):
             if (
@@ -1388,11 +1486,18 @@ class Tray:
                 wallpaper.manual_play()
             wallpaper.manual_pause()
 
+        self.follow_controller.synchronize(screen_id)
+
 
     def stop(self, screen_id: str | None = None) -> None:
 
+        if screen_id is not None:
+            self.follow_controller.detach(screen_id)
+
         for wallpaper in self.get_wallpapers(screen_id):
             wallpaper.manual_stop()
+
+        self.follow_controller.synchronize(screen_id)
 
 
     def refresh_language_menu(self) -> None:
@@ -1426,6 +1531,29 @@ class Tray:
         self.add_playback_actions(menu, screen_id)
         menu.addSeparator()
         self.add_media_menu_actions(menu, screen_id)
+        if len(self.wallpapers) > 1:
+            menu.addSeparator()
+            self.add_follow_menu(menu, screen_id)
+
+
+    def add_follow_menu(self, menu: "QMenu", screen_id: str) -> None:
+
+        follow_menu = menu.addMenu(tr("follow_monitor"))
+        sources = self.follow_controller.graph.sources
+        follow_menu.menuAction().setCheckable(True)
+        follow_menu.menuAction().setChecked(screen_id in sources)
+
+        for number, source_id in enumerate(self.wallpapers, start=1):
+            if source_id == screen_id:
+                continue
+
+            action = follow_menu.addAction(f'{tr("monitor")} {number}')
+            action.setCheckable(True)
+            action.setChecked(sources.get(screen_id) == source_id)
+            action.setEnabled(self.follow_controller.can_follow(screen_id, source_id))
+            action.triggered.connect(
+                lambda checked=False, s=screen_id, origin=source_id: self.follow_controller.follow(s, origin)
+            )
 
 
     def add_playback_actions(self, menu: "QMenu", screen_id: str) -> None:
@@ -1442,7 +1570,10 @@ class Tray:
         ):
             action = QAction(tr(state), menu)
             action.setCheckable(True)
-            action.setChecked(bool(wallpaper and wallpaper.play_state == state))
+            action.setChecked(bool(
+                wallpaper and wallpaper.play_state == state and
+                screen_id not in self.follow_controller.graph.sources
+            ))
             action.setEnabled(bool(
                 wallpaper and (
                     state != "pause" or (
@@ -1528,7 +1659,10 @@ class Tray:
         )
 
         action.setCheckable(True)
-        action.setChecked(bool(wallpaper and media_path == wallpaper.current_media))
+        action.setChecked(bool(
+            wallpaper and media_path == wallpaper.current_media and
+            screen_id not in self.follow_controller.graph.sources
+        ))
         action.setEnabled(wallpaper is not None and media_path.is_file())
 
         menu.addAction(action)
@@ -1561,6 +1695,8 @@ class Tray:
         try:
 
             wallpaper.select_media(path)
+            self.follow_controller.detach(screen_id)
+            self.follow_controller.synchronize(screen_id)
 
         except Exception as error:
 
@@ -1727,6 +1863,9 @@ class Tray:
             return
 
         self.is_exiting = True
+        self.follow_sync_timer.stop()
+        self.follow_restore_timer.stop()
+        self.follow_controller.shutdown()
         self.wait_for_import()
 
         if self.import_thread is not None:

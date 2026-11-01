@@ -185,6 +185,12 @@ class ImportMenuTests(unittest.TestCase):
         wallpaper.play_state = "play"
         wallpaper.is_exiting = False
         wallpaper.is_recreating = False
+        wallpaper.enable_auto_pause = True
+        wallpaper.is_image.return_value = False
+        wallpaper.needs_auto_pause.return_value = False
+        wallpaper.get_playback_time.return_value = 2000
+        wallpaper.get_playback_length.return_value = 10000
+        wallpaper.seek_time.return_value = True
         return wallpaper
 
 
@@ -717,6 +723,80 @@ class ImportMenuTests(unittest.TestCase):
             media_action.trigger()
             other.select_media.assert_called_once_with(path)
             self.wallpaper.select_media.assert_not_called()
+
+
+    def test_follow_menu_disables_cycles_and_marks_only_the_selected_source(self):
+
+        second = self.add_screen("screen-b")
+        third = self.add_screen("screen-c")
+        self.tray.follow_controller.follow("screen-b", "screen-a")
+        self.tray.follow_controller.follow("screen-c", "screen-b")
+        first_menu = self.tray.screen_menus["screen-a"]
+        first_menu.aboutToShow.emit()
+        sources = first_menu.actions()[-1].menu().actions()
+        self.assertEqual([action.text() for action in sources], ["螢幕 2", "螢幕 3"])
+        self.assertTrue(all(not action.isEnabled() for action in sources))
+
+        second_menu = self.tray.screen_menus["screen-b"]
+        second_menu.aboutToShow.emit()
+        self.assertTrue(second_menu.actions()[-1].isChecked())
+        self.assertTrue(all(not action.isChecked() for action in second_menu.actions()[:3]))
+        sources = second_menu.actions()[-1].menu().actions()
+        self.assertTrue(sources[0].isChecked())
+        self.assertTrue(sources[0].isEnabled())
+        self.assertFalse(sources[1].isEnabled())
+        self.tray.play("screen-b")
+        self.assertEqual(self.tray.follow_controller.graph.sources, {"screen-c": "screen-b"})
+        second.manual_play.assert_called_once()
+        self.wallpaper.manual_play.assert_not_called()
+
+
+    def test_follow_timer_corrects_progress_every_sixty_seconds_and_stops_on_exit(self):
+
+        follower = self.add_screen("screen-b")
+        menu = self.tray.screen_menus["screen-b"]
+        menu.aboutToShow.emit()
+        menu.actions()[-1].menu().actions()[0].trigger()
+        self.assertEqual(self.tray.follow_controller.graph.sources, {"screen-b": "screen-a"})
+        self.assertEqual(self.tray.follow_sync_timer.interval(), 60000)
+        self.assertTrue(self.tray.follow_sync_timer.isActive())
+        self.wallpaper.get_playback_time.return_value = 6500
+        self.tray.follow_sync_timer.timeout.emit()
+        follower.seek_time.assert_called_once_with(6500)
+        self.tray.shutdown()
+        self.assertFalse(self.tray.follow_sync_timer.isActive())
+        self.assertFalse(self.tray.follow_restore_timer.isActive())
+
+
+    def test_follow_startup_waits_for_screens_and_removes_missing_sources_after_grace(self):
+
+        for source_present in (True, False):
+            with self.subTest(source_present=source_present):
+                config_store = self.namespace["config_store"]
+                config_store.load.return_value = {"screenFollows": {"screen-b": "screen-a"}}
+                screen_a, screen_b = mock.Mock(), mock.Mock()
+                screens = [screen_a, screen_b] if source_present else [screen_b]
+                wallpapers = [self.make_wallpaper(key, screen) for key, screen in
+                              (("screen-a", screen_a), ("screen-b", screen_b)) if screen in screens]
+                application = mock.Mock()
+                application.screens.return_value = screens
+                factory = self.namespace["Wallpaper"] = mock.Mock(side_effect=wallpapers)
+                tray = self.namespace["Tray"](application)
+                try:
+                    factory.assert_not_called()
+                    self.assertEqual(tray.follow_restore_timer.interval(), 3000)
+                    self.assertTrue(tray.follow_restore_timer.isActive())
+                    tray.add_screen(screen_b)
+                    factory.assert_not_called()
+                    tray.follow_restore_timer.timeout.emit()
+                    self.assertEqual(factory.call_count, len(screens))
+                    expected = {"screen-b": "screen-a"} if source_present else {}
+                    self.assertEqual(tray.follow_controller.graph.sources, expected)
+                    if not source_present:
+                        self.assertEqual(config_store.save.call_args.args[0]["screenFollows"], {})
+                finally:
+                    tray.shutdown()
+                    tray.menu.deleteLater()
 
 
     def test_single_screen_import_into_existing_library_plays_media(self):

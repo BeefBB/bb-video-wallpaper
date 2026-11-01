@@ -54,7 +54,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 
 路徑          | 用途
 ---           | ---
-`config.json` | 語言, 自動暫停選項, 各螢幕桌布與共用最近使用紀錄
+`config.json` | 語言, 自動暫停選項, 各螢幕桌布, 跟隨關係與共用最近使用紀錄
 `video/`      | 媒體資料夾, 匯入檔案存放在其下的 `_imports/`
 `thumbnails/` | 縮圖快取
 `log/log.log` | 日誌, 達到上限後輪替
@@ -67,6 +67,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 ---                                                | ---
 [bb-video-wallpaper.py](./bb-video-wallpaper.py)   | 主程式組裝, VLC 初始化, 桌布生命週期, 系統匣與匯入介面, 自動暫停及桌面重建恢復
 [config.py](./config.py)                           | 設定初始化, 驗證與讀寫, 語言檔載入
+[screen_follow.py](./screen_follow.py)             | 跟隨關係與循環驗證, 群組自動暫停, 媒體及播放進度同步
 [media_import.py](./media_import.py)               | 媒體內容去重, 分塊複製, 容量檢查, 命名衝突與取消清理
 [media_preview.py](./media_preview.py)             | 預覽選單, 懸停時序, 縮圖訊號與預覽視窗定位
 [windows_integration.py](./windows_integration.py) | 單一實例, 螢幕識別, 桌面掛載與就緒檢查, 虛擬桌面及最大化視窗偵測, 電源通知與開機排程
@@ -109,6 +110,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 測試腳本                                                           | 檢查重點
 ---                                                                | ---
 [test_config.py](./tests/test_config.py)                           | 預設設定, 欄位與路徑驗證, 各螢幕桌布及紀錄, 語言載入與讀寫失敗處理
+[test_screen_follow.py](./tests/test_screen_follow.py)             | 循環驗證, 連鎖跟隨與群組拆分, 設定保存, 群組暫停及進度校正
 [test_startup.py](./tests/test_startup.py)                         | 匯入不初始化, 系統匣啟動前的設定準備, 重複啟動與 VLC 失敗時中止
 [test_media_import.py](./tests/test_media_import.py)               | 去重, 命名, 容量檢查, 進度與取消後清理
 [test_import_menu.py](./tests/test_import_menu.py)                 | 匯入選單排列, 主執行緒進度更新, 取消及退出處理

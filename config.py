@@ -10,6 +10,8 @@ import os
 from configparser import ConfigParser, Error as ConfigParserError
 from pathlib import Path
 
+from screen_follow import FollowGraph
+
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +180,12 @@ class ConfigStore:
             logger.warning("設定欄位 screenWallpapers 已移除無效項目")
 
         config["screenWallpapers"] = normalized_wallpapers
+
+
+        screen_follows = config.get("screenFollows", {})
+        config["screenFollows"] = FollowGraph.normalize(screen_follows)
+        if config["screenFollows"] != screen_follows:
+            logger.warning("設定欄位 screenFollows 已移除無效或循環關係")
 
 
         return config

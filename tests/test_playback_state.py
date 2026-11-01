@@ -148,6 +148,21 @@ class DeferredPlayer:
         return self.position
 
 
+    def get_state(self) -> str:
+
+        return self.state
+
+
+    def get_length(self) -> int:
+
+        return 10000
+
+
+    def is_seekable(self) -> bool:
+
+        return self.state in {"playing", "paused"}
+
+
     def set_time(self, position: int) -> None:
 
         self.position = position
@@ -158,6 +173,8 @@ class DeferredPlayer:
         # 停止後仍可能收到先前的通知, 但通知本身不會重新啟動播放器
         if self.state == "opening":
             self.state = "playing"
+            if self.position < 0:
+                self.position = 0
 
         self.callbacks[PLAYING_EVENT](None)
 
@@ -243,6 +260,8 @@ class PlaybackStateTests(unittest.TestCase):
         vlc = mock.Mock()
         vlc.Instance.return_value = instance
         vlc.EventType.MediaPlayerPlaying = PLAYING_EVENT
+        vlc.State.Playing = "playing"
+        vlc.State.Paused = "paused"
 
         config_store = mock.Mock()
         config_store.load.return_value = {}
@@ -309,6 +328,10 @@ class PlaybackStateTests(unittest.TestCase):
         self.tray = tray_class.__new__(tray_class)
         self.tray.wallpapers = {self.wallpaper.screen_id: self.wallpaper}
         self.tray.is_exiting = False
+        self.tray.waiting_for_screens = False
+        self.tray.follow_controller = self.namespace["FollowController"](self.tray.wallpapers, config_store)
+        self.tray.follow_sync_timer = mock.Mock()
+        self.tray.follow_restore_timer = mock.Mock()
         self.tray.import_thread = None
         self.tray.import_screen_id = self.wallpaper.screen_id
         self.tray.import_applies_to_all = False
@@ -318,6 +341,25 @@ class PlaybackStateTests(unittest.TestCase):
         self.tray.app = mock.Mock()
         self.media_path = self.namespace["MEDIA_DIR"] / "sample.mp4"
         self.image_path = self.namespace["MEDIA_DIR"] / "sample.PNG"
+        self.connect_follow_events(self.wallpaper)
+
+
+    def connect_follow_events(self, wallpaper) -> None:
+
+        wallpaper.auto_pause_handler = self.tray.follow_controller.check_auto_pause
+        for signal in (wallpaper.playback_started, wallpaper.reattach_finished):
+            signal.connect(
+                lambda s=wallpaper.screen_id, w=wallpaper: self.tray.follow_controller.on_ready(s, w),
+                Qt.ConnectionType.QueuedConnection,
+            )
+
+
+    def add_following_wallpaper(self, screen_id="screen-b"):
+
+        wallpaper = self.create_independent_wallpaper(screen_id)
+        self.tray.wallpapers[screen_id] = wallpaper
+        self.connect_follow_events(wallpaper)
+        return wallpaper
 
 
     def dispose_wallpaper(self, wallpaper=None) -> None:
@@ -368,6 +410,123 @@ class PlaybackStateTests(unittest.TestCase):
         wallpaper.check_auto_pause_timer.stop()
         wallpaper.fullscreen_detection_timer.stop()
         return wallpaper
+
+
+    def test_follow_join_waits_for_playing_before_seeking_and_preserves_manual_pause(self):
+
+        self.start_loading()
+        self.player.finish_loading()
+        self.app.processEvents()
+        self.player.position = 6500
+        self.tray.pause(self.wallpaper.screen_id)
+        follower = self.add_following_wallpaper()
+        player = follower.instance_vlc_player
+        self.assertTrue(self.tray.follow_controller.follow(follower.screen_id, self.wallpaper.screen_id))
+        self.assertEqual(follower.play_state, "pause")
+        self.assertEqual(player.state, "opening")
+        self.assertNotEqual(player.position, 6500)
+
+        player.finish_loading()
+        self.app.processEvents()
+        self.assertEqual((player.state, player.position), ("paused", 6500))
+        self.assertFalse(follower.enable_auto_pause)
+
+
+    def test_follow_local_command_splits_chain_and_global_commands_keep_relationships(self):
+
+        self.start_loading()
+        self.player.finish_loading()
+        follower = self.add_following_wallpaper()
+        child = self.add_following_wallpaper("screen-c")
+        controller = self.tray.follow_controller
+        controller.follow(follower.screen_id, self.wallpaper.screen_id)
+        controller.follow(child.screen_id, follower.screen_id)
+        for wallpaper in (follower, child):
+            wallpaper.instance_vlc_player.finish_loading()
+        self.app.processEvents()
+
+        self.tray.pause(follower.screen_id)
+        self.assertEqual(controller.graph.sources, {child.screen_id: follower.screen_id})
+        self.assertEqual([w.play_state for w in (self.wallpaper, follower, child)], ["play", "pause", "pause"])
+        for command, expected in ((self.tray.stop, "stop"), (self.tray.pause, "pause"), (self.tray.play, "play")):
+            command()
+            self.assertEqual([w.play_state for w in (self.wallpaper, follower, child)], [expected] * 3)
+            self.assertEqual(controller.graph.sources, {child.screen_id: follower.screen_id})
+
+
+    def test_follow_auto_pause_aggregates_actual_screen_conditions(self):
+
+        self.start_loading()
+        self.player.finish_loading()
+        follower = self.add_following_wallpaper()
+        self.tray.follow_controller.follow(follower.screen_id, self.wallpaper.screen_id)
+        follower.instance_vlc_player.finish_loading()
+        self.app.processEvents()
+        self.wallpaper.fullscreen_detection_ready = follower.fullscreen_detection_ready = True
+        self.wallpaper.winId.return_value = 1
+        follower.winId.return_value = 2
+        blocked = {1: True, 2: False}
+        self.namespace["is_any_fullscreen"].side_effect = lambda hwnd: blocked[hwnd]
+
+        self.wallpaper.check_auto_pause()
+        self.assertEqual([self.wallpaper.play_state, follower.play_state], ["play", "play"])
+        blocked[2] = True
+        follower.check_auto_pause()
+        self.assertEqual([self.player.state, follower.instance_vlc_player.state], ["paused", "paused"])
+        blocked[1] = False
+        self.wallpaper.check_auto_pause()
+        self.assertEqual([self.player.state, follower.instance_vlc_player.state], ["playing", "playing"])
+
+
+    def test_follow_recovery_preserves_pending_position_then_realigns_followers(self):
+
+        self.start_loading()
+        self.player.finish_loading()
+        follower = self.add_following_wallpaper()
+        self.tray.follow_controller.follow(follower.screen_id, self.wallpaper.screen_id)
+        follower.instance_vlc_player.finish_loading()
+        self.app.processEvents()
+        self.player.position = 7500
+        follower.instance_vlc_player.position = 1000
+        self.wallpaper.reattach_to_desktop()
+        self.app.processEvents()
+        self.assertEqual(self.wallpaper.pending_reattach_time, 7500)
+        self.assertEqual(follower.instance_vlc_player.position, 1000)
+
+        self.player.finish_loading()
+        self.app.processEvents()
+        self.assertIsNone(self.wallpaper.pending_reattach_time)
+        self.assertEqual(follower.instance_vlc_player.position, 7500)
+
+
+    def test_follow_new_local_media_ignores_queued_source_ready_events(self):
+
+        self.start_loading()
+        self.player.finish_loading()
+        follower = self.add_following_wallpaper()
+        self.tray.follow_controller.follow(follower.screen_id, self.wallpaper.screen_id)
+        self.player.finish_loading()
+        self.tray.play_from_menu(self.image_path, follower.screen_id)
+        self.app.processEvents()
+        self.assertEqual(self.tray.follow_controller.graph.sources, {})
+        self.assertEqual(follower.current_media, self.image_path)
+        self.assertTrue(follower.instance_image.visible)
+
+
+    def test_follow_ignores_vlc_progress_until_ready_and_when_not_seekable(self):
+
+        self.start_loading()
+        self.assertIsNone(self.wallpaper.get_playback_time())
+        self.assertFalse(self.wallpaper.seek_time(4000))
+        self.player.finish_loading()
+        self.app.processEvents()
+        with mock.patch.object(self.player, "is_seekable", return_value=False):
+            self.assertFalse(self.wallpaper.seek_time(4000))
+        self.assertTrue(self.wallpaper.seek_time(4000))
+        self.wallpaper.pending_reattach_time = 6000
+        self.assertIsNone(self.wallpaper.get_playback_time())
+        self.assertFalse(self.wallpaper.seek_time(2000))
+        self.assertEqual(self.wallpaper.pending_reattach_time, 6000)
 
 
     def test_screens_restore_their_own_wallpaper_after_shared_history_is_cleared(self):
