@@ -2,8 +2,6 @@
 用隱藏頂層視窗驗證原生工作列通知, 不重啟 Explorer 或廣播給其他程式
 """
 
-import ast
-from ctypes import wintypes
 from pathlib import Path
 import sys
 import unittest
@@ -12,7 +10,7 @@ import win32api
 import win32con
 import win32gui
 
-from PySide6.QtCore import QCoreApplication, QEvent, Qt, Signal
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QApplication, QWidget
 
@@ -22,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
-from windows_integration import register_taskbar_created_notification
+from app_loader import load_app_module
 
 
 class DesktopEventTests(unittest.TestCase):
@@ -41,19 +39,7 @@ class DesktopEventTests(unittest.TestCase):
         if not isinstance(cls.app, QApplication):
             raise unittest.SkipTest("桌面通知測試需要 QApplication")
 
-        # 僅載入監聽視窗類別, 避免主程式初始化 VLC 與使用者設定
-        source_path = ROOT / "bb-video-wallpaper.py"
-        tree = ast.parse(source_path.read_text(encoding="utf-8"))
-        nodes = ast.Module(
-            body=[node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "DesktopEventWindow"],
-            type_ignores=[],
-        )
-        namespace = {
-            "QWidget": QWidget, "Qt": Qt, "Signal": Signal, "wintypes": wintypes,
-            "register_taskbar_created_notification": register_taskbar_created_notification,
-        }
-        exec(compile(nodes, str(source_path), "exec"), namespace)
-        cls.listener_class = namespace["DesktopEventWindow"]
+        cls.listener_class = load_app_module().DesktopEventWindow
 
 
     def setUp(self) -> None:

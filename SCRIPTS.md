@@ -78,6 +78,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 - 模組不反向匯入主程式, 匯入時不建立使用者資料夾或設定日誌. 路徑, 翻譯函式與進度及取消回呼由呼叫端傳入; Windows 的 Mutex, 桌面掛載與排程操作也只在呼叫相關函式時執行
 - Qt 元件共用主程式的 `QApplication`. 主程式負責桌布掛載, 媒體切換與退出時停止縮圖工作; 圖片模組管理內部子視窗, 預覽模組管理選單及縮圖顯示
 - 主程式先完成 VLC DLL 載入設定. 影片縮圖只在實際使用時匯入 VLC, 其他模組測試可獨立執行
+- 主程式匯入時只定義函式與類別, 由 `main()` 初始化路徑, 資料夾, 日誌, VLC 與設定後啟動介面. 測試以 [app_loader.py](./tests/app_loader.py) 直接載入獨立的主程式模組, 再替換需要的執行環境或輸出物件
 
 日常修改後, 重新啟動程式並執行相關測試即可. 更動 VLC 時需重建精簡版, 準備發佈時則接著打包與製作安裝檔
 
@@ -108,12 +109,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 測試腳本                                                           | 檢查重點
 ---                                                                | ---
 [test_config.py](./tests/test_config.py)                           | 預設設定, 欄位與路徑驗證, 各螢幕桌布及紀錄, 語言載入與讀寫失敗處理
+[test_startup.py](./tests/test_startup.py)                         | 匯入不初始化, 系統匣啟動前的設定準備, 重複啟動與 VLC 失敗時中止
 [test_media_import.py](./tests/test_media_import.py)               | 去重, 命名, 容量檢查, 進度與取消後清理
 [test_import_menu.py](./tests/test_import_menu.py)                 | 匯入選單排列, 主執行緒進度更新, 取消及退出處理
 [test_media_preview.py](./tests/test_media_preview.py)             | 懸停時序, 預覽模式, 過期縮圖, Qt 訊號與螢幕邊界
 [test_playback_state.py](./tests/test_playback_state.py)           | 媒體切換與暫停, 載入時序, 桌布重掛排程, 重試及退出取消
 [test_desktop_events.py](./tests/test_desktop_events.py)           | 隱藏頂層視窗接收桌面重建通知, 桌布容器銷毀後仍能接收通知
-[test_video_recovery.py](./tests/test_video_recovery.py)           | 實際 VLC 影片輸出失效後的重建, 播放及暫停狀態與進度恢復
+[test_video_recovery.py](./tests/test_video_recovery.py)           | 主程式實際載入 VLC, 影片輸出失效後的重建, 播放及暫停狀態與進度恢復
 [test_windows_integration.py](./tests/test_windows_integration.py) | 模擬掛載, 螢幕識別, 電源及排程 API, 以隱藏視窗驗證備援容器
 [test_image_display.py](./tests/test_image_display.py)             | 圖片讀取, 隱藏及顯示, 原生子視窗重綁與釋放
 [test_thumbnails.py](./tests/test_thumbnails.py)                   | 快取命名, 獨立性, 舊快取替換, 清理範圍與儲存失敗處理

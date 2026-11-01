@@ -3,7 +3,6 @@
 使用真正的 Qt 訊號佇列, 重掛計時器與模擬輸出, 不啟動桌布或修改使用者設定
 """
 
-import ast
 from pathlib import Path
 import sys
 import tempfile
@@ -25,6 +24,7 @@ if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
 from config import ConfigStore
+from app_loader import load_app_module
 
 
 class HeadlessWidget(QObject):
@@ -225,19 +225,6 @@ class PlaybackStateTests(unittest.TestCase):
 
         cls.app = QCoreApplication.instance() or QCoreApplication([])
 
-        # 僅載入原始類別, 避免模組頂層初始化使用者目錄與 VLC
-        source_path = ROOT / "bb-video-wallpaper.py"
-        tree = ast.parse(source_path.read_text(encoding="utf-8"))
-        classes = ast.Module(
-            body=[
-                node for node in tree.body
-                if isinstance(node, ast.ClassDef) and
-                node.name in {"VlcStopThread", "Wallpaper", "Tray"}
-            ],
-            type_ignores=[]
-        )
-        cls.playback_code = compile(classes, str(source_path), "exec")
-
 
     def setUp(self) -> None:
         """
@@ -297,7 +284,11 @@ class PlaybackStateTests(unittest.TestCase):
             "WM_DESTROY": 2,
             "logger": mock.Mock(),
         }
-        exec(self.playback_code, self.namespace)
+        # 匯入時替換 QWidget 基底, 保留真正的 Qt 訊號與計時器
+        with mock.patch("PySide6.QtWidgets.QWidget", HeadlessWidget):
+            module = load_app_module()
+        module.__dict__.update(self.namespace)
+        self.namespace = module.__dict__
 
 
         wallpaper_class = self.namespace["Wallpaper"]

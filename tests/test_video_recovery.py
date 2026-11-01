@@ -3,13 +3,10 @@
 不重啟 Explorer, 不讀寫使用者設定, 子程序逾時時讓測試明確失敗
 """
 
-import ast
 from collections.abc import Callable
-import ctypes
 from ctypes import wintypes
 import faulthandler
 import logging
-import os
 from pathlib import Path
 import queue
 import shutil
@@ -18,9 +15,10 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Any
 import unittest
 from unittest import mock
+
+from app_loader import load_app_module
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,11 +60,10 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
     import bb_image_display
     from windows_integration import get_monitor_id, register_taskbar_created_notification, wake_vlc_video_windows
 
-    dll_directory = os.add_dll_directory(str(VLC_DIR))
-    os.environ["PYTHON_VLC_LIB_PATH"] = str(VLC_DIR / "libvlc.dll")
-    os.environ["PYTHON_VLC_MODULE_PATH"] = str(VLC_DIR)
-    ctypes.CDLL(str(VLC_DIR / "libvlccore.dll"))
-    ctypes.CDLL(str(VLC_DIR / "libvlc.dll"))
+    module = load_app_module()
+    module.initialize_paths()
+    assert module.initialize_vlc(), "主程式的 VLC 初始化失敗"
+    dll_directory = module._vlc_dll_directory
     import vlc
 
     # python-vlc 動態建立列舉成員, 以名稱查取並註明型別
@@ -109,14 +106,8 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
         host_hwnd, host_process = create_host()
         config = mock.Mock()
         config.load.return_value = {}
-        source_path = ROOT / "bb-video-wallpaper.py"
-        tree = ast.parse(source_path.read_text(encoding="utf-8"))
-        nodes = ast.Module(
-            body=[node for node in tree.body if isinstance(node, ast.ClassDef) and node.name in {"VlcStopThread", "DesktopEventWindow", "Wallpaper", "Tray"}],
-            type_ignores=[],
-        )
-        # exec 使用的命名空間混合類別, 模組與測試替身
-        namespace: dict[str, Any] = {
+        namespace = module.__dict__
+        namespace.update({
             "QWidget": QWidget, "QApplication": QApplication, "QScreen": QScreen, "Qt": Qt, "QTimer": QTimer,
             "QEventLoop": QEventLoop, "QThread": QThread,
             "Signal": Signal, "Slot": Slot, "Path": Path, "wintypes": wintypes,
@@ -133,8 +124,7 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
             "get_display_state": lambda message: None, "is_on_battery": lambda: False,
             "is_any_fullscreen": lambda hwnd: False, "logger": logging.getLogger("video-recovery-test"),
             "tr": lambda key: key,
-        }
-        exec(compile(nodes, str(source_path), "exec"), namespace)
+        })
         wallpaper = namespace["Wallpaper"]()
         wallpaper.check_auto_pause_timer.stop()
         wallpaper.setGeometry(0, 0, 640, 360)

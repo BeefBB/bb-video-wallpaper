@@ -3,7 +3,6 @@
 使用真正的 Qt 選單, 訊號佇列與工作執行緒, 不顯示系統匣或啟動桌布
 """
 
-import ast
 import json
 from pathlib import Path
 import sys
@@ -26,6 +25,7 @@ if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
 from media_import import MediaImportCancelled
+from app_loader import load_app_module
 
 
 class PreviewMenu(QMenu):
@@ -76,23 +76,6 @@ class ImportMenuTests(unittest.TestCase):
         if not isinstance(cls.app, QApplication):
             raise unittest.SkipTest("選單測試需要 QApplication")
 
-        # 避免主程式頂層建立使用者目錄, 日誌與 VLC
-        source_path = ROOT / "bb-video-wallpaper.py"
-        tree = ast.parse(source_path.read_text(encoding="utf-8"))
-        nodes = ast.Module(
-            body=[
-                node for node in tree.body
-                if (
-                    isinstance(node, ast.ClassDef) and
-                    node.name in {"MediaImportThread", "Tray"}
-                ) or (
-                    isinstance(node, ast.FunctionDef) and node.name == "tr"
-                )
-            ],
-            type_ignores=[]
-        )
-        cls.menu_code = compile(nodes, str(source_path), "exec")
-
 
     def setUp(self) -> None:
         """
@@ -138,7 +121,9 @@ class ImportMenuTests(unittest.TestCase):
         }
         self.namespace["QSystemTrayIcon"].MessageIcon = QSystemTrayIcon.MessageIcon
         self.namespace["QFileDialog"].getOpenFileName.return_value = (str(self.source), "")
-        exec(self.menu_code, self.namespace)
+        module = load_app_module()
+        module.__dict__.update(self.namespace)
+        self.namespace = module.__dict__
 
         self.screen = mock.Mock()
         self.wallpaper = wallpaper = self.make_wallpaper("screen-a", self.screen)

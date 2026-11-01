@@ -6,6 +6,10 @@ from pathlib import Path
 import time
 import logging
 from logging.handlers import RotatingFileHandler
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import vlc
 
 from win32con import WM_DESTROY
 
@@ -42,54 +46,60 @@ from windows_integration import (
 )
 
 
-# 路徑
-
-if getattr(sys, "frozen", False):
-
-    FILE = Path(sys.executable).resolve()
-    ROOT_DIR = FILE.parent
-    ICON_PATH = ROOT_DIR / "_internal" / "icon" / "bb-video-wallpaper.ico"
-    LOADING_IMAGE_PATH = ROOT_DIR / "_internal" / "icon" / "loading.jpg"
-
-else:
-
-    FILE = Path(__file__).resolve()
-    ROOT_DIR = FILE.parent
-    ICON_PATH = ROOT_DIR / "icon" / "bb-video-wallpaper.ico"
-    LOADING_IMAGE_PATH = ROOT_DIR / "icon" / "loading.jpg"
+logger = logging.getLogger(__name__)
 
 
-APPDATA_DIR = Path(os.environ["LOCALAPPDATA"]) / "BB" / "BB Video Wallpaper"
-APPDATA_DIR.mkdir(parents=True, exist_ok=True)
-
-MEDIA_DIR = APPDATA_DIR / "video"
-MEDIA_DIR.mkdir(exist_ok=True)
-
-SINGLE_IMPORT_DIR = MEDIA_DIR / "_imports"
-
-THUMBNAIL_DIR = APPDATA_DIR / "thumbnails"
-
-CONFIG_PATH = APPDATA_DIR / "config.json"
-
-LOG_DIR = APPDATA_DIR / "log"
-
-VLC_DIR = next(
-    (
-        path
-        for path in (ROOT_DIR / "VLC-lite", ROOT_DIR / "VLC")
-        if path.is_dir()
-    ),
-    None
-)
+# 由啟動流程設定的路徑與共用物件
+FILE: Path
+ROOT_DIR: Path
+ICON_PATH: Path
+LOADING_IMAGE_PATH: Path
+APPDATA_DIR: Path
+MEDIA_DIR: Path
+SINGLE_IMPORT_DIR: Path
+THUMBNAIL_DIR: Path
+CONFIG_PATH: Path
+LOG_DIR: Path
+config_store: ConfigStore
+LANG: dict[str, str] = {}
+_vlc_dll_directory: os._AddedDllDirectory | None = None
 
 
-already_running = False
+def initialize_paths() -> None:
+    """
+    依原始碼或打包位置設定執行路徑
+    """
 
-if __name__ == "__main__":
-    already_running, mutex = is_already_running()
+    global FILE, ROOT_DIR, ICON_PATH, LOADING_IMAGE_PATH
+    global APPDATA_DIR, MEDIA_DIR, SINGLE_IMPORT_DIR, THUMBNAIL_DIR, CONFIG_PATH, LOG_DIR
+
+    if getattr(sys, "frozen", False):
+
+        FILE = Path(sys.executable).resolve()
+        ROOT_DIR = FILE.parent
+        icon_dir = ROOT_DIR / "_internal" / "icon"
+
+    else:
+
+        FILE = Path(__file__).resolve()
+        ROOT_DIR = FILE.parent
+        icon_dir = ROOT_DIR / "icon"
+
+    ICON_PATH = icon_dir / "bb-video-wallpaper.ico"
+    LOADING_IMAGE_PATH = icon_dir / "loading.jpg"
+
+    APPDATA_DIR = Path(os.environ["LOCALAPPDATA"]) / "BB" / "BB Video Wallpaper"
+    MEDIA_DIR = APPDATA_DIR / "video"
+    SINGLE_IMPORT_DIR = MEDIA_DIR / "_imports"
+    THUMBNAIL_DIR = APPDATA_DIR / "thumbnails"
+    CONFIG_PATH = APPDATA_DIR / "config.json"
+    LOG_DIR = APPDATA_DIR / "log"
 
 
-if not already_running:
+def initialize_logging() -> None:
+    """
+    建立日誌資料夾並設定輪替日誌
+    """
 
     LOG_DIR.mkdir(exist_ok=True)
 
@@ -107,38 +117,39 @@ if not already_running:
         handlers=[handler]
     )
 
-logger = logging.getLogger(__name__)
 
+def initialize_vlc() -> bool:
+    """
+    先設定 DLL 搜尋位置與載入原生函式庫, 再匯入 VLC
+    """
 
-if VLC_DIR:
+    global vlc, _vlc_dll_directory
 
-    os.add_dll_directory(str(VLC_DIR))
-    os.environ["PYTHON_VLC_LIB_PATH"] = str(VLC_DIR / "libvlc.dll")
-    os.environ["PYTHON_VLC_MODULE_PATH"] = str(VLC_DIR)
+    vlc_dir = next(
+        (path for path in (ROOT_DIR / "VLC-lite", ROOT_DIR / "VLC") if path.is_dir()),
+        None
+    )
+
+    if vlc_dir is None:
+        logger.error("找不到 VLC-lite/ 或 VLC/")
+        return False
+
+    _vlc_dll_directory = os.add_dll_directory(str(vlc_dir))
+    os.environ["PYTHON_VLC_LIB_PATH"] = str(vlc_dir / "libvlc.dll")
+    os.environ["PYTHON_VLC_MODULE_PATH"] = str(vlc_dir)
 
     try:
-        ctypes.CDLL(str(VLC_DIR / "libvlccore.dll"))
-        ctypes.CDLL(str(VLC_DIR / "libvlc.dll"))
+        ctypes.CDLL(str(vlc_dir / "libvlccore.dll"))
+        ctypes.CDLL(str(vlc_dir / "libvlc.dll"))
+
     except OSError:
         logger.exception("VLC 載入失敗")
-        sys.exit(1)
+        return False
 
-else:
+    import vlc
 
-    logger.error("找不到 VLC-lite/ 或 VLC/")
-    sys.exit(1)
+    return True
 
-import vlc
-
-
-# 設定檔
-config_store = ConfigStore(CONFIG_PATH, MEDIA_DIR, ROOT_DIR / "lang")
-
-if __name__ == "__main__" and not already_running:
-    config_store.initialize_if_missing()
-
-
-LANG = config_store.load_language()
 
 def tr(key: str) -> str:
     """
@@ -1751,13 +1762,31 @@ class Tray:
         logger.info("exit")
 
 
-if __name__ == "__main__":
+def main() -> int:
+
+    global config_store, LANG
+
+    initialize_paths()
+    already_running, mutex = is_already_running()
+    config_store = ConfigStore(CONFIG_PATH, MEDIA_DIR, ROOT_DIR / "lang")
 
     if already_running:
 
+        LANG = config_store.load_language()
         show_already_running_toast()
 
-        sys.exit(0)
+        return 0
+
+
+    APPDATA_DIR.mkdir(parents=True, exist_ok=True)
+    MEDIA_DIR.mkdir(exist_ok=True)
+    initialize_logging()
+
+    if not initialize_vlc():
+        return 1
+
+    config_store.initialize_if_missing()
+    LANG = config_store.load_language()
 
 
     while True:
@@ -1788,4 +1817,8 @@ if __name__ == "__main__":
 
 
     # Qt 主迴圈
-    sys.exit(app.exec())
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
