@@ -84,7 +84,6 @@ class ImageWallpaper(QRasterWindow):
             raise RuntimeError(f"無法讀取圖片: {reader.errorString()}")
 
 
-        self.paint_count = 0
         self.setTitle("Qt image display")
 
         # 以 QWindow 管理外部父視窗, 直接接收繪圖事件
@@ -256,15 +255,6 @@ class ImageWallpaper(QRasterWindow):
         super().hide()
 
 
-    def is_visible(self) -> bool:
-
-        return bool(
-            self.isVisible() and
-            self._host_hwnd and
-            win32gui.IsWindowVisible(self._host_hwnd)
-        )
-
-
     def _release_host(self) -> None:
         """
         釋放內部原生視窗, 保留圖片及主程式提供的視窗
@@ -312,9 +302,6 @@ class ImageWallpaper(QRasterWindow):
 
         if self.width() <= 0 or self.height() <= 0:
             return
-
-        self.paint_count += 1
-
 
         # 等比例置中裁切填滿, 僅在 Qt 要求重繪時繪製
         scale = max(
@@ -430,14 +417,6 @@ class Instance(QObject):
 
         if self.window is not None:
             self.window.hide()
-
-
-    def is_visible(self) -> bool:
-
-        return bool(
-            self.window is not None and
-            self.window.is_visible()
-        )
 
 
     @Slot()
