@@ -368,9 +368,6 @@ class Wallpaper(QWidget):
         self.auto_pause_if_screen_off = config.get("autoPauseIfScreenOff", True)
         self.auto_pause_if_on_battery = config.get("autoPauseIfOnBattery", False)
 
-        # 螢幕 ID
-        self.screen_id = get_monitor_id(int(self.winId()))
-
 
         # 建立視窗
         self.setWindowFlags(
@@ -386,6 +383,8 @@ class Wallpaper(QWidget):
         self.setGeometry(self.target_screen.geometry())
 
 
+        # 視窗定位後再取得螢幕 ID, 避免讀到預設位置的螢幕
+        self.screen_id = get_monitor_id(int(self.winId()))
         screen_wallpapers = config.get("screenWallpapers", {})
         saved_media = screen_wallpapers.get(self.screen_id)
 
