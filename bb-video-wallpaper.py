@@ -202,7 +202,7 @@ def get_media() -> list[Path]:
 
 class MediaImportThread(QThread):
     """
-    匯入媒體的背景執行緒, 支援進度回報
+    匯入媒體的背景執行緒
     """
 
     progress = Signal(int)
@@ -246,6 +246,7 @@ class VlcStopThread(QThread):
     def __init__(self, player, parent=None) -> None:
 
         super().__init__(parent)
+
         self.player = player
         self.error = None
 
@@ -269,6 +270,7 @@ class DesktopEventWindow(QWidget):
     def __init__(self) -> None:
 
         super().__init__()
+
         self.taskbar_created_message = 0
         self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.WindowDoesNotAcceptFocus)
 
@@ -316,8 +318,9 @@ class Wallpaper(QWidget):
         if target_screen is None:
             raise RuntimeError("找不到可用的目標螢幕")
 
-        self.target_screen = target_screen
 
+        # 這個桌布將掛載到的螢幕
+        self.target_screen = target_screen
 
         # 設定檔
         config = config_store.load()
@@ -346,6 +349,7 @@ class Wallpaper(QWidget):
         # 播放狀態: "play", "pause", "stop"
         self.play_state = "stop"
         self.playback_state = PlaybackState()
+        # 重掛前的播放進度
         self.pending_reattach_time: int | None = None
         # 重掛載時的媒體與進度
         self._reattach_position: tuple[Path, int] | None = None
@@ -364,6 +368,9 @@ class Wallpaper(QWidget):
         self.auto_pause_if_screen_off = config.get("autoPauseIfScreenOff", True)
         self.auto_pause_if_on_battery = config.get("autoPauseIfOnBattery", False)
 
+        # 螢幕 ID
+        self.screen_id = get_monitor_id(int(self.winId()))
+
 
         # 建立視窗
         self.setWindowFlags(
@@ -379,8 +386,6 @@ class Wallpaper(QWidget):
         self.setGeometry(self.target_screen.geometry())
 
 
-        # 在掛入桌面前辨識目標螢幕
-        self.screen_id = get_monitor_id(int(self.winId()))
         screen_wallpapers = config.get("screenWallpapers", {})
         saved_media = screen_wallpapers.get(self.screen_id)
 
@@ -401,7 +406,7 @@ class Wallpaper(QWidget):
         self.target_screen.geometryChanged.connect(self.on_screen_changed)
 
 
-        # 建立 VLC 播放器物件
+        # VLC 播放器物件
         self.instance_vlc = vlc.Instance(
             "--no-video-title-show",
             "--input-repeat=65535",
@@ -409,12 +414,11 @@ class Wallpaper(QWidget):
         )
         self.instance_vlc_player = self.instance_vlc.media_player_new()  # type: ignore
 
-        # 建立圖片顯示物件
+        # 圖片顯示物件
         # 圖片共用主程式的 QApplication 與桌布 HWND
         self.instance_image = bb_image_display.Instance()
 
 
-        # VLC 回呼只發送訊號, 播放器操作回到 Qt 主執行緒處理
         self.playback_started.connect(self.apply_pending_reattach_time, Qt.ConnectionType.QueuedConnection)
         self.playback_started.connect(self.apply_pending_pause, Qt.ConnectionType.QueuedConnection)
 
@@ -445,16 +449,18 @@ class Wallpaper(QWidget):
                 logger.exception("載入初始桌布時發生錯誤 - %s", initial_media)
 
 
+        # 計算程式執行 10s 後啟用全螢幕檢測
         self.fullscreen_detection_timer = QTimer(self)
         self.fullscreen_detection_timer.setSingleShot(True)
         self.fullscreen_detection_timer.timeout.connect(self.enable_fullscreen_detection)
         self.fullscreen_detection_timer.start(10000)
 
+        # 自動暫停檢測計時器, 每 500ms 檢查一次
         self.check_auto_pause_timer = QTimer(self)
         self.check_auto_pause_timer.timeout.connect(lambda: self.check_auto_pause(from_timer=True))
         self.check_auto_pause_timer.start(500)
 
-        # 保持獨立頂層 HWND, 不掛在桌布視窗或 Explorer 之下
+        # 不掛在桌布視窗或 Explorer 之下的獨立頂層 HWND
         self.desktop_events = None
 
         try:
