@@ -11,6 +11,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def load_app_module() -> ModuleType:
+    """
+    以獨立模組狀態載入主程式, 回傳尚未執行啟動入口的模組
+    """
 
     spec = importlib.util.spec_from_file_location("bb_video_wallpaper", ROOT / "bb-video-wallpaper.py")
     assert spec is not None and spec.loader is not None

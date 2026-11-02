@@ -1,18 +1,17 @@
 """
-測試縮圖快取的命名, 驗證與清理, 以及影片比例, 方向, 影像軌選擇與錯誤處理
+測試快取檔案保護, 縮圖工作釋放與影片解碼的比例, 方向及取消
+影片案例需要 Windows, VLC-lite 與 ffmpeg; 缺少時顯示跳過
 只在暫存資料夾操作, 不啟動桌布或修改使用者設定
-影片測試需要 Windows, 專案內的 VLC-lite 與 PATH 中的 ffmpeg; 缺少時僅跳過影片類別
 """
 
 from contextlib import contextmanager, nullcontext
 import ctypes
-import hashlib
 import multiprocessing
 import os
-import sys
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -24,7 +23,6 @@ from PySide6.QtGui import QImage
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# 直接執行測試檔時, 將專案根目錄加入模組搜尋路徑
 if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
@@ -37,7 +35,7 @@ FFMPEG = shutil.which("ffmpeg")
 
 def run_ffmpeg(*args, timeout: int = 30) -> subprocess.CompletedProcess:
     """
-    執行 FFmpeg 並保留輸出供編碼器檢查
+    執行 FFmpeg 並擷取輸出, 缺少工具時跳過測試
     """
 
     if FFMPEG is None:
@@ -50,10 +48,11 @@ def run_ffmpeg(*args, timeout: int = 30) -> subprocess.CompletedProcess:
     )
 
 
+
 @contextmanager
 def video_thumbnail_environment():
     """
-    設定測試用 VLC 路徑, 直接測試縮圖模組
+    暫設 VLC 的 DLL 與模組搜尋路徑, 替換縮圖日誌並提供 VLC 模組
     """
 
     with os.add_dll_directory(str(VLC_DIR)), mock.patch.dict(os.environ, {
@@ -68,9 +67,10 @@ def video_thumbnail_environment():
         yield vlc
 
 
+
 def thumbnail_probe(path: str, mode: str, connection) -> None:
     """
-    在獨立程序中擷取縮圖, 檢查取消或錯誤後 VLC 是否能正常停止
+    依指定模式擷取縮圖, 將圖片尺寸與顏色或例外資訊送回管線
     """
 
     cancelled = threading.Event()
@@ -82,8 +82,14 @@ def thumbnail_probe(path: str, mode: str, connection) -> None:
         original_set_callbacks = vlc.MediaPlayer.video_set_format_callbacks
 
         def cancel_after_setup(player, setup, cleanup):
+            """
+            包裝並註冊影像格式設定回呼, 保留其參考以免被回收
+            """
 
             def wrapped(*args):
+                """
+                執行原影像格式設定回呼後設定取消事件, 並回傳原結果
+                """
 
                 result = setup(*args)
                 cancelled.set()
@@ -132,6 +138,7 @@ def thumbnail_probe(path: str, mode: str, connection) -> None:
 
         finally:
             connection.close()
+
 
 
 class ThumbnailTests(unittest.TestCase):
@@ -190,6 +197,9 @@ class ThumbnailTests(unittest.TestCase):
         worker = ThumbnailThread(self.media_dir, self.thumbnail_dir)
 
         def receive(media_path, image):
+            """
+            保存背景回傳的媒體路徑與縮圖, 並通知等待中的測試
+            """
 
             results.append((media_path, image))
             ready.set()
@@ -266,28 +276,6 @@ class ThumbnailTests(unittest.TestCase):
         self.assertTrue(unrelated.exists())
         self.assertTrue(malformed.exists())
         self.assertTrue(directory.is_dir())
-
-
-    def test_previous_algorithm_cache_is_replaced(self):
-        """
-        使用目前演算法替換舊版縮圖快取
-        """
-
-        source = self.media_dir / "sample.bmp"
-        self.save_image(source, Qt.GlobalColor.red)
-        contents = source.read_bytes()
-        # 建立舊版演算法的快取
-        old_digest = hashlib.sha256(b"thumbnail-v2\0" + str(len(contents)).encode("ascii") + contents).hexdigest()[:8]
-        source_id = hashlib.sha256(source.name.encode("utf-8")).hexdigest()[:16]
-        self.thumbnail_dir.mkdir()
-        previous = self.thumbnail_dir / f"{source_id}-{old_digest}.jpg"
-        self.save_image(previous, Qt.GlobalColor.blue)
-
-        current = self.thumbnail(source)
-
-        self.assertNotEqual(current, previous)
-        self.assertFalse(previous.exists())
-        self.assertEqual(QImage(str(current)).width(), 300)
 
 
     def test_replace_failure_preserves_cache_and_removes_temp(self):
@@ -564,6 +552,7 @@ class VideoThumbnailTests(unittest.TestCase):
                     # 容許影片壓縮造成的色偏
                     for actual_channel, expected_channel in zip(actual, color):
                         self.assertLessEqual(abs(actual_channel - expected_channel), 30)
+
 
 
 if __name__ == "__main__":

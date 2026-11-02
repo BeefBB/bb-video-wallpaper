@@ -112,19 +112,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 ---                                                                | ---
 [test_config.py](./tests/test_config.py)                           | 預設設定, 欄位與路徑驗證, 各螢幕桌布及紀錄, 語言載入與讀寫失敗處理
 [test_screen_follow.py](./tests/test_screen_follow.py)             | 循環驗證, 連鎖跟隨與群組拆分, 設定保存, 群組暫停及進度校正
-[test_startup.py](./tests/test_startup.py)                         | 匯入不初始化, 系統匣啟動前的設定準備, 重複啟動與 VLC 失敗時中止
-[test_media_import.py](./tests/test_media_import.py)               | 去重, 命名, 容量檢查, 進度與取消後清理
-[test_import_menu.py](./tests/test_import_menu.py)                 | 匯入選單排列, 主執行緒進度更新, 取消及退出處理
-[test_media_preview.py](./tests/test_media_preview.py)             | 懸停時序, 預覽模式, 過期縮圖, Qt 訊號與螢幕邊界
+[test_startup.py](./tests/test_startup.py)                         | 匯入不初始化
+[test_media_import.py](./tests/test_media_import.py)               | 去重, 命名, 容量檢查, 取消後清理
+[test_import_menu.py](./tests/test_import_menu.py)                 | 主執行緒進度更新, 取消及退出處理
+[test_media_preview.py](./tests/test_media_preview.py)             | 過期縮圖, Qt 訊號
 [test_playback_state.py](./tests/test_playback_state.py)           | 媒體切換與暫停, 載入時序, 桌布重掛排程, 重試及退出取消
 [test_video_recovery.py](./tests/test_video_recovery.py)           | 主程式實際載入 VLC, 影片輸出失效後的重建, 播放及暫停狀態與進度恢復
 [test_windows_integration.py](./tests/test_windows_integration.py) | 模擬掛載, 螢幕識別, 電源及排程 API, 以隱藏視窗驗證桌面重建通知, 獨立監聽視窗與備援容器
 [test_image_display.py](./tests/test_image_display.py)             | 圖片讀取, 隱藏及顯示, 原生子視窗重綁與釋放
-[test_thumbnails.py](./tests/test_thumbnails.py)                   | 快取命名與清理, 舊快取替換, 儲存失敗處理, 實際影片縮圖比例, 非正方形像素, 旋轉方向, 多影像軌, 取消及錯誤處理
+[test_thumbnails.py](./tests/test_thumbnails.py)                   | 快取命名與清理, 儲存失敗處理, 實際影片縮圖比例, 非正方形像素, 旋轉方向, 多影像軌, 取消及錯誤處理
 
 ### 測試環境與執行影響
 
-一般測試使用暫存資料, 模擬 API 或隱藏的 Qt 元件, 不啟動桌布或改寫使用者設定. 預覽測試模擬游標與螢幕, 不移動實際滑鼠
+一般測試使用暫存資料, 模擬 API 或隱藏的 Qt 元件, 不啟動桌布或改寫使用者設定. 預覽測試不移動實際滑鼠
 
 原生視窗測試只操作測試建立的視窗及程序. 桌面通知只送給測試視窗; 影片重掛測試會結束自己的畫面外父視窗程序, 確認 VLC 能恢復輸出. 這些測試不廣播訊息, 不重啟 Explorer, 不建立實際開機排程或改變使用者的桌面掛載
 

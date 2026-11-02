@@ -47,7 +47,7 @@ def run_host() -> None:
 
 def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
     """
-    在獨立程序中驗證 VLC 重掛與資源釋放
+    驗證父視窗失效後的重掛重試, 匯入切換, 跟隨同步與關閉清理
     """
 
     import win32con
@@ -80,6 +80,10 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
     faulthandler.dump_traceback_later(20, exit=True)
 
     def create_host() -> tuple[int, subprocess.Popen[str]]:
+        """
+        啟動畫面外父視窗程序, 等待並回傳視窗代碼與程序物件
+        """
+
         process = subprocess.Popen(
             [sys.executable, "-X", "utf8", __file__, "--host"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -94,6 +98,10 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
         return int(ready.get(timeout=8)), process
 
     def wait_until(predicate: Callable[[], bool]) -> None:
+        """
+        持續處理 Qt 事件直到指定條件成立, 超過六秒則回報逾時
+        """
+
         deadline = time.monotonic() + 6
         while not predicate():
             if time.monotonic() >= deadline:
@@ -195,12 +203,20 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
         original_seek = player.set_time
 
         def stop_after_import(worker):
+            """
+            等待匯入完成回呼後才停止 VLC 輸出, 逾時則記錄停止錯誤
+            """
+
             if not import_processed.wait(2):
                 worker.error = RuntimeError("import callback was not processed")
                 return
             original_run(worker)
 
         def finish_import_during_stop():
+            """
+            在重掛停止期間觸發匯入完成, 確認媒體仍未切換並通知等待中的停止工作
+            """
+
             try:
                 assert wallpaper.is_recreating, "匯入完成未發生於重掛期間"
                 tray.finish_import()
@@ -212,6 +228,10 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
                 import_processed.set()
 
         def record_seek(position):
+            """
+            記錄調整進度時的媒體與位置, 再呼叫原本的播放器方法
+            """
+
             seeks.append((wallpaper.current_media, position))
             return original_seek(position)
 
@@ -315,7 +335,7 @@ class VideoRecoveryTests(unittest.TestCase):
 
     def test_playing_and_paused_video_recover_after_host_process_ends(self):
         """
-        父視窗程序結束後恢復播放, 暫停與進度
+        在獨立程序中驗證影片失去父視窗後的恢復, 匯入, 跟隨與兩種關閉方式
         """
 
         if FFMPEG is None:

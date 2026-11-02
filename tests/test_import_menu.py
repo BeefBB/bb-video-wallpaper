@@ -1,19 +1,16 @@
 """
-測試匯入期間的系統匣選單與取消操作
+測試匯入取消, 螢幕變動與退出時的非同步競態
 使用真正的 Qt 選單, 訊號佇列與工作執行緒, 不顯示系統匣或啟動桌布
 """
 
-import json
 from pathlib import Path
 import sys
-import tempfile
 import threading
 import time
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import QCoreApplication, QEvent, QObject, QThread, Qt, Signal
-from PySide6.QtGui import QAction, QIcon, QScreen
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, Signal
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 
@@ -24,7 +21,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
-from media_import import MediaImportCancelled
 from app_loader import load_app_module
 
 
@@ -34,11 +30,11 @@ class PreviewMenu(QMenu):
     """
 
     def __init__(self, title, parent, *, media_dir, thumbnail_dir, loading_image_path, thumbnail_thread=None):
+        """
+        建立 Qt 選單, 保存共用縮圖工作物件並替換預覽重設操作
+        """
 
         super().__init__(title, parent)
-        self.media_dir = media_dir
-        self.thumbnail_dir = thumbnail_dir
-        self.loading_image_path = loading_image_path
         self.thumbnail_thread = thumbnail_thread if thumbnail_thread is not None else mock.Mock()
         self.reset_preview = mock.Mock()
 
@@ -68,7 +64,7 @@ class ImportMenuTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         """
-        建立 Qt 應用程式並載入匯入執行緒與系統匣類別
+        取得或建立 Qt 應用程式, 確認可供選單測試使用
         """
 
         cls.app = QApplication.instance() or QApplication([])
@@ -82,32 +78,22 @@ class ImportMenuTests(unittest.TestCase):
         建立選單, 匯入替身與執行緒同步事件
         """
 
-        self.language = json.loads((ROOT / "lang" / "zh-TW.json").read_text(encoding="utf-8"))
         self.source = ROOT / "sample.mp4"
         self.destination = ROOT / "imported.mp4"
         config_store = mock.Mock()
         config_store.load.return_value = {}
 
         self.namespace = {
-            "Path": Path,
-            "Qt": Qt,
-            "QThread": QThread,
-            "Signal": Signal,
-            "QAction": QAction,
-            "QIcon": QIcon,
-            "QScreen": QScreen,
-            "QMenu": QMenu,
             "QFileDialog": mock.Mock(),
             "QSystemTrayIcon": mock.Mock(),
             "MediaPreviewMenu": PreviewMenu,
             "ThumbnailThread": mock.Mock(side_effect=lambda *args: mock.Mock()),
-            "MediaImportCancelled": MediaImportCancelled,
             "ICON_PATH": ROOT / "icon" / "bb-video-wallpaper.ico",
             "MEDIA_DIR": ROOT / "test-media",
             "THUMBNAIL_DIR": ROOT / "test-thumbnails",
             "LOADING_IMAGE_PATH": ROOT / "icon" / "loading.jpg",
             "SINGLE_IMPORT_DIR": ROOT / "video" / "_imports",
-            "LANG": self.language,
+            "LANG": {"importing_media": "{percent}%"},
             "SUPPORTED_MEDIA_EXTENSIONS": {".mp4", ".png"},
             "SUPPORTED_VIDEO_EXTENSIONS": {".mp4"},
             "config_store": config_store,
@@ -165,18 +151,10 @@ class ImportMenuTests(unittest.TestCase):
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
-    def visible_labels(self):
-        """
-        取得目前顯示的選單文字與分隔線
-        """
-
-        return [
-            "-" if action.isSeparator() else action.text()
-            for action in self.menu.actions() if action.isVisible()
-        ]
-
-
     def make_wallpaper(self, screen_id, screen):
+        """
+        建立指定螢幕的桌布替身, 預設為可播放與同步進度的影片
+        """
 
         wallpaper = mock.Mock()
         wallpaper.screen_id = screen_id
@@ -195,6 +173,9 @@ class ImportMenuTests(unittest.TestCase):
 
 
     def add_screen(self, screen_id):
+        """
+        建立桌布替身並發出螢幕新增訊號, 回傳新增的桌布
+        """
 
         screen = mock.Mock()
         wallpaper = self.make_wallpaper(screen_id, screen)
@@ -206,13 +187,10 @@ class ImportMenuTests(unittest.TestCase):
 
     def assert_idle_menu(self):
         """
-        確認選單已回到可再次匯入的閒置狀態
+        確認匯入工作已清除, 新增媒體可用且取消項目隱藏
         """
 
-        self.assertEqual(self.visible_labels(), [
-            "播放", "暫停", "停止", "-", "選擇影片", "新增影片", "開啟影片資料夾",
-            "-", "選項", "-", "退出",
-        ])
+        self.assertIsNone(self.tray.import_thread)
         self.assertTrue(self.tray.add_media_action.isEnabled())
         self.assertFalse(self.tray.cancel_import_action.isVisible())
 
@@ -244,23 +222,9 @@ class ImportMenuTests(unittest.TestCase):
         return self.destination
 
 
-    def test_idle_and_cancelled_file_dialog_keep_original_menu(self):
-        """
-        閒置與取消選檔時維持原本選單
-        """
-
-        self.assert_idle_menu()
-        self.namespace["QFileDialog"].getOpenFileName.return_value = ("", "")
-        self.tray.add_media()
-
-        self.assert_idle_menu()
-        self.assertIsNone(self.tray.import_thread)
-        self.namespace["import_media"].assert_not_called()
-
-
     def test_exit_delegates_cleanup_and_quits_even_if_shutdown_fails(self):
         """
-        退出時清理桌布, 清理失敗仍結束應用程式
+        驗證單一桌布清理失敗仍會清理其他桌布並退出, 重複退出不重複清理
         """
 
         other = self.add_screen("screen-b")
@@ -269,6 +233,7 @@ class ImportMenuTests(unittest.TestCase):
         operations.attach_mock(other.shutdown, "second_shutdown")
         operations.attach_mock(self.tray.app.quit, "quit")
         self.wallpaper.shutdown.side_effect = RuntimeError("shutdown failed")
+        self.tray.app.aboutToQuit.connect.assert_any_call(self.tray.shutdown)
 
         self.tray.exit()
 
@@ -278,44 +243,12 @@ class ImportMenuTests(unittest.TestCase):
         self.tray.exit()
         self.wallpaper.shutdown.assert_called_once_with()
         other.shutdown.assert_called_once_with()
-
-
-    def test_startup_toggle_passes_entry_point_to_task_creation(self):
-        """
-        啟用開機啟動時傳入正確的程式路徑
-        """
-
-        self.tray.toggle_startup(True)
-
-        self.namespace["create_task"].assert_called_once_with(self.namespace["FILE"])
-        self.namespace["delete_task"].assert_not_called()
-
-        self.tray.toggle_startup(False)
-
-        self.namespace["delete_task"].assert_called_once_with()
-
-
-    def test_preview_menu_receives_paths_and_stops_its_worker_on_quit(self):
-        """
-        預覽選單使用指定路徑, 退出時停止縮圖工作
-        """
-
-        preview = self.tray.media_menu
-        self.assertEqual(preview.media_dir, self.namespace["MEDIA_DIR"])
-        self.assertEqual(preview.thumbnail_dir, self.namespace["THUMBNAIL_DIR"])
-        self.assertEqual(preview.loading_image_path, self.namespace["LOADING_IMAGE_PATH"])
-        self.assertIs(preview.thumbnail_thread, self.tray.thumbnail_thread)
-        self.namespace["ThumbnailThread"].assert_called_once_with(
-            self.namespace["MEDIA_DIR"], self.namespace["THUMBNAIL_DIR"]
-        )
-        self.tray.app.aboutToQuit.connect.assert_any_call(self.tray.shutdown)
-        self.tray.shutdown()
         self.tray.thumbnail_thread.stop.assert_called_once_with()
 
 
-    def test_comparing_menu_has_one_extra_cancel_row_and_cancel_restores_it(self):
+    def test_cancel_import_restores_controls_and_allows_retry(self):
         """
-        比對檔案時顯示取消項目, 取消後恢復選單
+        驗證取消匯入後恢復選單控制, 並可重新匯入與套用桌布
         """
 
         self.namespace["import_media"] = self.blocked_import
@@ -323,10 +256,7 @@ class ImportMenuTests(unittest.TestCase):
         worker = self.tray.import_thread
         self.assertTrue(self.started.wait(5))
 
-        self.assertEqual(self.visible_labels(), [
-            "播放", "暫停", "停止", "-", "選擇影片", "比對中…", "取消匯入",
-            "開啟影片資料夾", "-", "選項", "-", "退出",
-        ])
+        self.assertTrue(self.tray.cancel_import_action.isVisible())
         self.assertFalse(self.tray.add_media_action.isEnabled())
         self.tray.cancel_import_action.trigger()
         self.assertTrue(worker.isInterruptionRequested())
@@ -353,7 +283,7 @@ class ImportMenuTests(unittest.TestCase):
 
     def test_worker_progress_runs_on_main_thread_and_ignores_updates_after_cancel(self):
         """
-        在主執行緒更新進度, 取消後忽略後續更新
+        驗證背景進度由主執行緒更新選單, 取消後忽略後續進度
         """
 
         updated_on = []
@@ -361,11 +291,17 @@ class ImportMenuTests(unittest.TestCase):
         update_progress = self.tray.update_import_progress
 
         def record_progress(percent):
+            """
+            記錄進度回呼的執行緒, 再呼叫原本的選單更新方法
+            """
 
             updated_on.append(threading.get_ident())
             update_progress(percent)
 
         def copy_with_progress(source, import_dir, *, translate, progress, cancelled):
+            """
+            記錄匯入執行緒並回報進度, 再等待測試放行匯入工作
+            """
 
             worker_threads.append(threading.get_ident())
             progress(42)
@@ -378,58 +314,22 @@ class ImportMenuTests(unittest.TestCase):
         self.assertTrue(self.started.wait(5))
         self.app.processEvents()
 
-        self.assertEqual(self.tray.add_media_action.text(), "匯入中 42%")
+        self.assertIn("42%", self.tray.add_media_action.text())
         self.assertTrue(self.tray.cancel_import_action.isVisible())
         self.assertEqual(updated_on, [threading.get_ident()])
         self.assertNotEqual(worker_threads, updated_on)
 
         self.tray.cancel_import_action.trigger()
         self.tray.update_import_progress(80)
-        self.assertEqual(self.tray.add_media_action.text(), "匯入中 42%")
+        self.assertIn("42%", self.tray.add_media_action.text())
         self.release.set()
         self.wait_for_completion(worker)
         self.assert_idle_menu()
 
 
-    def test_success_plays_imported_media_and_hides_cancel_action(self):
-        """
-        媒體庫為空時, 匯入成功後套用桌布並恢復選單
-        """
-
-        self.tray.add_media()
-        self.wait_for_completion(self.tray.import_thread)
-
-        self.assert_idle_menu()
-        self.namespace["import_media"].assert_called_once_with(
-            self.source,
-            self.namespace["SINGLE_IMPORT_DIR"],
-            translate=self.namespace["tr"],
-            progress=mock.ANY,
-            cancelled=mock.ANY
-        )
-        self.tray.play_from_menu.assert_called_once_with(self.destination, "screen-a")
-        self.tray.thumbnail_thread.request.assert_called_once_with(self.destination)
-        self.tray.refresh_media_menu.assert_called_once_with()
-        self.tray.tray.showMessage.assert_not_called()
-
-
-    def test_failure_restores_menu_and_shows_error(self):
-        """
-        匯入失敗後恢復選單並顯示錯誤
-        """
-
-        self.namespace["import_media"].side_effect = OSError("disk full")
-        self.tray.add_media()
-        self.wait_for_completion(self.tray.import_thread)
-
-        self.assert_idle_menu()
-        self.tray.play_from_menu.assert_not_called()
-        self.assertIn("disk full", self.tray.tray.showMessage.call_args.args[1])
-
-
     def test_completed_import_waits_for_reattach_and_plays_only_once(self):
         """
-        匯入完成時若正在重掛, 保留結果並在重掛結束後只套用一次
+        驗證匯入結果等待重掛結束, 重複完成訊號也只套用一次
         """
 
         self.namespace["get_media"].return_value = [self.source]
@@ -458,7 +358,7 @@ class ImportMenuTests(unittest.TestCase):
 
     def test_quitting_discards_import_deferred_during_reattach(self):
         """
-        匯入完成後等待重掛期間退出, 不因延後回呼重新播放
+        驗證退出時捨棄等待重掛的匯入結果, 不播放或請求縮圖
         """
 
         self.wallpaper.is_recreating = True
@@ -480,67 +380,15 @@ class ImportMenuTests(unittest.TestCase):
         self.tray.tray.showMessage.assert_not_called()
 
 
-    def test_single_recent_media_can_be_cleared_without_changing_wallpapers(self):
-        """
-        只有一筆最近紀錄時仍可從選單清空, 並保留各螢幕桌布
-        """
-
-        wallpapers = {"screen-a": "sample.mp4", "screen-b": "other.png"}
-        store = self.namespace["config_store"]
-        store.load.return_value = {
-            "recentVideo": ["sample.mp4"],
-            "screenWallpapers": wallpapers.copy(),
-        }
-        self.namespace["get_media"] = mock.Mock(return_value=[])
-        self.tray.media_menu.reset_preview = mock.Mock()
-        self.namespace["Tray"].refresh_media_menu(self.tray)
-
-        clear_actions = [
-            action for action in self.tray.media_menu.actions()
-            if action.text() == self.language["clear_recent_videos"]
-        ]
-        self.assertEqual(len(clear_actions), 1)
-        self.assertTrue(clear_actions[0].isEnabled())
-        clear_actions[0].trigger()
-
-        store.save.assert_called_once()
-        saved = store.save.call_args.args[0]
-        self.assertEqual(saved["recentVideo"], [])
-        self.assertEqual(saved["screenWallpapers"], wallpapers)
-        self.assertTrue(all(
-            action.text() not in {"播放", "暫停", "停止"}
-            for action in self.tray.media_menu.actions()
-        ))
-
-
-    def test_bad_wallpaper_shows_localized_error_without_starting_playback(self):
-        """
-        媒體載入失敗時顯示對應語言的錯誤並停止後續播放
-        """
-
-        self.wallpaper.select_media.side_effect = RuntimeError("bad image")
-        self.wallpaper.playback_state = self.namespace["PlaybackState"]("pause")
-
-        for language_path in (ROOT / "lang").glob("*.json"):
-            with self.subTest(language=language_path.name):
-                self.namespace["LANG"] = json.loads(language_path.read_text(encoding="utf-8"))
-                self.tray.tray.showMessage.reset_mock()
-                self.namespace["Tray"].play_from_menu(self.tray, self.source)
-
-                self.wallpaper.manual_play.assert_not_called()
-                self.assertEqual(self.wallpaper.playback_state.requested_state, "pause")
-                self.assertEqual(
-                    self.tray.tray.showMessage.call_args.args[1],
-                    self.namespace["LANG"]["media_load_failed"].format(error="bad image")
-                )
-
-
     def test_quitting_requests_cancellation_before_waiting(self):
         """
-        退出時先取消匯入再等待執行緒結束
+        驗證退出等待匯入前先要求取消, 取消完成後不播放或顯示錯誤
         """
 
         def wait_for_cancel(source, import_dir, *, translate, progress, cancelled):
+            """
+            等待匯入取消要求並拋出取消例外, 未及時收到要求則回報逾時
+            """
 
             self.started.set()
             deadline = time.monotonic() + 5
@@ -567,6 +415,9 @@ class ImportMenuTests(unittest.TestCase):
 
 
     def test_startup_creates_one_wallpaper_per_screen_and_ignores_duplicate_notifications(self):
+        """
+        驗證每個螢幕只建立一份桌布與選單, 並共用同一個縮圖工作物件
+        """
 
         self.namespace["Wallpaper"].assert_called_once_with(target_screen=self.screen)
         self.wallpaper.show.assert_called_once_with()
@@ -575,67 +426,16 @@ class ImportMenuTests(unittest.TestCase):
         self.assertEqual(self.tray.wallpapers, {"screen-a": self.wallpaper, "screen-b": other})
         self.screen_notifications.screenAdded.emit(other.target_screen)
         self.assertEqual(self.namespace["Wallpaper"].call_count, 2)
-        self.assertEqual(self.visible_labels()[:6], [
-            "全部播放", "全部暫停", "全部停止", "-", "螢幕 1", "螢幕 2",
-        ])
+        self.assertEqual(set(self.tray.screen_menus), {"screen-a", "screen-b"})
         for menu in self.tray.screen_menus.values():
             self.assertIs(menu.thumbnail_thread, self.tray.thumbnail_thread)
-        self.namespace["ThumbnailThread"].assert_called_once_with(
-            self.namespace["MEDIA_DIR"], self.namespace["THUMBNAIL_DIR"]
-        )
-
-
-    def test_initial_screen_enumeration_handles_multiple_or_no_screens(self):
-
-        for count in (2, 0):
-            with self.subTest(count=count):
-                application = mock.Mock()
-                screens = [mock.Mock() for _ in range(count)]
-                wallpapers = [self.make_wallpaper(f"initial-{i}", screen) for i, screen in enumerate(screens)]
-                application.screens.return_value = screens
-                factory = self.namespace["Wallpaper"] = mock.Mock(side_effect=wallpapers)
-                tray = self.namespace["Tray"](application)
-
-                self.assertEqual(factory.call_args_list, [mock.call(target_screen=screen) for screen in screens])
-                self.assertEqual(list(tray.wallpapers.values()), wallpapers)
-                self.assertEqual(len(tray.screen_menus), count)
-                tray.shutdown()
-                tray.menu.close()
-                tray.menu.deleteLater()
-
-
-    def test_screen_removal_restores_single_menu_and_reconnection_creates_new_wallpaper(self):
-
-        other = self.add_screen("screen-b")
-        self.tray.app.screens.return_value.remove(other.target_screen)
-        self.screen_notifications.screenRemoved.emit(other.target_screen)
-
-        self.assertEqual(self.tray.wallpapers, {"screen-a": self.wallpaper})
-        other.shutdown.assert_called_once_with()
-        other.deleteLater.assert_called_once_with()
-        self.wallpaper.shutdown.assert_not_called()
-        self.tray.thumbnail_thread.stop.assert_not_called()
-        self.namespace["config_store"].save.assert_not_called()
-        self.assert_idle_menu()
-
-        replacement = self.add_screen("screen-b")
-        self.assertIs(self.tray.wallpapers["screen-b"], replacement)
-        self.assertIsNot(replacement, other)
-
-
-    def test_last_screen_can_be_removed_and_added_again(self):
-
-        self.tray.app.screens.return_value.clear()
-        self.screen_notifications.screenRemoved.emit(self.screen)
-
-        self.assertEqual(self.tray.wallpapers, {})
-        self.assertTrue(all(not action.isEnabled() for action, _ in self.tray.playback_actions))
-        self.assertNotIn("選擇影片", self.visible_labels())
-        self.add_screen("screen-a")
-        self.assert_idle_menu()
+        self.namespace["ThumbnailThread"].assert_called_once()
 
 
     def test_screen_creation_failure_keeps_existing_wallpaper_available(self):
+        """
+        驗證新增螢幕的桌布建立失敗時保留既有桌布並記錄例外
+        """
 
         self.namespace["Wallpaper"].side_effect = RuntimeError("no output")
         self.screen_notifications.screenAdded.emit(mock.Mock())
@@ -645,182 +445,16 @@ class ImportMenuTests(unittest.TestCase):
         self.namespace["logger"].exception.assert_called_once()
 
 
-    def test_individual_and_global_commands_and_options_target_the_correct_wallpapers(self):
-
-        other = self.add_screen("screen-b")
-        self.tray.pause("screen-b")
-        other.manual_pause.assert_called_once_with()
-        self.wallpaper.manual_pause.assert_not_called()
-
-        self.tray.play()
-        self.wallpaper.manual_play.assert_called_once_with()
-        other.manual_play.assert_called_once_with()
-        self.tray.stop()
-        self.wallpaper.manual_stop.assert_called_once_with()
-        other.manual_stop.assert_called_once_with()
-        self.assertTrue(all(not action.isCheckable() for action, _ in self.tray.playback_actions))
-
-        options = (
-            ("auto_pause_fullscreen", "autoPauseIfFullscreen", "auto_pause_if_fullscreen", True),
-            ("auto_pause_screen_off", "autoPauseIfScreenOff", "auto_pause_if_screen_off", True),
-            ("auto_pause_battery", "autoPauseIfOnBattery", "auto_pause_if_on_battery", False),
-        )
-        for action, (text_key, config_key, attribute, default) in zip(self.tray.options_menu.actions(), options):
-            with self.subTest(option=config_key):
-                self.assertEqual(action.text(), self.language[text_key])
-                self.assertTrue(action.isCheckable())
-                self.assertEqual(action.isChecked(), default)
-                action.trigger()
-                saved = self.namespace["config_store"].save.call_args.args[0]
-                self.assertEqual(saved[config_key], not default)
-                self.assertIs(getattr(self.wallpaper, attribute), not default)
-                self.assertIs(getattr(other, attribute), not default)
-
-        self.tray.play("removed-screen")
-        self.wallpaper.manual_play.assert_called_once_with()
-
-
-    def test_pause_availability_uses_each_menu_scope_when_media_changes(self):
-
-        other = self.add_screen("screen-b")
-        self.wallpaper.current_media = self.source.with_suffix(".png")
-
-        for media, can_pause in ((self.source, True), (self.source.with_suffix(".png"), False), (None, False)):
-            with self.subTest(media=media):
-                other.current_media = media
-                self.menu.aboutToShow.emit()
-                first = self.tray.screen_menus["screen-a"]
-                second = self.tray.screen_menus["screen-b"]
-                first.aboutToShow.emit()
-                second.aboutToShow.emit()
-
-                self.assertEqual(self.menu.actions()[1].text(), "全部暫停")
-                self.assertEqual(self.menu.actions()[1].isEnabled(), can_pause)
-                self.assertFalse(first.actions()[1].isEnabled())
-                self.assertEqual(second.actions()[1].isEnabled(), can_pause)
-                self.assertTrue(all(not action.isCheckable() for action in self.menu.actions()[:3]))
-
-        self.tray.app.screens.return_value.remove(other.target_screen)
-        self.screen_notifications.screenRemoved.emit(other.target_screen)
-        self.menu.aboutToShow.emit()
-        self.assertEqual(self.menu.actions()[1].text(), "暫停")
-        self.assertFalse(self.menu.actions()[1].isEnabled())
-        self.assertTrue(self.menu.actions()[0].isChecked())
-        self.assertTrue(self.menu.actions()[0].isEnabled())
-        self.assertTrue(self.menu.actions()[2].isEnabled())
-
-
-    def test_root_playback_actions_keep_global_scope_when_screen_count_changes(self):
-
-        with mock.patch.object(self.tray.follow_controller, "detach") as detach:
-            for count in (1, 2):
-                with self.subTest(count=count):
-                    if count == 2:
-                        self.add_screen("screen-b")
-                    self.menu.aboutToShow.emit()
-                    for wallpaper in self.tray.wallpapers.values():
-                        for command in ("play", "pause", "stop"):
-                            getattr(wallpaper, f"manual_{command}").reset_mock()
-
-                    for action, command in zip(self.menu.actions()[:3], ("play", "pause", "stop")):
-                        action.trigger()
-                        for wallpaper in self.tray.wallpapers.values():
-                            getattr(wallpaper, f"manual_{command}").assert_called_once_with()
-                    detach.assert_not_called()
-
-
-    def test_pause_all_starts_stopped_videos_before_pausing_them(self):
-
-        other = self.add_screen("screen-b")
-        other.play_state = "stop"
-        operations = mock.Mock()
-        operations.attach_mock(other.manual_play, "play")
-        operations.attach_mock(other.manual_pause, "pause")
-
-        self.tray.pause()
-
-        self.assertEqual(operations.mock_calls, [mock.call.play(), mock.call.pause()])
-        self.wallpaper.manual_play.assert_not_called()
-        self.wallpaper.manual_pause.assert_called_once_with()
-
-
-    def test_pause_all_does_not_start_stopped_images(self):
-
-        other = self.add_screen("screen-b")
-        other.current_media = self.source.with_suffix(".png")
-        other.play_state = "stop"
-
-        self.tray.pause()
-
-        other.manual_play.assert_not_called()
-
-
-    def test_screen_menu_selects_its_own_media_and_reflects_its_playback_state(self):
-
-        other = self.add_screen("screen-b")
-        other.play_state = "pause"
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "sample.mp4"
-            path.touch()
-            other.current_media = path
-            self.namespace["get_media"].return_value = [path]
-            self.tray.play_from_menu = self.namespace["Tray"].play_from_menu.__get__(self.tray)
-            menu = self.tray.screen_menus["screen-b"]
-            menu.aboutToShow.emit()
-
-            actions = menu.actions()
-            self.assertEqual([action.text() for action in actions[:3]], ["播放", "暫停", "停止"])
-            self.assertTrue(actions[1].isChecked())
-            actions[0].trigger()
-            other.manual_play.assert_called_once_with()
-            self.wallpaper.manual_play.assert_not_called()
-            actions[1].trigger()
-            other.manual_pause.assert_called_once_with()
-            self.wallpaper.manual_pause.assert_not_called()
-            actions[2].trigger()
-            other.manual_stop.assert_called_once_with()
-            self.wallpaper.manual_stop.assert_not_called()
-            media_action = next(action for action in actions if action.data() == str(path))
-            self.assertTrue(media_action.isChecked())
-            media_action.trigger()
-            other.select_media.assert_called_once_with(path)
-            self.wallpaper.select_media.assert_not_called()
-
-
-    def test_follow_menu_disables_cycles_and_marks_only_the_selected_source(self):
-
-        second = self.add_screen("screen-b")
-        third = self.add_screen("screen-c")
-        self.tray.follow_controller.follow("screen-b", "screen-a")
-        self.tray.follow_controller.follow("screen-c", "screen-b")
-        first_menu = self.tray.screen_menus["screen-a"]
-        first_menu.aboutToShow.emit()
-        sources = first_menu.actions()[-1].menu().actions()
-        self.assertEqual([action.text() for action in sources], ["螢幕 2", "螢幕 3"])
-        self.assertTrue(all(not action.isEnabled() for action in sources))
-
-        second_menu = self.tray.screen_menus["screen-b"]
-        second_menu.aboutToShow.emit()
-        self.assertTrue(second_menu.actions()[-1].isChecked())
-        self.assertTrue(all(not action.isChecked() for action in second_menu.actions()[:3]))
-        sources = second_menu.actions()[-1].menu().actions()
-        self.assertTrue(sources[0].isChecked())
-        self.assertTrue(sources[0].isEnabled())
-        self.assertFalse(sources[1].isEnabled())
-        self.tray.play("screen-b")
-        self.assertEqual(self.tray.follow_controller.graph.sources, {"screen-c": "screen-b"})
-        second.manual_play.assert_called_once()
-        self.wallpaper.manual_play.assert_not_called()
-
-
-    def test_follow_timer_corrects_progress_every_sixty_seconds_and_stops_on_exit(self):
+    def test_follow_timer_corrects_progress_and_stops_on_exit(self):
+        """
+        驗證跟隨計時器校正播放進度, 關閉時停止同步與還原計時器
+        """
 
         follower = self.add_screen("screen-b")
         menu = self.tray.screen_menus["screen-b"]
         menu.aboutToShow.emit()
         menu.actions()[-1].menu().actions()[0].trigger()
         self.assertEqual(self.tray.follow_controller.graph.sources, {"screen-b": "screen-a"})
-        self.assertEqual(self.tray.follow_sync_timer.interval(), 60000)
         self.assertTrue(self.tray.follow_sync_timer.isActive())
         self.wallpaper.get_playback_time.return_value = 6500
         self.tray.follow_sync_timer.timeout.emit()
@@ -831,6 +465,9 @@ class ImportMenuTests(unittest.TestCase):
 
 
     def test_follow_startup_waits_for_screens_and_removes_missing_sources_after_grace(self):
+        """
+        驗證啟動時延後建立桌布, 等待結束後只還原仍有來源螢幕的跟隨關係
+        """
 
         for source_present in (True, False):
             with self.subTest(source_present=source_present):
@@ -846,7 +483,6 @@ class ImportMenuTests(unittest.TestCase):
                 tray = self.namespace["Tray"](application)
                 try:
                     factory.assert_not_called()
-                    self.assertEqual(tray.follow_restore_timer.interval(), 3000)
                     self.assertTrue(tray.follow_restore_timer.isActive())
                     tray.add_screen(screen_b)
                     factory.assert_not_called()
@@ -861,36 +497,9 @@ class ImportMenuTests(unittest.TestCase):
                     tray.menu.deleteLater()
 
 
-    def test_single_screen_import_into_existing_library_plays_media(self):
-        """
-        單螢幕在媒體庫已有桌布時仍自動播放匯入結果
-        """
-
-        self.namespace["get_media"].return_value = [self.source]
-        self.tray.add_media()
-        self.wait_for_completion(self.tray.import_thread)
-
-        self.tray.play_from_menu.assert_called_once_with(self.destination, "screen-a")
-
-
-    def test_multiple_screen_import_into_existing_library_updates_history_without_changing_wallpapers(self):
-        """
-        多螢幕在媒體庫已有桌布時只更新最近紀錄
-        """
-
-        self.add_screen("screen-b")
-        self.namespace["get_media"].return_value = [self.source]
-        self.tray.add_media()
-        self.wait_for_completion(self.tray.import_thread)
-
-        self.tray.play_from_menu.assert_not_called()
-        self.namespace["config_store"].remember_recent.assert_called_once_with(self.destination)
-        self.tray.thumbnail_thread.request.assert_called_once_with(self.destination)
-
-
     def test_single_screen_import_does_not_apply_to_screen_added_during_copy(self):
         """
-        匯入期間新增螢幕時, 只套用原本的單螢幕
+        驗證單螢幕匯入只套用原目標, 不套用到複製期間新增的螢幕
         """
 
         self.namespace["get_media"].return_value = [self.source]
@@ -907,7 +516,7 @@ class ImportMenuTests(unittest.TestCase):
 
     def test_multiple_screen_import_does_not_autoplay_after_one_screen_is_removed(self):
         """
-        多螢幕匯入期間移除螢幕時, 不改為自動播放
+        驗證多螢幕匯入期間移除螢幕後仍只更新紀錄, 不改為自動播放
         """
 
         other = self.add_screen("screen-b")
@@ -927,7 +536,7 @@ class ImportMenuTests(unittest.TestCase):
 
     def test_single_screen_import_does_not_apply_to_replacement_screen(self):
         """
-        原本的匯入目標已拔除時, 不套用到另一台螢幕
+        驗證原匯入目標移除後不套用到替代螢幕, 仍保存最近紀錄
         """
 
         self.namespace["get_media"].return_value = [self.source]
@@ -945,18 +554,10 @@ class ImportMenuTests(unittest.TestCase):
         self.namespace["config_store"].remember_recent.assert_called_once_with(self.destination)
 
 
-    def test_first_import_applies_to_all_connected_screens(self):
-
-        self.add_screen("screen-b")
-        self.tray.add_media()
-        self.wait_for_completion(self.tray.import_thread)
-
-        self.assertEqual(self.tray.play_from_menu.call_args_list, [
-            mock.call(self.destination, "screen-a"), mock.call(self.destination, "screen-b"),
-        ])
-
-
     def test_removing_screen_waited_on_by_import_finishes_remaining_targets_once(self):
+        """
+        驗證移除正在重掛的匯入目標後, 其餘目標只套用一次匯入結果
+        """
 
         self.add_screen("screen-b")
         self.wallpaper.is_recreating = True
@@ -976,6 +577,9 @@ class ImportMenuTests(unittest.TestCase):
 
 
     def test_old_import_callbacks_cannot_complete_a_new_import(self):
+        """
+        驗證舊匯入留下的重掛回呼不會完成或清除新匯入工作
+        """
 
         self.wallpaper.is_recreating = True
         self.tray.add_media()

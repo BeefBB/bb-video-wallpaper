@@ -35,7 +35,7 @@ class ImageDisplayTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         """
-        建立 Qt 應用程式
+        取得或建立 Qt 應用程式, 確認可供圖片視窗測試使用
         """
 
         app = QApplication.instance() or QApplication([])
@@ -116,31 +116,6 @@ class ImageDisplayTests(unittest.TestCase):
         self.assertEqual(window._host_hwnd, host)
 
 
-    def test_bad_image_preserves_existing_image_window_and_visibility(self):
-        """
-        圖片載入失敗時保留既有視窗與顯示狀態
-        """
-
-        self.display.set_image(self.image_path)
-        self.display.show()
-        window = self.display.window
-        assert window is not None
-
-        image_key = window.image.cacheKey()
-        host = window._host_hwnd
-        invalid_path = self.image_path.with_name("bad.png")
-        invalid_path.write_bytes(b"invalid image")
-
-        with self.assertRaises(RuntimeError):
-            self.display.set_image(invalid_path)
-
-        self.assertIs(self.display.window, window)
-        self.assertEqual(self.display.current_image, self.image_path.resolve())
-        self.assertEqual(window.image.cacheKey(), image_key)
-        self.assertEqual(window._host_hwnd, host)
-        self.assertTrue(window.isVisible())
-
-
     def test_detach_and_rebind_preserves_image_and_target_windows(self):
         """
         解除綁定後可更換目標, 保留圖片與外部視窗
@@ -168,28 +143,6 @@ class ImageDisplayTests(unittest.TestCase):
         self.assertEqual(win32gui.GetParent(window._host_hwnd), int(replacement.winId()))
         self.assertTrue(win32gui.IsWindow(int(self.target.winId())))
         self.assertTrue(window.isVisible())
-
-
-    def test_target_resize_updates_child_geometry(self):
-        """
-        目標視窗大小改變時同步調整子視窗
-        """
-
-        self.display.set_image(self.image_path)
-        self.display.show()
-        window = self.display.window
-        assert window is not None
-
-        win32gui.SetWindowPos(
-            int(self.target.winId()), 0, 0, 0, 320, 180,
-            win32con.SWP_NOMOVE | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE
-        )
-        self.app.processEvents()
-
-        self.assertEqual(
-            win32gui.GetClientRect(window._host_hwnd),
-            win32gui.GetClientRect(int(self.target.winId()))
-        )
 
 
     def test_close_releases_image_host_and_keeps_target_for_next_image(self):

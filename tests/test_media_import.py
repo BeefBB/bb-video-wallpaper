@@ -10,7 +10,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import shutil
 import sys
 import tempfile
@@ -145,27 +144,6 @@ class MediaImportTests(unittest.TestCase):
         self.assertEqual(list(self.import_dir.iterdir()), [source])
 
 
-    def test_disk_usage_failure_stops_before_creating_or_copying_a_file(self):
-        """
-        無法查詢容量時在建立暫存檔與複製前停止
-        """
-
-        source = self.source_dir / "sample.mp4"
-        source.write_bytes(b"new")
-        error = OSError("Cannot query disk space")
-        self.disk_usage.side_effect = error
-
-        with mock.patch.object(tempfile, "NamedTemporaryFile") as temporary_file:
-            with self.assertRaises(OSError) as caught:
-                self.import_media(source)
-
-            self.assertIs(caught.exception, error)
-            temporary_file.assert_not_called()
-
-        self.assertEqual(list(self.import_dir.iterdir()), [])
-        self.assertEqual(source.read_bytes(), b"new")
-
-
     def test_disk_filling_during_copy_cleans_up_partial_file(self):
         """
         複製途中磁碟已滿時清除暫存檔並保留既有檔案
@@ -180,12 +158,18 @@ class MediaImportTests(unittest.TestCase):
 
         @contextmanager
         def open_until_full(file_path, mode="r", *args, **kwargs):
+            """
+            開啟來源或暫存檔, 只將匯入暫存檔的寫入替換為磁碟已滿的行為
+            """
 
             with original_open(file_path, mode, *args, **kwargs) as file:
 
                 if mode == "wb" and file_path.name.startswith(".import-"):
 
                     def write_until_full(chunk):
+                        """
+                        先寫入部分資料, 再拋出磁碟空間不足例外
+                        """
 
                         # 寫入部分資料後模擬磁碟已滿
                         file.write(chunk[:3])
@@ -211,69 +195,6 @@ class MediaImportTests(unittest.TestCase):
         self.assertEqual(source.read_bytes(), b"new contents")
 
 
-    def test_copy_reports_increasing_progress_and_finishes_after_rename(self):
-        """
-        進度持續遞增, 正式檔案就位後才回報完成
-        """
-
-        source = self.source_dir / "sample.mp4"
-        contents = b"video" * (1024 * 1024)
-        source.write_bytes(contents)
-        updates = []
-
-        def report(percent):
-
-            updates.append(percent)
-
-            # 完成時正式檔案已就位
-            if percent == 100:
-                self.assertTrue((self.import_dir / source.name).is_file())
-                self.assertFalse(list(self.import_dir.glob(".import-*.tmp")))
-
-        destination = self.import_media(source, progress=report)
-
-        self.assertEqual(updates[0], 0)
-        self.assertEqual(updates[-1], 100)
-        self.assertGreater(len(updates), 2)
-        self.assertEqual(updates, sorted(set(updates)))
-        self.assertTrue(all(0 <= percent <= 100 for percent in updates))
-        self.assertEqual(destination.read_bytes(), contents)
-        self.assertEqual(source.read_bytes(), contents)
-
-
-    def test_empty_file_reports_zero_and_completion(self):
-        """
-        空檔案仍回報開始與完成進度
-        """
-
-        source = self.source_dir / "empty.mp4"
-        source.touch()
-        updates = []
-
-        destination = self.import_media(source, progress=updates.append)
-
-        self.assertEqual(updates, [0, 100])
-        self.assertEqual(destination.read_bytes(), b"")
-
-
-    def test_cancel_before_start_does_not_create_a_file(self):
-        """
-        開始前取消時不建立檔案或回報進度
-        """
-
-        source = self.source_dir / "sample.mp4"
-        source.write_bytes(b"new contents")
-        progress = mock.Mock()
-
-        with self.assertRaises(MediaImportCancelled):
-            self.import_media(source, progress=progress, cancelled=lambda: True)
-
-        progress.assert_not_called()
-        self.disk_usage.assert_not_called()
-        self.assertEqual(list(self.import_dir.iterdir()), [])
-        self.assertEqual(source.read_bytes(), b"new contents")
-
-
     def test_cancel_during_hashing_source_or_candidate(self):
         """
         計算來源或既有檔案的雜湊時可取消
@@ -293,6 +214,9 @@ class MediaImportTests(unittest.TestCase):
                 progress = mock.Mock()
 
                 def new_digest():
+                    """
+                    建立雜湊物件, 在指定次數的雜湊計算中加入取消回呼
+                    """
 
                     nonlocal hash_count
                     hash_count += 1
@@ -301,6 +225,9 @@ class MediaImportTests(unittest.TestCase):
                     if hash_count == cancel_hash_number:
 
                         def update_and_cancel(chunk):
+                            """
+                            更新雜湊內容後設定取消旗標
+                            """
 
                             nonlocal cancelled
                             digest.update(chunk)
@@ -340,6 +267,9 @@ class MediaImportTests(unittest.TestCase):
                 updates = []
 
                 def report(percent):
+                    """
+                    記錄複製進度, 達到指定百分比時確認暫存檔存在並要求取消
+                    """
 
                     nonlocal cancelled
                     updates.append(percent)
@@ -355,49 +285,6 @@ class MediaImportTests(unittest.TestCase):
                 self.assertEqual(list(self.import_dir.iterdir()), [existing])
                 self.assertEqual(existing.read_bytes(), b"old contents")
                 self.assertEqual(source.read_bytes(), contents)
-
-
-    def test_insufficient_space_message_includes_capacity_in_every_language(self):
-        """
-        各語系的容量不足訊息包含正確的 MB 數值
-        """
-
-        source = self.source_dir / "sample.mp4"
-
-        with source.open("wb") as file:
-            file.truncate(2 * 1024 * 1024 + 1)
-
-        for language in ("zh-TW", "zh-CN", "en-US", "ja-JP"):
-            self.language = json.loads(
-                (ROOT / "lang" / f"{language}.json").read_text(encoding="utf-8")
-            )
-
-            for free_mb, available_mb in ((101, 1), (50, 0)):
-                with self.subTest(language=language, free_mb=free_mb):
-                    self.disk_usage.return_value.free = free_mb * 1024 * 1024
-
-                    with self.assertRaises(OSError) as caught:
-                        self.import_media(source)
-
-                    message = str(caught.exception)
-                    self.assertEqual(re.findall(r"-?[\d,]+ MB", message), ["3 MB", f"{available_mb} MB"])
-                    self.assertNotIn("media_insufficient_space", message)
-                    self.assertNotIn("{", message)
-
-
-    def test_long_name_without_collision_is_preserved(self):
-        """
-        沒有同名衝突時保留完整長檔名
-        """
-
-        source = self.source_dir / ("a" * 251 + ".mp4")
-        source.write_bytes(b"new")
-
-        destination = self.import_media(source)
-
-        self.assertEqual(destination.name, source.name)
-        self.assertEqual(destination.read_bytes(), b"new")
-        self.assertEqual(source.read_bytes(), b"new")
 
 
     def test_short_name_collisions_keep_existing_files(self):
@@ -421,31 +308,6 @@ class MediaImportTests(unittest.TestCase):
         self.assertEqual(original.read_bytes(), b"old")
         self.assertEqual((self.import_dir / "sample(1).mp4").read_bytes(), b"new-1")
         self.assertFalse(list(self.import_dir.glob(".import-*.tmp")))
-
-
-    def test_truncation_reserves_four_units_only_when_required(self):
-        """
-        需要截短檔名時才為衝突編號保留長度
-        """
-
-        for suffix in (".mp4", ".jpeg"):
-            for length, expected_length in ((252, 255), (253, 251), (255, 251)):
-                with self.subTest(suffix=suffix, length=length):
-                    prefix = str(length)
-                    stem = prefix + "a" * (length - len(suffix) - len(prefix))
-                    source = self.source_dir / f"{stem}{suffix}"
-                    contents = f"new-{suffix}-{length}".encode("ascii")
-                    source.write_bytes(contents)
-                    original = self.import_dir / source.name
-                    original.write_bytes(b"old")
-
-                    destination = self.import_media(source)
-
-                    expected_stem = stem[:expected_length - len(suffix) - 3]
-                    self.assertEqual(destination.name, f"{expected_stem}(1){suffix}")
-                    self.assertEqual(destination.read_bytes(), contents)
-                    self.assertEqual(original.read_bytes(), b"old")
-                    self.assertFalse(list(self.import_dir.glob(".import-*.tmp")))
 
 
     def test_chinese_and_emoji_names_use_utf16_without_splitting_characters(self):

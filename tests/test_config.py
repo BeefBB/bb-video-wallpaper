@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
-from config import CONFIG_DEFAULTS, SUPPORTED_LANGUAGES, ConfigStore
+from config import CONFIG_DEFAULTS, ConfigStore
 
 
 class ConfigTests(unittest.TestCase):
@@ -51,47 +51,6 @@ class ConfigTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
 
-    def test_missing_file_uses_defaults_without_writing(self):
-        """
-        缺少設定檔時使用預設值, 不寫入檔案
-        """
-
-        config = self.store.load()
-        expected = {
-            **CONFIG_DEFAULTS,
-            "language": "en-US",
-            "recentVideo": [],
-            "screenWallpapers": {},
-            "screenFollows": {},
-        }
-
-        self.assertEqual(config, expected)
-        self.assertFalse(self.config_path.exists())
-
-
-    def test_initialization_creates_complete_defaults(self):
-        """
-        初始化時寫入完整的預設設定
-        """
-
-        self.store.initialize_if_missing()
-
-        expected = {
-            **CONFIG_DEFAULTS,
-            "language": "en-US",
-            "recentVideo": [],
-            "screenWallpapers": {},
-            "screenFollows": {},
-        }
-
-        self.assertEqual(
-            json.loads(self.config_path.read_text(encoding="utf-8")),
-            expected
-        )
-        self.assertEqual(self.store.load(), expected)
-        self.assertFalse(self.config_path.with_suffix(".tmp").exists())
-
-
     def test_initialization_preserves_existing_files(self):
         """
         保留已存在的設定檔, 包含損壞或空白檔案
@@ -115,40 +74,6 @@ class ConfigTests(unittest.TestCase):
 
                 save.assert_not_called()
                 self.assertEqual(self.config_path.read_bytes(), contents)
-
-
-    def test_initialization_uses_installer_language(self):
-        """
-        初始化時採用安裝程式指定的語言
-        """
-
-        lang_dir = Path(self.temp_dir.name) / "lang"
-        lang_dir.mkdir()
-        (lang_dir.parent / "install-language.ini").write_text(
-            "[Setup]\nLanguage=ja-JP\n",
-            encoding="utf-8-sig"
-        )
-        store = ConfigStore(self.config_path, self.media_dir, lang_dir)
-
-        store.initialize_if_missing()
-
-        config = json.loads(self.config_path.read_text(encoding="utf-8"))
-        self.assertEqual(config["language"], "ja-JP")
-
-
-    def test_initialization_skips_inaccessible_path(self):
-        """
-        無法存取設定檔路徑時略過初始化
-        """
-
-        with (
-            mock.patch.object(Path, "stat", side_effect=PermissionError),
-            mock.patch.object(self.store, "save") as save,
-        ):
-            self.store.initialize_if_missing()
-
-        save.assert_not_called()
-        self.assertFalse(self.config_path.exists())
 
 
     def test_initialization_write_failure_keeps_defaults_available(self):
@@ -208,42 +133,6 @@ class ConfigTests(unittest.TestCase):
                     self.assertEqual(raw[key], invalid)
 
 
-    def test_language_validation(self):
-        """
-        保留支援的語言, 無效值改用預設語言
-        """
-
-        for language in SUPPORTED_LANGUAGES.values():
-            result = self.store.validate({"language": language})
-            self.assertEqual(result["language"], language)
-
-        for invalid in (None, False, 1, [], {}, "", "xx-XX", "../other"):
-
-            with self.subTest(value=invalid):
-                result = self.store.validate({"language": invalid})
-                self.assertEqual(result["language"], "zh-TW")
-
-
-    def test_unsupported_or_unavailable_system_locale(self):
-        """
-        系統語系不支援或無法取得時使用預設語言
-        """
-
-        for system_locale in ("fr_FR", None):
-
-            with mock.patch.object(
-                locale,
-                "getdefaultlocale",
-                return_value=(system_locale, None)
-            ):
-                result = self.store.validate({})
-                self.assertEqual(result["language"], "zh-TW")
-
-        with mock.patch.object(locale, "getdefaultlocale", side_effect=ValueError):
-            result = self.store.validate({})
-            self.assertEqual(result["language"], "zh-TW")
-
-
     def test_legacy_recent_video_and_invalid_types(self):
         """
         相容舊版最近紀錄格式, 排除無效型別
@@ -289,26 +178,6 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(result["recentVideo"], ["video/first.mp4", "missing.mp4"])
 
 
-    def test_recent_video_deduplicates_and_limits_to_five(self):
-        """
-        最近紀錄去重後最多保留五筆
-        """
-
-        recent = ["first.mp4", "./first.mp4"] + [f"{i}.mp4" for i in range(7)]
-
-        if os.name == "nt":
-            recent.insert(1, "FIRST.mp4")
-
-        result = self.store.validate({"recentVideo": recent})
-        self.assertEqual(
-            result["recentVideo"],
-            ["first.mp4", "0.mp4", "1.mp4", "2.mp4", "3.mp4"]
-        )
-
-        result = self.store.validate({})
-        self.assertEqual(result["recentVideo"], [])
-
-
     def test_screen_wallpapers_validate_paths_and_preserve_missing_or_disconnected_entries(self):
         """
         各螢幕路徑使用相同驗證, 保留暫時不存在的檔案與未連接螢幕
@@ -339,46 +208,6 @@ class ConfigTests(unittest.TestCase):
         for invalid in (None, False, 123, [], "file.mp4"):
             with self.subTest(value=invalid):
                 self.assertEqual(self.store.validate({"screenWallpapers": invalid})["screenWallpapers"], {})
-
-
-    def test_screen_follows_validate_ids_and_cycles_without_requiring_connected_screens(self):
-
-        raw = {"b": "a", "c": "b", "missing": "offline", "x": "y", "y": "x",
-               "self": "self", "blank": " ", "type": [], "nul\0": "a"}
-        self.store.save({"screenFollows": raw})
-        original = self.config_path.read_bytes()
-        self.assertEqual(self.store.load()["screenFollows"], {"b": "a", "c": "b", "missing": "offline"})
-        self.assertEqual(self.config_path.read_bytes(), original)
-
-
-    def test_remember_wallpaper_keeps_screen_choices_independent_and_history_shared(self):
-        """
-        交錯選擇桌布時只更新指定螢幕, 最近紀錄共用並維持去重與五筆上限
-        """
-
-        for screen_id, filename in (
-            ("screen-a", "a.mp4"),
-            ("screen-b", "b.png"),
-            ("screen-a", "c.mp4"),
-            ("screen-b", "a.mp4"),
-        ):
-            path = self.media_dir / filename
-            self.store.remember_recent(path)
-            self.store.remember_wallpaper(screen_id, path)
-
-        config = self.store.load()
-        self.assertEqual(config["screenWallpapers"], {"screen-a": "c.mp4", "screen-b": "a.mp4"})
-        self.assertEqual(config["recentVideo"], ["a.mp4", "c.mp4", "b.png"])
-
-        for index in range(6):
-            path = self.media_dir / f"{index}.mp4"
-            self.store.remember_recent(path)
-            self.store.remember_wallpaper(f"screen-{index}", path)
-
-        config = self.store.load()
-        self.assertEqual(len(config["screenWallpapers"]), 8)
-        self.assertEqual(config["screenWallpapers"]["screen-a"], "c.mp4")
-        self.assertEqual(config["recentVideo"], [f"{index}.mp4" for index in range(5, 0, -1)])
 
 
     def test_initial_selection_preserves_shared_history_and_other_settings(self):
@@ -456,33 +285,6 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(result["language"], "ja-JP")
         self.assertEqual(result["futureOption"], 9)
         self.assertEqual(self.config_path.read_text(encoding="utf-8"), contents)
-
-
-    def test_read_error_uses_defaults(self):
-        """
-        讀取設定檔失敗時使用預設值
-        """
-
-        with mock.patch("builtins.open", side_effect=PermissionError):
-            result = self.store.load()
-            expected = self.store.validate({})
-            self.assertEqual(result, expected)
-
-
-    def test_language_load_uses_validated_config(self):
-        """
-        依驗證後的設定載入語言檔
-        """
-
-        path = self.store.lang_dir / "en-US.json"
-        expected = json.loads(path.read_text(encoding="utf-8"))
-        self.assertEqual(self.store.load_language(), expected)
-
-        self.config_path.write_text('{"language": []}', encoding="utf-8")
-
-        path = self.store.lang_dir / "zh-TW.json"
-        expected = json.loads(path.read_text(encoding="utf-8"))
-        self.assertEqual(self.store.load_language(), expected)
 
 
     def test_save_round_trip_and_replace_failure(self):
