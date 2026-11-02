@@ -1,6 +1,6 @@
 # BB 動画壁紙
 
-**[繁體中文](README.md) | [简体中文](README.cn.md) | 日本語 | [English](README.en.md)**
+**[繁體中文](README.md) | [简体中文](README.cn.md) | 日本語 | [한국어](README.ko.md) | [English](README.en.md)**
 
 壁紙として動画を再生できる、軽量な壁紙管理ソフトウェアです。  
 壁紙を1つのフォルダに保存し、いつでも簡単に切り替えることができます。  

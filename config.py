@@ -26,6 +26,7 @@ SUPPORTED_LANGUAGES = {
     "繁體中文": "zh-TW",
     "简体中文": "zh-CN",
     "日本語": "ja-JP",
+    "한국어": "ko-KR",
     "English": "en-US",
 }
 
