@@ -103,7 +103,7 @@ Folder/
 `bb-video-wallpaper-setup.exe` 内含经过精简的 **VLC 3.0.24**，仅保留 **BB 视频壁纸**播放视频所需的组件。  
 VLC 是开源软件，相关版权和许可证信息请参阅 `安装目录/VLC/` 中的 VLC 许可证文件。  
 
-# 版权
+# 许可证
 
 BB 视频壁纸采用 MIT License。  
 软件内含的 VLC 3.0.24 相关组件根据 VLC 所适用的许可证条款提供。  
