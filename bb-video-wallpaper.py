@@ -1085,7 +1085,7 @@ class Wallpaper(QWidget):
 
 class Tray:
 
-    def __init__(self, app: "QApplication") -> None:
+    def __init__(self, app: QApplication) -> None:
 
         self.app = app
         self.wallpapers: dict[str, Wallpaper] = {}
@@ -1381,7 +1381,7 @@ class Tray:
             action.setEnabled(bool(has_video if state == "pause" else wallpapers))
 
 
-    def get_wallpapers(self, screen_id: str | None = None) -> tuple["Wallpaper", ...]:
+    def get_wallpapers(self, screen_id: str | None = None) -> tuple[Wallpaper, ...]:
 
         if self.is_exiting:
             return ()
@@ -1452,7 +1452,7 @@ class Tray:
             self.options_language_menu.addAction(action)
 
 
-    def refresh_screen_menu(self, screen_id: str, menu: "MediaPreviewMenu") -> None:
+    def refresh_screen_menu(self, screen_id: str, menu: MediaPreviewMenu) -> None:
         """
         重新建立指定螢幕的操作與媒體選單
         """
@@ -1474,7 +1474,7 @@ class Tray:
             self.add_follow_menu(menu, screen_id)
 
 
-    def add_follow_menu(self, menu: "QMenu", screen_id: str) -> None:
+    def add_follow_menu(self, menu: QMenu, screen_id: str) -> None:
 
         follow_menu = menu.addMenu(tr("follow_monitor"))
         sources = self.follow_controller.graph.sources
@@ -1494,7 +1494,7 @@ class Tray:
             )
 
 
-    def add_playback_actions(self, menu: "QMenu", screen_id: str | None = None) -> tuple[tuple[QAction, str], ...]:
+    def add_playback_actions(self, menu: QMenu, screen_id: str | None = None) -> tuple[tuple[QAction, str], ...]:
         """
         新增播放控制項目並回傳動作與狀態的對應
         """
@@ -1528,7 +1528,7 @@ class Tray:
         self.add_media_menu_actions(self.media_menu, screen_id)
 
 
-    def add_media_menu_actions(self, menu: "MediaPreviewMenu", screen_id: str | None) -> None:
+    def add_media_menu_actions(self, menu: MediaPreviewMenu, screen_id: str | None) -> None:
         """
         新增最近紀錄與媒體清單項目
         """
@@ -1572,7 +1572,7 @@ class Tray:
         self,
         media_path: Path,
         screen_id: str | None = None,
-        menu: "MediaPreviewMenu | None" = None
+        menu: MediaPreviewMenu | None = None
     ) -> None:
         """
         新增媒體選單項目
@@ -1689,7 +1689,7 @@ class Tray:
             self.cancel_import_action.setEnabled(False)
 
 
-    def finish_import(self, expected_worker: "MediaImportThread | None" = None) -> None:
+    def finish_import(self, expected_worker: MediaImportThread | None = None) -> None:
 
         worker = self.import_thread
 
