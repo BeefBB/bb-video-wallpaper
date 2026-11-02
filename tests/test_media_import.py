@@ -60,14 +60,14 @@ class MediaImportTests(unittest.TestCase):
 
     def test_space_boundary_rejects_before_copy_and_accepts_exact_reserve(self):
         """
-        容量不足時在建立暫存檔前拒絕, 剛好保留 100 MB 時可完成匯入
+        容量不足時在建立暫存檔前拒絕, 剛好保留 200 MB 時可完成匯入
         """
 
         source = self.source_dir / "sample.mp4"
         contents = b"new"
         source.write_bytes(contents)
-        # 來源檔案大小加上 100 MB 保留空間
-        self.disk_usage.return_value.free = len(contents) + 100 * 1024 * 1024 - 1
+        # 來源檔案大小加上 200 MB 保留空間
+        self.disk_usage.return_value.free = len(contents) + 200 * 1024 * 1024 - 1
 
         with mock.patch.object(tempfile, "NamedTemporaryFile") as temporary_file:
             with self.assertRaises(OSError):

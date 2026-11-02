@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 import subprocess
 import sys
+from typing import TYPE_CHECKING
 
 import win32gui
 import win32con
@@ -555,6 +556,9 @@ CLSID_VIRTUAL_DESKTOP_MANAGER = ComGUID("{AA509086-5CA9-4C25-8F95-589D3C07B48A}"
 
 class IVirtualDesktopManager(IUnknown):
 
+    if TYPE_CHECKING:
+        def IsWindowOnCurrentVirtualDesktop(self, top_level_window: int) -> int: ...
+
     _iid_ = ComGUID("{A5CD92FF-29BE-454C-8D04-D82879FB3F1B}")
     _methods_ = [
         COMMETHOD(
@@ -586,7 +590,7 @@ def is_on_current_desktop(hwnd: int) -> bool:
                 interface=IVirtualDesktopManager
             )
 
-        return bool(_virtual_desktop_manager.IsWindowOnCurrentVirtualDesktop(hwnd))  # type: ignore
+        return bool(_virtual_desktop_manager.IsWindowOnCurrentVirtualDesktop(hwnd))
 
     except Exception:
         return False

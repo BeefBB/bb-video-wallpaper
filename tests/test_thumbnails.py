@@ -18,7 +18,7 @@ import unittest
 from unittest import mock
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QImage
+from PySide6.QtGui import QImage, QImageWriter
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -220,6 +220,30 @@ class ThumbnailTests(unittest.TestCase):
         self.assertEqual(unrelated.read_bytes(), b"keep")
         self.assertEqual(malformed.read_bytes(), b"keep")
         self.assertTrue(directory.is_dir())
+
+
+    def test_write_failure_preserves_cache_and_removes_temp(self):
+        """
+        寫入暫存檔後失敗時保留舊快取並關閉及清除暫存檔
+        """
+
+        source = self.media_dir / "sample.bmp"
+        self.save_image(source, Qt.GlobalColor.red)
+        previous = self.thumbnail(source)
+        previous_content = previous.read_bytes()
+        self.save_image(source, Qt.GlobalColor.blue)
+        original_write = QImageWriter.write
+
+        def fail_after_write(writer, image):
+            self.assertTrue(original_write(writer, image))
+            return False
+
+        with mock.patch.object(QImageWriter, "write", fail_after_write):
+            with self.assertRaisesRegex(OSError, "無法儲存縮圖"):
+                self.thumbnail(source)
+
+        self.assertEqual(previous.read_bytes(), previous_content)
+        self.assertEqual(list(self.thumbnail_dir.iterdir()), [previous])
 
 
     def test_replace_failure_preserves_cache_and_removes_temp(self):

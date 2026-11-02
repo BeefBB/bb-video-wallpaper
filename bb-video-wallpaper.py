@@ -7,7 +7,7 @@ from pathlib import Path
 import time
 import logging
 from logging.handlers import RotatingFileHandler
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     import vlc
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 from win32con import WM_DESTROY
 
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog
-from PySide6.QtCore import QEventLoop, Qt, QTimer, QThread, Slot, Signal
+from PySide6.QtCore import QByteArray, QEventLoop, Qt, QTimer, QThread, Slot, Signal
 from PySide6.QtGui import QAction, QIcon, QFont, QScreen
 
 import bb_image_display
@@ -283,7 +283,7 @@ class DesktopEventWindow(QWidget):
             raise
 
 
-    def nativeEvent(self, eventType, message) -> tuple[bool, int]:
+    def nativeEvent(self, eventType: QByteArray | bytes | bytearray | memoryview, message: int) -> tuple[bool, int]:
 
         if self.taskbar_created_message and eventType in (b"windows_generic_MSG", "windows_generic_MSG"):
             msg = wintypes.MSG.from_address(int(message))
@@ -292,7 +292,7 @@ class DesktopEventWindow(QWidget):
                 self.taskbar_created.emit()
                 return True, 0
 
-        return super().nativeEvent(eventType, message)  # type: ignore
+        return cast(tuple[bool, int], super().nativeEvent(eventType, message))
 
 
 class Wallpaper(QWidget):
@@ -407,12 +407,17 @@ class Wallpaper(QWidget):
 
 
         # VLC 播放器物件
-        self.instance_vlc = vlc.Instance(
+        instance_vlc = vlc.Instance(
             "--no-video-title-show",
             "--input-repeat=65535",
             "--no-audio"
         )
-        self.instance_vlc_player = self.instance_vlc.media_player_new()  # type: ignore
+
+        if instance_vlc is None:
+            raise RuntimeError("無法建立 VLC 實例")
+
+        self.instance_vlc = instance_vlc
+        self.instance_vlc_player = self.instance_vlc.media_player_new()
 
         # 圖片顯示物件
         # 圖片共用主程式的 QApplication 與桌布 HWND
@@ -424,7 +429,7 @@ class Wallpaper(QWidget):
 
         self.player_events = self.instance_vlc_player.event_manager()
         self.player_events.event_attach(
-            vlc.EventType.MediaPlayerPlaying,  # type: ignore
+            getattr(vlc.EventType, "MediaPlayerPlaying"),
             lambda event: self.playback_started.emit()
         )
 
@@ -471,7 +476,7 @@ class Wallpaper(QWidget):
             logger.exception("建立工作列重建通知視窗失敗")
 
 
-    def nativeEvent(self, eventType, message) -> tuple[bool, int]:
+    def nativeEvent(self, eventType: QByteArray | bytes | bytearray | memoryview, message: int) -> tuple[bool, int]:
         """
         處理原生 Windows 訊息迴圈
         """
@@ -496,7 +501,7 @@ class Wallpaper(QWidget):
                 return True, 0
 
 
-        return super().nativeEvent(eventType, message)  # type: ignore
+        return cast(tuple[bool, int], super().nativeEvent(eventType, message))
 
 
     def is_image(self) -> bool:
@@ -898,7 +903,7 @@ class Wallpaper(QWidget):
 
         if not is_image:
 
-            media = self.instance_vlc.media_new(str(path))  # type: ignore
+            media = self.instance_vlc.media_new(str(path))
 
             try:
                 self.instance_vlc_player.set_media(media)
@@ -1055,7 +1060,7 @@ class Wallpaper(QWidget):
             ("停止自動暫停計時器", self.check_auto_pause_timer.stop),
             ("停止全螢幕偵測等待", self.fullscreen_detection_timer.stop),
             ("解除螢幕訊號", lambda: self.target_screen.geometryChanged.disconnect(self.on_screen_changed)),
-            ("解除 VLC 回呼", lambda: self.player_events.event_detach(vlc.EventType.MediaPlayerPlaying)),  # type: ignore
+            ("解除 VLC 回呼", lambda: self.player_events.event_detach(getattr(vlc.EventType, "MediaPlayerPlaying"))),
             ("解除進度恢復訊號", lambda: self.playback_started.disconnect(self.apply_pending_reattach_time)),
             ("解除暫停恢復訊號", lambda: self.playback_started.disconnect(self.apply_pending_pause)),
         ]
@@ -1075,7 +1080,7 @@ class Wallpaper(QWidget):
             ("釋放圖片物件", self.instance_image.deleteLater),
             ("解除影片目標視窗", lambda: self.instance_vlc_player.set_hwnd(0)),
             ("釋放 VLC 播放器", self.instance_vlc_player.release),
-            ("釋放 VLC 實例", self.instance_vlc.release),  # type: ignore
+            ("釋放 VLC 實例", self.instance_vlc.release),
             ("隱藏桌布視窗", self.hide),
             ("釋放桌布視窗", lambda: self.destroy(True, True)),
         ])
