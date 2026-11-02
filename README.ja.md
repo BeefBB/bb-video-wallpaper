@@ -55,9 +55,12 @@ bb-video-wallpaper/
  │   ├─ libvlccore.dll
  │   └─ ...
  ├─ bb-video-wallpaper.py
+ ├─ bb_image_display.py
  ├─ config.py
  ├─ media_import.py
  ├─ media_preview.py
+ ├─ playback.py
+ ├─ screen_follow.py
  ├─ windows_integration.py
  ├─ thumbnails.py
  ├─ libvlc.dll
