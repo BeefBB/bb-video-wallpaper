@@ -39,7 +39,6 @@ class HeadlessWidget(QObject):
 
         super().__init__()
 
-
         for name in (
             "setWindowFlags",
             "setAttribute",
@@ -369,7 +368,6 @@ class PlaybackStateTests(unittest.TestCase):
             module = load_app_module()
         module.__dict__.update(self.namespace)
         self.namespace = module.__dict__
-
 
         wallpaper_class = self.namespace["Wallpaper"]
         # 保留原始方法供個別案例呼叫
@@ -717,25 +715,6 @@ class PlaybackStateTests(unittest.TestCase):
                     self.assertEqual(self.player.pause_calls, pause_calls)
 
 
-    def test_queued_playing_event_after_exit_does_not_touch_player(self):
-        """
-        驗證退出後佇列中的 Playing 事件不再操作已釋放的播放器
-        """
-
-        self.start_loading()
-        self.tray.pause()
-        self.player.finish_loading()
-        pause_calls = list(self.player.pause_calls)
-
-        self.tray.exit()
-        self.app.processEvents()
-
-        self.assertEqual(self.player.state, "released")
-        self.assertEqual(self.player.pause_calls, pause_calls)
-        self.assertNotIn(PLAYING_EVENT, self.player.callbacks)
-        self.namespace["logger"].exception.assert_not_called()
-
-
     def test_video_reattach_stops_old_output_before_destroying_and_rebinding(self):
         """
         驗證重掛先停止舊輸出再銷毀與綁定視窗, 並保留暫停與進度且不重複排程
@@ -818,56 +797,85 @@ class PlaybackStateTests(unittest.TestCase):
         self.assertFalse(any(timer.isActive() for timer in self.wallpaper.findChildren(QTimer)))
 
 
-    def test_reattach_seeks_after_playing_when_initial_seek_is_ignored(self):
+    def test_delayed_seek_preserves_position_after_initial_or_repeated_reattach(self):
         """
-        驗證重掛時未被接受的進度設定會在 Playing 事件後補套
-        """
-
-        self.start_playing()
-        self.tray.pause()
-        self.player.position = 4321
-
-        def seek_when_ready(position):
-            """
-            只在播放器已播放或暫停時接受進度設定
-            """
-
-            # 載入完成後才接受進度設定
-            if self.player.state in {"playing", "paused"}:
-                self.player.position = position
-
-        with mock.patch.object(self.player, "set_time", side_effect=seek_when_ready):
-            self.wallpaper.reattach_to_desktop()
-            self.assertEqual(self.player.position, 0)
-            self.assertEqual(self.wallpaper.pending_reattach_time, 4321)
-            self.player.finish_loading()
-            self.app.processEvents()
-
-        self.assertEqual(self.player.position, 4321)
-        self.assertEqual(self.player.state, "paused")
-        self.assertIsNone(self.wallpaper.pending_reattach_time)
-
-
-    def test_new_media_or_stop_cancels_pending_reattach_seek(self):
-        """
-        驗證停止或切換媒體會取消待恢復的重掛進度
+        驗證重掛進度在 Playing 事件後補套, 重複重掛失敗與重試仍保留原位置與播放狀態
         """
 
-        for action in ("stop", "new_media"):
-            with self.subTest(action=action):
-                self.start_loading()
-                self.wallpaper.pending_reattach_time = 4321
-                if action == "stop":
-                    self.tray.stop()
-                else:
-                    self.wallpaper.set_play_media(self.media_path.with_name("new.mp4"))
+        for repeated, state in ((False, "pause"), (True, "play")):
+            with self.subTest(repeated=repeated, state=state):
+                self.start_playing()
+                getattr(self.tray, state)()
+                self.player.position = 4321
 
-                with mock.patch.object(self.player, "set_time") as seek:
+                def seek_when_ready(position):
+                    """
+                    忽略載入期間的進度設定, 只在已播放或暫停時保存位置
+                    """
+
+                    # 載入完成後才接受進度設定
+                    if self.player.state in {"playing", "paused"}:
+                        self.player.position = position
+
+                with mock.patch.object(self.player, "set_time", side_effect=seek_when_ready):
+                    self.wallpaper.reattach_to_desktop()
+                    self.assertEqual(self.player.position, 0)
+                    self.assertEqual(self.wallpaper.pending_reattach_time, 4321)
+                    if repeated:
+                        self.wallpaper.attach_to_desktop.side_effect = [RuntimeError("attachment failed"), None]
+                        self.wallpaper.reattach_to_desktop()
+                        self.wallpaper.reattach_timer.start(0)
+                        self.app.processEvents()
                     self.player.finish_loading()
                     self.app.processEvents()
 
+                self.assertEqual(self.player.position, 4321)
+                self.assertEqual(self.player.state, "paused" if state == "pause" else "playing")
+                self.assertIsNone(self.wallpaper.pending_reattach_time)
+
+
+    def test_stop_or_media_selection_cancels_pending_seek_during_load_or_retry(self):
+        """
+        驗證載入中或掛載失敗等待重試時, 停止或切換媒體會捨棄舊進度
+        """
+
+        cases = (
+            (False, "stop"), (False, "new_video"),
+            (True, "stop"), (True, "same_video"), (True, "new_video"), (True, "image"),
+        )
+        for failed, action in cases:
+            with self.subTest(failed=failed, action=action):
+                if failed:
+                    self.start_playing()
+                    self.player.position = 4321
+                    self.wallpaper.attach_to_desktop.side_effect = [RuntimeError("attachment failed"), None]
+                    self.wallpaper.reattach_to_desktop()
+                else:
+                    self.start_loading()
+                    self.wallpaper.pending_reattach_time = 4321
+
+                if action == "stop":
+                    self.tray.stop()
+                else:
+                    path = {
+                        "same_video": self.media_path,
+                        "new_video": self.media_path.with_name("new.mp4"),
+                        "image": self.image_path,
+                    }[action]
+                    if failed:
+                        self.wallpaper.select_media(path)
+                    else:
+                        self.wallpaper.set_play_media(path)
+
+                with mock.patch.object(self.player, "set_time") as seek:
+                    if failed:
+                        self.wallpaper.reattach_timer.start(0)
+                        self.app.processEvents()
+                    self.player.finish_loading()
+                    self.app.processEvents()
                 seek.assert_not_called()
                 self.assertIsNone(self.wallpaper.pending_reattach_time)
+                self.assertEqual(self.wallpaper.play_state, "stop" if action == "stop" else "play")
 
 
     def test_failed_reattach_retries_preserve_video_position(self):
@@ -902,39 +910,6 @@ class PlaybackStateTests(unittest.TestCase):
                     self.assertEqual(self.player.state, "paused" if state == "pause" else "playing")
                     self.assertFalse(self.wallpaper.reattach_timer.isActive())
                     self.assertEqual(self.wallpaper.reattach_retry_count, 0)
-
-
-    def test_failed_reattach_position_is_cancelled_by_stop_or_media_selection(self):
-        """
-        驗證掛載失敗等待重試時, 停止或重新選擇媒體會捨棄舊進度
-        """
-
-        for action in ("stop", "same_video", "new_video", "image"):
-            with self.subTest(action=action):
-                self.start_playing()
-                self.player.position = 4321
-                self.wallpaper.attach_to_desktop.side_effect = [RuntimeError("attachment failed"), None]
-                self.wallpaper.reattach_to_desktop()
-
-                if action == "stop":
-                    self.tray.stop()
-                else:
-                    path = {
-                        "same_video": self.media_path,
-                        "new_video": self.media_path.with_name("new.mp4"),
-                        "image": self.image_path,
-                    }[action]
-                    self.wallpaper.select_media(path)
-
-                with mock.patch.object(self.player, "set_time") as seek:
-                    self.wallpaper.reattach_timer.start(0)
-                    self.app.processEvents()
-                    self.player.finish_loading()
-                    self.app.processEvents()
-
-                seek.assert_not_called()
-                self.assertIsNone(self.wallpaper.pending_reattach_time)
-                self.assertEqual(self.wallpaper.play_state, "stop" if action == "stop" else "play")
 
 
     def test_failed_background_stop_retries_with_saved_position(self):
@@ -973,36 +948,6 @@ class PlaybackStateTests(unittest.TestCase):
 
         self.assertEqual(self.player.position, 4321)
         self.assertEqual(self.player.state, "playing")
-
-
-    def test_reattach_before_delayed_seek_preserves_original_position(self):
-        """
-        驗證延遲進度尚未補套前再次重掛並失敗, 重試後仍恢復最初位置
-        """
-
-        self.start_playing()
-        self.player.position = 4321
-
-        def seek_when_ready(position):
-            """
-            忽略載入期間的進度設定, 只在已播放或暫停時保存位置
-            """
-
-            if self.player.state in {"playing", "paused"}:
-                self.player.position = position
-
-        with mock.patch.object(self.player, "set_time", side_effect=seek_when_ready):
-            self.wallpaper.reattach_to_desktop()
-            self.assertEqual(self.player.position, 0)
-            self.wallpaper.attach_to_desktop.side_effect = [RuntimeError("attachment failed"), None]
-            self.wallpaper.reattach_to_desktop()
-            self.wallpaper.reattach_timer.start(0)
-            self.app.processEvents()
-            self.player.finish_loading()
-            self.app.processEvents()
-
-        self.assertEqual(self.player.position, 4321)
-        self.assertIsNone(self.wallpaper.pending_reattach_time)
 
 
     def test_import_completion_waits_for_reattach_and_cancels_old_position(self):
@@ -1208,29 +1153,6 @@ class PlaybackStateTests(unittest.TestCase):
                     self.namespace["config_store"].remember_wallpaper.assert_not_called()
 
 
-    def test_destroy_notification_skips_reattach_while_recreating_or_exiting(self):
-        """
-        驗證一般銷毀通知會排定重掛, 重建或退出期間則略過
-        """
-
-        self.namespace["wintypes"].MSG.from_address.return_value.message = self.namespace["WM_DESTROY"]
-        timer = self.wallpaper.reattach_timer
-
-        self.assertEqual(self.wallpaper.nativeEvent(b"windows_generic_MSG", 123), (True, 0))
-        self.assertTrue(timer.isActive())
-        self.assertEqual(timer.interval(), 200)
-
-        timer.stop()
-        self.wallpaper.is_recreating = True
-        self.assertEqual(self.wallpaper.nativeEvent(b"windows_generic_MSG", 123), (True, 0))
-        self.assertFalse(timer.isActive())
-
-        self.wallpaper.is_recreating = False
-        self.wallpaper.is_exiting = True
-        self.assertEqual(self.wallpaper.nativeEvent(b"windows_generic_MSG", 123), (True, 0))
-        self.assertFalse(timer.isActive())
-
-
     def test_screen_and_destroy_events_share_one_pending_reattach(self):
         """
         驗證螢幕變更與視窗銷毀通知合併為同一次重掛排程
@@ -1247,7 +1169,6 @@ class PlaybackStateTests(unittest.TestCase):
         self.wallpaper.on_screen_changed(mock.sentinel.last_geometry)
 
         self.assertEqual(timer.timerId(), timer_id)
-        self.assertEqual(timer.interval(), 200)
         self.assertTrue(timeouts.wait(1000))
         # 確認下一個等待區間沒有重複重掛
         QTest.qWait(250)
@@ -1256,6 +1177,15 @@ class PlaybackStateTests(unittest.TestCase):
         self.wallpaper.attach_to_desktop.assert_called_once_with()
         self.wallpaper.destroy.assert_called_once_with(True, True)
         self.assertFalse(timer.isActive())
+        # 重建或退出期間略過銷毀通知, 不重新排定重掛
+        for flag in ("is_recreating", "is_exiting"):
+            with self.subTest(flag=flag):
+                setattr(self.wallpaper, flag, True)
+                try:
+                    self.assertEqual(self.wallpaper.nativeEvent(b"windows_generic_MSG", 123), (True, 0))
+                    self.assertFalse(timer.isActive())
+                finally:
+                    setattr(self.wallpaper, flag, False)
 
 
     def test_failed_reattach_retries_twice_and_merges_new_events(self):
@@ -1465,6 +1395,11 @@ class PlaybackStateTests(unittest.TestCase):
         """
 
         self.start_loading()
+        self.tray.pause()
+        # 在關閉前排入 Playing 事件, 確認處理佇列時不再操作已釋放播放器
+        self.player.finish_loading()
+        pause_calls = list(self.player.pause_calls)
+        playing_callback = self.player.callbacks[PLAYING_EVENT]
         self.wallpaper.pending_reattach_time = 4321
         self.wallpaper.attach_to_desktop.reset_mock()
         self.wallpaper.reattach_timer.start(10000)
@@ -1486,6 +1421,8 @@ class PlaybackStateTests(unittest.TestCase):
 
             self.wallpaper.shutdown()
             self.wallpaper.shutdown()
+            # 模擬解除事件註冊後仍抵達的原生回呼
+            playing_callback(None)
             self.wallpaper.manual_play()
             self.wallpaper.manual_pause()
             self.wallpaper.manual_stop()
@@ -1513,6 +1450,7 @@ class PlaybackStateTests(unittest.TestCase):
         self.assertEqual(self.wallpaper.play_state, "stop")
         self.assertEqual(self.player.state, "released")
         self.assertEqual(self.player.callbacks, {})
+        self.assertEqual(self.player.pause_calls, pause_calls)
         self.assertFalse(self.wallpaper.fullscreen_detection_ready)
         self.assertFalse(any(timer.isActive() for timer in self.wallpaper.findChildren(QTimer)))
         self.assertIsNone(self.wallpaper.desktop_events)

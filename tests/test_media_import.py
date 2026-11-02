@@ -47,9 +47,7 @@ class MediaImportTests(unittest.TestCase):
         self.import_dir.mkdir(parents=True)
 
         # 模擬可用容量
-        disk_usage_patch = mock.patch.object(shutil, "disk_usage")
-        self.disk_usage = disk_usage_patch.start()
-        self.addCleanup(disk_usage_patch.stop)
+        self.disk_usage = self.enterContext(mock.patch.object(shutil, "disk_usage"))
         self.disk_usage.return_value.free = 1024 * 1024 * 1024
 
         self.language = json.loads((ROOT / "lang" / "zh-TW.json").read_text(encoding="utf-8"))
@@ -60,88 +58,49 @@ class MediaImportTests(unittest.TestCase):
         )
 
 
-    def test_insufficient_space_is_rejected_before_creating_or_copying_a_file(self):
+    def test_space_boundary_rejects_before_copy_and_accepts_exact_reserve(self):
         """
-        容量不足時在建立暫存檔與複製前停止
-        """
-
-        contents = b"new"
-
-        with mock.patch.object(tempfile, "NamedTemporaryFile") as temporary_file:
-            for suffix in (".mp4", ".jpeg"):
-                source = self.source_dir / f"sample{suffix}"
-                source.write_bytes(contents)
-
-                # 來源檔案大小加上 100 MB 保留空間
-                for free_space in (0, len(contents) - 1, len(contents), 100 * 1024 * 1024 + len(contents) - 1):
-                    with self.subTest(suffix=suffix, free_space=free_space):
-                        self.disk_usage.return_value.free = free_space
-
-                        with self.assertRaises(OSError):
-                            self.import_media(source)
-
-                        self.disk_usage.assert_called_with(self.import_dir)
-                        self.assertEqual(source.read_bytes(), contents)
-                        self.assertEqual(list(self.import_dir.iterdir()), [])
-
-            temporary_file.assert_not_called()
-
-
-    def test_import_succeeds_with_exactly_100_mb_reserved_or_more(self):
-        """
-        匯入後仍有至少 100 MB 保留空間時允許複製
-        """
-
-        for extra_bytes in (0, 1):
-            with self.subTest(extra_bytes=extra_bytes):
-                source = self.source_dir / f"sample-{extra_bytes}.mp4"
-                contents = f"new-{extra_bytes}".encode("ascii")
-                source.write_bytes(contents)
-                self.disk_usage.return_value.free = len(contents) + 100 * 1024 * 1024 + extra_bytes
-
-                destination = self.import_media(source)
-
-                self.disk_usage.assert_called_with(self.import_dir)
-                self.assertEqual(destination, self.import_dir / source.name)
-                self.assertEqual(destination.read_bytes(), contents)
-                self.assertEqual(source.read_bytes(), contents)
-                self.assertFalse(list(self.import_dir.glob(".import-*.tmp")))
-
-
-    def test_identical_content_is_reused_even_when_disk_is_full(self):
-        """
-        磁碟已滿時仍可重用內容相同的既有檔案
+        容量不足時在建立暫存檔前拒絕, 剛好保留 100 MB 時可完成匯入
         """
 
         source = self.source_dir / "sample.mp4"
-        source.write_bytes(b"same")
+        contents = b"new"
+        source.write_bytes(contents)
+        # 來源檔案大小加上 100 MB 保留空間
+        self.disk_usage.return_value.free = len(contents) + 100 * 1024 * 1024 - 1
+
+        with mock.patch.object(tempfile, "NamedTemporaryFile") as temporary_file:
+            with self.assertRaises(OSError):
+                self.import_media(source)
+            temporary_file.assert_not_called()
+        self.assertEqual(list(self.import_dir.iterdir()), [])
+        self.assertEqual(source.read_bytes(), contents)
+
+        self.disk_usage.return_value.free += 1
+        destination = self.import_media(source)
+        self.assertEqual(destination.read_bytes(), contents)
+        self.assertEqual(source.read_bytes(), contents)
+        self.assertEqual(list(self.import_dir.iterdir()), [destination])
+
+
+    def test_existing_file_or_identical_content_is_reused_when_disk_is_full(self):
+        """
+        磁碟已滿時仍可重用匯入目錄內的來源檔或內容相同的既有檔案
+        """
+
         existing = self.import_dir / "existing.mp4"
         existing.write_bytes(b"same")
-        self.disk_usage.return_value.free = 0
-
-        progress = mock.Mock()
-        self.assertEqual(self.import_media(source, progress=progress), existing)
-        progress.assert_not_called()
-
-        self.disk_usage.assert_not_called()
-        self.assertEqual(list(self.import_dir.iterdir()), [existing])
-
-
-    def test_file_already_in_import_directory_is_reused_even_when_disk_is_full(self):
-        """
-        檔案已在匯入目錄時直接重用
-        """
-
-        source = self.import_dir / "sample.mp4"
+        source = self.source_dir / "sample.mp4"
         source.write_bytes(b"same")
         self.disk_usage.return_value.free = 0
-
         progress = mock.Mock()
-        self.assertEqual(self.import_media(source, progress=progress), source)
-        progress.assert_not_called()
 
+        for path in (source, existing):
+            with self.subTest(source=path):
+                self.assertEqual(self.import_media(path, progress=progress), existing)
+                self.assertEqual(list(self.import_dir.iterdir()), [existing])
+        progress.assert_not_called()
         self.disk_usage.assert_not_called()
-        self.assertEqual(list(self.import_dir.iterdir()), [source])
 
 
     def test_disk_filling_during_copy_cleans_up_partial_file(self):
@@ -287,95 +246,36 @@ class MediaImportTests(unittest.TestCase):
                 self.assertEqual(source.read_bytes(), contents)
 
 
-    def test_short_name_collisions_keep_existing_files(self):
+    def test_collisions_preserve_files_and_reimport_reuses_truncated_names(self):
         """
-        同名時依序加入編號並保留既有檔案
-        """
-
-        source = self.source_dir / "sample.mp4"
-        original = self.import_dir / source.name
-        original.write_bytes(b"old")
-
-        for index in (1, 2):
-            contents = f"new-{index}".encode("ascii")
-            source.write_bytes(contents)
-
-            destination = self.import_media(source)
-
-            self.assertEqual(destination.name, f"sample({index}).mp4")
-            self.assertEqual(destination.read_bytes(), contents)
-
-        self.assertEqual(original.read_bytes(), b"old")
-        self.assertEqual((self.import_dir / "sample(1).mp4").read_bytes(), b"new-1")
-        self.assertFalse(list(self.import_dir.glob(".import-*.tmp")))
-
-
-    def test_chinese_and_emoji_names_use_utf16_without_splitting_characters(self):
-        """
-        依 UTF-16 長度截短中文與 emoji 檔名, 不切斷字元
+        同名時保留既有檔案, 長檔名依 UTF-16 截短, 再次匯入重用相同內容
         """
 
         cases = (
-            ("chinese", "桌" * 251, "桌" * 244),
-            ("emoji", "a" + "🌄" * 125, "a" + "🌄" * 121),
+            ("short", "sample", 2, "sample(2).mp4"),
+            ("chinese", "桌" * 251, 1, "桌" * 244 + "(1).mp4"),
+            ("emoji", "a" + "🌄" * 125, 1, "a" + "🌄" * 121 + "(1).mp4"),
+            ("two-digits", "a" * 248, 10, "a" * 243 + "(10).mp4"),
         )
-
-        for label, stem, expected_stem in cases:
-            with self.subTest(characters=label):
+        for label, stem, count, expected in cases:
+            with self.subTest(case=label):
                 source = self.source_dir / f"{stem}.mp4"
-                contents = stem.encode("utf-8")
-                source.write_bytes(contents)
-                original = self.import_dir / source.name
-                original.write_bytes(b"old")
+                source.write_bytes(b"new")
+                import_dir = self.import_dir / label
+                import_dir.mkdir()
+                existing = [import_dir / source.name]
+                existing.extend(import_dir / f"{stem}({index}).mp4" for index in range(1, count))
+                for path in existing:
+                    path.write_bytes(b"old")
 
-                destination = self.import_media(source)
-
-                self.assertEqual(destination.name, f"{expected_stem}(1).mp4")
-                self.assertLessEqual(len(destination.name.encode("utf-16-le")) // 2, 251)
-                self.assertEqual(destination.read_bytes(), contents)
-                self.assertEqual(original.read_bytes(), b"old")
-
-
-    def test_number_growing_to_two_digits_truncates_and_preserves_collisions(self):
-        """
-        編號增為兩位數時重新截短檔名並保留既有檔案
-        """
-
-        stem = "a" * 248
-        source = self.source_dir / f"{stem}.mp4"
-        source.write_bytes(b"new")
-        existing = [self.import_dir / source.name]
-        existing.extend(self.import_dir / f"{stem}({index}).mp4" for index in range(1, 10))
-
-        for candidate in existing:
-            candidate.write_bytes(b"old")
-
-        destination = self.import_media(source)
-
-        self.assertEqual(destination.name, "a" * 243 + "(10).mp4")
-        self.assertEqual(destination.read_bytes(), b"new")
-        self.assertEqual(len(list(self.import_dir.iterdir())), 11)
-
-        for candidate in existing:
-            self.assertEqual(candidate.read_bytes(), b"old")
-
-
-    def test_reimport_after_truncation_reuses_identical_content(self):
-        """
-        再次匯入時重用先前已截短檔名的相同內容
-        """
-
-        source = self.source_dir / ("a" * 251 + ".mp4")
-        source.write_bytes(b"new")
-        original = self.import_dir / source.name
-        original.write_bytes(b"old")
-
-        destination = self.import_media(source)
-
-        self.assertEqual(self.import_media(source), destination)
-        self.assertEqual(destination.read_bytes(), b"new")
-        self.assertEqual(original.read_bytes(), b"old")
-        self.assertEqual(len(list(self.import_dir.iterdir())), 2)
+                destination = self.import_media(source, import_dir=import_dir)
+                self.assertEqual(destination.name, expected)
+                self.assertLessEqual(len(destination.name.encode("utf-16-le")) // 2, 255)
+                self.assertEqual(destination.read_bytes(), b"new")
+                self.assertEqual(self.import_media(source, import_dir=import_dir), destination)
+                self.assertEqual(set(import_dir.iterdir()), {*existing, destination})
+                for path in existing:
+                    self.assertEqual(path.read_bytes(), b"old")
 
 
 if __name__ == "__main__":

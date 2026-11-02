@@ -90,19 +90,18 @@ class ImageDisplayTests(unittest.TestCase):
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
-    def test_show_creates_child_and_hide_then_show_reuses_it(self):
+    def test_native_host_lifecycle_preserves_image_and_external_targets(self):
         """
-        顯示時建立原生子視窗, 隱藏後再顯示時重用
+        驗證圖片原生容器的顯示, 重綁與釋放, 保留圖片與外部目標視窗
         """
 
         self.display.set_image(self.image_path)
         window = self.display.window
         assert window is not None
-
         self.assertEqual(window._host_hwnd, 0)
         self.display.show()
-
         host = window._host_hwnd
+        image_key = window.image.cacheKey()
         self.assertEqual(win32gui.GetParent(host), int(self.target.winId()))
         style = win32gui.GetWindowLong(int(window.winId()), win32con.GWL_STYLE)
         self.assertTrue(style & win32con.WS_CHILD)
@@ -115,61 +114,32 @@ class ImageDisplayTests(unittest.TestCase):
         self.assertTrue(window.isVisible())
         self.assertEqual(window._host_hwnd, host)
 
-
-    def test_detach_and_rebind_preserves_image_and_target_windows(self):
-        """
-        解除綁定後可更換目標, 保留圖片與外部視窗
-        """
-
-        self.display.set_image(self.image_path)
-        self.display.show()
-        window = self.display.window
-        assert window is not None
-
-        image_key = window.image.cacheKey()
-        old_host = window._host_hwnd
-
+        # 解除綁定後可更換目標, 保留圖片與外部視窗
         self.display.set_hwnd(0)
-        self.assertFalse(win32gui.IsWindow(old_host))
+        self.assertFalse(win32gui.IsWindow(host))
         self.assertFalse(window.isVisible())
-        self.assertEqual(window.image.cacheKey(), image_key)
-
         replacement = self.create_target()
-        self.display.set_hwnd(int(replacement.winId()))
+        target_hwnd = int(replacement.winId())
+        self.display.set_hwnd(target_hwnd)
         self.display.show()
-
         self.assertIs(self.display.window, window)
         self.assertEqual(window.image.cacheKey(), image_key)
-        self.assertEqual(win32gui.GetParent(window._host_hwnd), int(replacement.winId()))
+        self.assertEqual(win32gui.GetParent(window._host_hwnd), target_hwnd)
         self.assertTrue(win32gui.IsWindow(int(self.target.winId())))
         self.assertTrue(window.isVisible())
 
-
-    def test_close_releases_image_host_and_keeps_target_for_next_image(self):
-        """
-        關閉時釋放圖片容器並保留目標供下次使用
-        """
-
-        self.display.set_image(self.image_path)
-        self.display.show()
-        window = self.display.window
-        assert window is not None
-
         host = window._host_hwnd
-        target_hwnd = int(self.target.winId())
+        # 關閉時釋放圖片容器並保留目標供下次使用
         self.display.close()
-
         self.assertFalse(win32gui.IsWindow(host))
         self.assertTrue(win32gui.IsWindow(target_hwnd))
         self.assertEqual(self.display.get_hwnd(), target_hwnd)
         self.assertIsNone(self.display.window)
         self.assertIsNone(self.display.current_image)
-
         self.display.set_image(self.image_path)
         self.display.show()
         window = self.display.window
         assert window is not None
-
         self.assertEqual(win32gui.GetParent(window._host_hwnd), target_hwnd)
 
 

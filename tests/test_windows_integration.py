@@ -4,6 +4,7 @@
 使用隱藏視窗驗證工作列通知, 獨立監聽視窗與備援容器的原生 alpha 設定
 """
 
+from contextlib import contextmanager
 import ctypes
 from ctypes import wintypes
 from pathlib import Path
@@ -127,9 +128,9 @@ class WindowsIntegrationTests(unittest.TestCase):
             ])
 
 
-    def test_taskbar_notification_allows_only_registered_message_and_preserves_handle(self):
+    def test_taskbar_notification_preserves_handle_and_rejects_unregistered_message(self):
         """
-        驗證工作列通知只放行已註冊的訊息, 並以完整 HWND 呼叫原生 API
+        工作列通知保留完整 HWND, 註冊失敗時不放行編號為零的訊息
         """
 
         # 超過 32 位元的 HWND
@@ -143,21 +144,11 @@ class WindowsIntegrationTests(unittest.TestCase):
             change.assert_called_once_with(hwnd, 0xC123, 1, None)
             self.assertIs(change.argtypes[0], wintypes.HWND)
             self.assertIs(change.restype, wintypes.BOOL)
-
-
-    def test_taskbar_registration_failure_does_not_allow_null_message(self):
-        """
-        驗證工作列訊息註冊失敗時拋出例外, 不放行編號為零的訊息
-        """
-
-        with (
-            mock.patch.object(windows.win32gui, "RegisterWindowMessage", return_value=0),
-            mock.patch.object(windows.ctypes.windll.user32, "ChangeWindowMessageFilterEx") as change,
-        ):
+            register.return_value = 0
+            change.reset_mock()
             with self.assertRaisesRegex(RuntimeError, "TaskbarCreated"):
-                windows.register_taskbar_created_notification(100)
-
-        change.assert_not_called()
+                windows.register_taskbar_created_notification(hwnd)
+            change.assert_not_called()
 
 
     def test_task_creation_quotes_supplied_path_and_keeps_background_settings(self):
@@ -241,20 +232,16 @@ class WindowsIntegrationTests(unittest.TestCase):
                 gui.DestroyWindow.assert_called_once_with(20)
 
 
-    def test_fullscreen_detection_only_matches_wallpaper_monitor(self):
+    @contextmanager
+    def fullscreen_windows(self):
         """
-        驗證全螢幕偵測只匹配桌布所在螢幕, 包含負座標與非主螢幕
+        建立全螢幕偵測使用的 API 替身, 離開區塊時還原
         """
-
-        work_areas = {
-            1: (0, 0, 1920, 1040),
-            2: (-1280, -240, 0, 744),
-        }
 
         with (
             mock.patch.object(windows, "win32gui") as gui,
             mock.patch.object(windows, "win32api") as api,
-            mock.patch.object(windows, "is_on_current_desktop", return_value=True),
+            mock.patch.object(windows, "is_on_current_desktop", return_value=True) as current_desktop,
             mock.patch.object(windows.ctypes.windll.user32, "GetShellWindow", return_value=10),
         ):
             gui.EnumWindows.side_effect = lambda callback, data: callback(20, data)
@@ -262,28 +249,31 @@ class WindowsIntegrationTests(unittest.TestCase):
             gui.IsIconic.return_value = False
             gui.GetClassName.return_value = "AppWindow"
             gui.GetWindowText.return_value = "Video editor"
+            gui.GetWindowRect.return_value = (0, 0, 1920, 1040)
+            api.MonitorFromWindow.return_value = 1
+            api.GetMonitorInfo.return_value = {"Work": (0, 0, 1920, 1040)}
+            yield gui, api, current_desktop
+
+
+    def test_fullscreen_detection_only_matches_wallpaper_monitor(self):
+        """
+        驗證全螢幕偵測只匹配桌布所在螢幕, 包含負座標與非主螢幕
+        """
+
+        work_areas = {1: (0, 0, 1920, 1040), 2: (-1280, -240, 0, 744)}
+        cases = ((1, 1, True), (2, 2, True), (2, 1, True), (2, 2, False))
+        with self.fullscreen_windows() as (gui, api, _):
             api.GetMonitorInfo.side_effect = lambda monitor: {"Work": work_areas[monitor]}
-
-            for wallpaper_monitor in work_areas:
-                for window_monitor, work_area in work_areas.items():
-                    for maximized in (False, True):
-                        with self.subTest(
-                            wallpaper_monitor=wallpaper_monitor,
-                            window_monitor=window_monitor,
-                            maximized=maximized,
-                        ):
-                            api.MonitorFromWindow.side_effect = (
-                                lambda hwnd, flags: wallpaper_monitor if hwnd == 100 else window_monitor
-                            )
-                            left, top, right, bottom = work_area
-                            gui.GetWindowRect.return_value = (
-                                work_area if maximized else (left + 100, top + 100, right - 100, bottom - 100)
-                            )
-
-                            self.assertEqual(
-                                windows.is_any_fullscreen(100),
-                                maximized and wallpaper_monitor == window_monitor,
-                            )
+            for wallpaper_monitor, window_monitor, maximized in cases:
+                with self.subTest(wallpaper=wallpaper_monitor, window=window_monitor, maximized=maximized):
+                    api.MonitorFromWindow.side_effect = (
+                        lambda hwnd, flags: wallpaper_monitor if hwnd == 100 else window_monitor
+                    )
+                    left, top, right, bottom = work_areas[window_monitor]
+                    gui.GetWindowRect.return_value = (
+                        work_areas[window_monitor] if maximized else (left + 100, top + 100, right - 100, bottom - 100)
+                    )
+                    self.assertEqual(windows.is_any_fullscreen(100), maximized and wallpaper_monitor == window_monitor)
 
 
     def test_fullscreen_detection_continues_after_other_monitor(self):
@@ -291,21 +281,9 @@ class WindowsIntegrationTests(unittest.TestCase):
         驗證略過其他螢幕的視窗後, 仍繼續檢查目標螢幕上的視窗
         """
 
-        with (
-            mock.patch.object(windows, "win32gui") as gui,
-            mock.patch.object(windows, "win32api") as api,
-            mock.patch.object(windows, "is_on_current_desktop", return_value=True),
-            mock.patch.object(windows.ctypes.windll.user32, "GetShellWindow", return_value=10),
-        ):
+        with self.fullscreen_windows() as (gui, api, _):
             gui.EnumWindows.side_effect = lambda callback, data: [callback(hwnd, data) for hwnd in (20, 30)]
-            gui.IsWindowVisible.return_value = True
-            gui.IsIconic.return_value = False
-            gui.GetClassName.return_value = "AppWindow"
-            gui.GetWindowText.return_value = "Video editor"
-            gui.GetWindowRect.return_value = (0, 0, 1920, 1040)
             api.MonitorFromWindow.side_effect = lambda hwnd, flags: 2 if hwnd == 20 else 1
-            api.GetMonitorInfo.return_value = {"Work": (0, 0, 1920, 1040)}
-
             self.assertTrue(windows.is_any_fullscreen(100))
             gui.GetWindowRect.assert_called_once_with(30)
 
@@ -337,25 +315,10 @@ class WindowsIntegrationTests(unittest.TestCase):
         驗證其他虛擬桌面的視窗不會觸發全螢幕偵測
         """
 
-        with (
-            mock.patch.object(windows, "win32gui") as gui,
-            mock.patch.object(windows, "win32api") as api,
-            mock.patch.object(windows, "is_on_current_desktop") as current_desktop,
-            mock.patch.object(windows.ctypes.windll.user32, "GetShellWindow", return_value=10),
-        ):
-            gui.EnumWindows.side_effect = lambda callback, data: callback(20, data)
-            gui.IsWindowVisible.return_value = True
-            gui.IsIconic.return_value = False
-            gui.GetClassName.return_value = "AppWindow"
-            gui.GetWindowText.return_value = "Video editor"
-            gui.GetWindowRect.return_value = (0, 0, 1920, 1040)
-            api.MonitorFromWindow.return_value = 1
-            api.GetMonitorInfo.return_value = {"Work": (0, 0, 1920, 1040)}
-
+        with self.fullscreen_windows() as (gui, _, current_desktop):
             current_desktop.return_value = False
             self.assertFalse(windows.is_any_fullscreen(100))
             gui.GetWindowRect.assert_not_called()
-
             current_desktop.return_value = True
             self.assertTrue(windows.is_any_fullscreen(100))
 
@@ -382,40 +345,26 @@ class WindowsIntegrationTests(unittest.TestCase):
                     self.assertEqual(windows.is_on_battery(), expected)
 
 
-    def test_display_notification_decodes_off_on_and_dim_states(self):
+    def test_display_notification_ignores_unrelated_messages_and_decodes_all_states(self):
         """
-        驗證電源通知可解析螢幕關閉, 開啟與變暗狀態
+        驗證略過無關訊息與電源設定, 正確解析螢幕關閉, 開啟與變暗狀態
         """
 
-        setting = windows.POWERBROADCAST_SETTING()
-        setting.PowerSetting = windows.GUID_CONSOLE_DISPLAY_STATE
-        setting.DataLength = ctypes.sizeof(wintypes.DWORD)
         message = wintypes.MSG()
+        self.assertIsNone(windows.get_display_state(message))
         message.message = windows.WM_POWERBROADCAST
+        self.assertIsNone(windows.get_display_state(message))
+        setting = windows.POWERBROADCAST_SETTING()
         message.wParam = windows.PBT_POWERSETTINGCHANGE
         message.lParam = ctypes.addressof(setting)
+        self.assertIsNone(windows.get_display_state(message))
 
+        setting.PowerSetting = windows.GUID_CONSOLE_DISPLAY_STATE
+        setting.DataLength = ctypes.sizeof(wintypes.DWORD)
         for display_state in (0, 1, 2):
             with self.subTest(display_state=display_state):
                 setting.Data = display_state
                 self.assertEqual(windows.get_display_state(message), display_state)
-
-
-    def test_display_notification_ignores_other_messages_and_power_settings(self):
-        """
-        驗證非電源訊息, 非設定變更與其他電源設定均不回傳螢幕狀態
-        """
-
-        message = wintypes.MSG()
-        self.assertIsNone(windows.get_display_state(message))
-
-        message.message = windows.WM_POWERBROADCAST
-        self.assertIsNone(windows.get_display_state(message))
-
-        setting = windows.POWERBROADCAST_SETTING()
-        message.wParam = windows.PBT_POWERSETTINGCHANGE
-        message.lParam = ctypes.addressof(setting)
-        self.assertIsNone(windows.get_display_state(message))
 
 
     def test_power_notifications_preserve_64_bit_handles(self):

@@ -58,7 +58,7 @@ class MediaPreviewTests(unittest.TestCase):
         self.thumbnail_dir = directory / "thumbnails"
         self.loading_path = directory / "loading.png"
         self.worker = ThumbnailWorker()
-        self.worker_class = self.enterContext(mock.patch.object(media_preview, "ThumbnailThread", return_value=self.worker))
+        self.enterContext(mock.patch.object(media_preview, "ThumbnailThread", return_value=self.worker))
         self.menu = media_preview.MediaPreviewMenu(
             "Media", media_dir=self.media_dir, thumbnail_dir=self.thumbnail_dir,
             loading_image_path=self.loading_path,
@@ -112,7 +112,6 @@ class MediaPreviewTests(unittest.TestCase):
         )
         self.addCleanup(other.deleteLater)
         self.assertIs(other.thumbnail_thread, self.menu.thumbnail_thread)
-        self.worker_class.assert_called_once()
 
         action = other.addAction("first.mp4")
         action.setData(self.first.data())

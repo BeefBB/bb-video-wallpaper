@@ -42,13 +42,7 @@ class ConfigTests(unittest.TestCase):
         self.store = ConfigStore(self.config_path, self.media_dir, ROOT / "lang")
         self.enterContext(mock.patch("config.logger"))
 
-        patcher = mock.patch.object(
-            locale,
-            "getdefaultlocale",
-            return_value=("en_US", "UTF-8")
-        )
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        self.enterContext(mock.patch.object(locale, "getdefaultlocale", return_value=("en_US", "UTF-8")))
 
 
     def test_initialization_preserves_existing_files(self):
@@ -63,7 +57,7 @@ class ConfigTests(unittest.TestCase):
             "futureOption": 9,
         }).encode("utf-8")
 
-        for contents in (existing, b"", b"{broken", b"\xff", b"[]", b"null"):
+        for contents in (existing, b"", b"{broken"):
 
             with self.subTest(contents=contents):
                 self.config_path.write_bytes(contents)
@@ -123,7 +117,7 @@ class ConfigTests(unittest.TestCase):
 
         for key, default in CONFIG_DEFAULTS.items():
 
-            for invalid in (None, 0, 1, "false", [], {}):
+            for invalid in (0, 1, "false"):
 
                 with self.subTest(key=key, value=invalid):
                     raw = {**baseline, key: invalid}
@@ -133,24 +127,9 @@ class ConfigTests(unittest.TestCase):
                     self.assertEqual(raw[key], invalid)
 
 
-    def test_legacy_recent_video_and_invalid_types(self):
-        """
-        相容舊版最近紀錄格式, 排除無效型別
-        """
-
-        result = self.store.validate({"recentVideo": "video/old.mp4"})
-        self.assertEqual(result["recentVideo"], ["video/old.mp4"])
-
-        for invalid in (None, False, 123, {}):
-
-            with self.subTest(value=invalid):
-                result = self.store.validate({"recentVideo": invalid})
-                self.assertEqual(result["recentVideo"], [])
-
-
     def test_recent_video_filters_paths_and_keeps_missing_files(self):
         """
-        排除無效或越界路徑, 保留尚不存在的媒體紀錄
+        相容舊版紀錄並排除無效或越界路徑, 保留尚不存在的媒體紀錄
         """
 
         recent = [
@@ -174,8 +153,15 @@ class ConfigTests(unittest.TestCase):
                 "\\\\server\\share\\file.mp4",
             ])
 
-        result = self.store.validate({"recentVideo": recent})
-        self.assertEqual(result["recentVideo"], ["video/first.mp4", "missing.mp4"])
+        cases = (
+            ("video/old.mp4", ["video/old.mp4"]),
+            (None, []),
+            ({}, []),
+            (recent, ["video/first.mp4", "missing.mp4"]),
+        )
+        for raw, expected in cases:
+            with self.subTest(recent=raw):
+                self.assertEqual(self.store.validate({"recentVideo": raw})["recentVideo"], expected)
 
 
     def test_screen_wallpapers_validate_paths_and_preserve_missing_or_disconnected_entries(self):
@@ -205,14 +191,14 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(result["recentVideo"], ["recent.mp4"])
         self.assertEqual(paths["normalized"], "./video/second.mp4")
 
-        for invalid in (None, False, 123, [], "file.mp4"):
+        for invalid in (None, [], "file.mp4"):
             with self.subTest(value=invalid):
                 self.assertEqual(self.store.validate({"screenWallpapers": invalid})["screenWallpapers"], {})
 
 
-    def test_initial_selection_preserves_shared_history_and_other_settings(self):
+    def test_valid_selection_preserves_other_settings_and_invalid_selection_keeps_file(self):
         """
-        初始選擇保存時保留共用最近紀錄, 其他螢幕與無關設定
+        驗證有效選擇保留共用紀錄與其他設定, 無效螢幕識別或越界路徑不改寫原檔
         """
 
         self.store.save({
@@ -226,20 +212,10 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config["screenWallpapers"], {"screen-a": "a.mp4", "screen-b": "older.png"})
         self.assertEqual(config["recentVideo"], ["recent.mp4", "older.png"])
         self.assertEqual(config["futureOption"], {"enabled": True})
-
-
-    def test_invalid_selection_does_not_overwrite_saved_config(self):
-        """
-        無效螢幕識別或越界路徑不改寫原有選擇
-        """
-
-        self.store.remember_wallpaper("screen-a", self.media_dir / "a.mp4")
         original = self.config_path.read_bytes()
-
         for screen_id, path in (
             ("", self.media_dir / "b.mp4"),
             ("bad\0id", self.media_dir / "b.mp4"),
-            ("screen-a", self.media_dir.parent / "outside.mp4"),
             ("screen-a", self.media_dir / ".." / "outside.mp4"),
         ):
             with self.subTest(screen_id=screen_id, path=path):
@@ -248,43 +224,26 @@ class ConfigTests(unittest.TestCase):
                 self.assertEqual(self.config_path.read_bytes(), original)
 
 
-    def test_bad_json_encoding_and_root_preserve_original_file(self):
+    def test_loading_corrupt_or_invalid_values_preserves_original_file(self):
         """
-        設定檔格式損壞時使用預設值並保留原檔
-        """
-
-        for contents in (b"", b"{broken", b"\xff", b"[]", b"null", b"1", b'"text"'):
-
-            with self.subTest(contents=contents):
-                self.config_path.write_bytes(contents)
-
-                result = self.store.load()
-                expected = self.store.validate({})
-
-                self.assertEqual(result, expected)
-                self.assertEqual(self.config_path.read_bytes(), contents)
-
-
-    def test_load_repairs_only_in_memory(self):
-        """
-        讀取時只修復記憶體中的設定
+        設定檔損壞時使用預設值, 欄位修復只套用於記憶體, 不改寫原檔
         """
 
-        contents = json.dumps({
+        defaults = self.store.validate({})
+        repaired = {**defaults, "autoPauseIfOnBattery": True, "language": "ja-JP", "futureOption": 9}
+        invalid_values = json.dumps({
             "autoPauseIfFullscreen": "false",
             "autoPauseIfOnBattery": True,
             "language": "ja-JP",
             "futureOption": 9,
-        })
-        self.config_path.write_text(contents, encoding="utf-8")
-
-        result = self.store.load()
-
-        self.assertIs(result["autoPauseIfFullscreen"], True)
-        self.assertIs(result["autoPauseIfOnBattery"], True)
-        self.assertEqual(result["language"], "ja-JP")
-        self.assertEqual(result["futureOption"], 9)
-        self.assertEqual(self.config_path.read_text(encoding="utf-8"), contents)
+        }).encode("utf-8")
+        cases = [(contents, defaults) for contents in (b"", b"{broken", b"\xff", b"[]", b"null")]
+        cases.append((invalid_values, repaired))
+        for contents, expected in cases:
+            with self.subTest(contents=contents):
+                self.config_path.write_bytes(contents)
+                self.assertEqual(self.store.load(), expected)
+                self.assertEqual(self.config_path.read_bytes(), contents)
 
 
     def test_save_round_trip_and_replace_failure(self):

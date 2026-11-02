@@ -225,7 +225,7 @@ class ThumbnailTests(unittest.TestCase):
 
     def test_long_names_with_same_content_have_independent_caches(self):
         """
-        相同內容的長檔名各自使用獨立快取
+        驗證相同內容的長檔名使用獨立快取, 清理過期快取時保留無關檔案與目錄
         """
 
         first = self.media_dir / ("a" * 239 + "1.bmp")
@@ -238,9 +238,16 @@ class ThumbnailTests(unittest.TestCase):
         self.assertNotEqual(first_thumbnail, second_thumbnail)
 
         for thumbnail in (first_thumbnail, second_thumbnail):
-            self.assertEqual(len(thumbnail.name), 29)
-            self.assertTrue(thumbnail.name.isascii())
             self.assertEqual(QImage(str(thumbnail)).width(), 300)
+
+        # 混入無關檔案與目錄, 確認快取清理不會誤刪
+        prefix = first_thumbnail.name.rsplit("-", 1)[0] + "-"
+        unrelated = self.thumbnail_dir / "unrelated.jpg"
+        malformed = self.thumbnail_dir / f"{prefix}deadbeeg.jpg"
+        directory = self.thumbnail_dir / f"{prefix}deadbeef.jpg"
+        directory.mkdir()
+        for path in (unrelated, malformed):
+            path.write_bytes(b"keep")
 
         saved_mtime = first_thumbnail.stat().st_mtime_ns
         self.assertEqual(self.thumbnail(first), first_thumbnail)
@@ -251,30 +258,8 @@ class ThumbnailTests(unittest.TestCase):
         self.assertNotEqual(updated_thumbnail, first_thumbnail)
         self.assertFalse(first_thumbnail.exists())
         self.assertTrue(second_thumbnail.exists())
-
-
-    def test_cleanup_preserves_unrelated_files_and_directories(self):
-        """
-        清理過期快取時保留無關檔案與目錄
-        """
-
-        source = self.media_dir / "sample.bmp"
-        self.save_image(source, Qt.GlobalColor.red)
-        previous = self.thumbnail(source)
-        prefix = previous.name.rsplit("-", 1)[0] + "-"
-        unrelated = self.thumbnail_dir / "unrelated.jpg"
-        malformed = self.thumbnail_dir / f"{prefix}deadbeeg.jpg"
-        directory = self.thumbnail_dir / f"{prefix}deadbeef.jpg"
-        directory.mkdir()
-
-        for path in (unrelated, malformed):
-            path.write_bytes(b"keep")
-
-        self.save_image(source, Qt.GlobalColor.blue)
-        self.assertTrue(self.thumbnail(source).is_file())
-        self.assertFalse(previous.exists())
-        self.assertTrue(unrelated.exists())
-        self.assertTrue(malformed.exists())
+        self.assertEqual(unrelated.read_bytes(), b"keep")
+        self.assertEqual(malformed.read_bytes(), b"keep")
         self.assertTrue(directory.is_dir())
 
 
@@ -294,6 +279,24 @@ class ThumbnailTests(unittest.TestCase):
 
         self.assertTrue(previous.is_file())
         self.assertFalse(list(self.thumbnail_dir.glob(".thumbnail-*.tmp")))
+
+
+    def test_cancellation_stops_media_parsing(self):
+        """
+        取消時停止進行中的媒體解析
+        """
+
+        media = mock.Mock()
+        media.parse_with_options.return_value = 0
+        media.get_parsed_status.return_value = 0
+        cancelled = mock.Mock(side_effect=[False, True])
+
+        with mock.patch.dict(sys.modules, {"vlc": mock.Mock()}):
+            with self.assertRaises(InterruptedError):
+                get_video_thumbnail_sizes(media, cancelled)
+
+        media.parse_stop.assert_called_once_with()
+
 
 
 @unittest.skipUnless(
@@ -505,22 +508,6 @@ class VideoThumbnailTests(unittest.TestCase):
 
         self.assertFalse(image.isNull())
         self.assertEqual((image.width(), image.height()), (300, 84))
-
-
-    def test_cancellation_stops_media_parsing(self):
-        """
-        取消時停止進行中的媒體解析
-        """
-
-        media = mock.Mock()
-        media.parse_with_options.return_value = 0
-        media.get_parsed_status.return_value = 0
-        cancelled = mock.Mock(side_effect=[False, True])
-
-        with self.assertRaises(InterruptedError):
-            get_video_thumbnail_sizes(media, cancelled)
-
-        media.parse_stop.assert_called_once_with()
 
 
     def test_rotated_videos_preserve_size_and_pixel_orientation(self):

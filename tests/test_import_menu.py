@@ -246,48 +246,12 @@ class ImportMenuTests(unittest.TestCase):
         self.tray.thumbnail_thread.stop.assert_called_once_with()
 
 
-    def test_cancel_import_restores_controls_and_allows_retry(self):
+    def test_cancel_ignores_late_progress_and_allows_retry_on_main_thread(self):
         """
-        驗證取消匯入後恢復選單控制, 並可重新匯入與套用桌布
-        """
-
-        self.namespace["import_media"] = self.blocked_import
-        self.tray.add_media()
-        worker = self.tray.import_thread
-        self.assertTrue(self.started.wait(5))
-
-        self.assertTrue(self.tray.cancel_import_action.isVisible())
-        self.assertFalse(self.tray.add_media_action.isEnabled())
-        self.tray.cancel_import_action.trigger()
-        self.assertTrue(worker.isInterruptionRequested())
-        self.assertFalse(self.tray.cancel_import_action.isEnabled())
-
-        self.release.set()
-        self.wait_for_completion(worker)
-
-        self.assert_idle_menu()
-        self.tray.play_from_menu.assert_not_called()
-        self.tray.thumbnail_thread.request.assert_not_called()
-        self.tray.tray.showMessage.assert_not_called()
-        self.namespace["logger"].exception.assert_not_called()
-
-        # 取消後可以開始下一次匯入, 取消按鈕也會重新啟用
-        self.namespace["import_media"] = mock.Mock(return_value=self.destination)
-        self.tray.add_media()
-        worker = self.tray.import_thread
-        self.assertTrue(self.tray.cancel_import_action.isEnabled())
-        self.wait_for_completion(worker)
-        self.assert_idle_menu()
-        self.tray.play_from_menu.assert_called_once_with(self.destination, "screen-a")
-
-
-    def test_worker_progress_runs_on_main_thread_and_ignores_updates_after_cancel(self):
-        """
-        驗證背景進度由主執行緒更新選單, 取消後忽略後續進度
+        驗證背景進度由主執行緒更新, 取消後忽略延遲進度且可重新匯入
         """
 
         updated_on = []
-        worker_threads = []
         update_progress = self.tray.update_import_progress
 
         def record_progress(percent):
@@ -300,10 +264,9 @@ class ImportMenuTests(unittest.TestCase):
 
         def copy_with_progress(source, import_dir, *, translate, progress, cancelled):
             """
-            記錄匯入執行緒並回報進度, 再等待測試放行匯入工作
+            回報匯入進度後等待測試放行匯入工作
             """
 
-            worker_threads.append(threading.get_ident())
             progress(42)
             return self.blocked_import(source, import_dir, translate=translate, progress=progress, cancelled=cancelled)
 
@@ -313,18 +276,27 @@ class ImportMenuTests(unittest.TestCase):
         worker = self.tray.import_thread
         self.assertTrue(self.started.wait(5))
         self.app.processEvents()
-
-        self.assertIn("42%", self.tray.add_media_action.text())
-        self.assertTrue(self.tray.cancel_import_action.isVisible())
         self.assertEqual(updated_on, [threading.get_ident()])
-        self.assertNotEqual(worker_threads, updated_on)
+        self.assertIn("42%", self.tray.add_media_action.text())
 
         self.tray.cancel_import_action.trigger()
+        self.assertTrue(worker.isInterruptionRequested())
+        progress_text = self.tray.add_media_action.text()
         self.tray.update_import_progress(80)
-        self.assertIn("42%", self.tray.add_media_action.text())
+        self.assertEqual(self.tray.add_media_action.text(), progress_text)
         self.release.set()
         self.wait_for_completion(worker)
+        self.tray.play_from_menu.assert_not_called()
+        self.tray.thumbnail_thread.request.assert_not_called()
+        self.tray.tray.showMessage.assert_not_called()
+        self.namespace["logger"].exception.assert_not_called()
+
+        # 取消後可以開始下一次匯入, 取消按鈕也會重新啟用
+        self.namespace["import_media"] = mock.Mock(return_value=self.destination)
+        self.tray.add_media()
+        self.wait_for_completion(self.tray.import_thread)
         self.assert_idle_menu()
+        self.tray.play_from_menu.assert_called_once_with(self.destination, "screen-a")
 
 
     def test_completed_import_waits_for_reattach_and_plays_only_once(self):
@@ -414,9 +386,9 @@ class ImportMenuTests(unittest.TestCase):
         self.namespace["logger"].exception.assert_not_called()
 
 
-    def test_startup_creates_one_wallpaper_per_screen_and_ignores_duplicate_notifications(self):
+    def test_screen_lifecycle_ignores_duplicates_and_connects_follow_timer(self):
         """
-        驗證每個螢幕只建立一份桌布與選單, 並共用同一個縮圖工作物件
+        螢幕通知不重複建立桌布, 共用縮圖工作並接上跟隨計時器, 關閉時停止計時器
         """
 
         self.namespace["Wallpaper"].assert_called_once_with(target_screen=self.screen)
@@ -430,6 +402,16 @@ class ImportMenuTests(unittest.TestCase):
         for menu in self.tray.screen_menus.values():
             self.assertIs(menu.thumbnail_thread, self.tray.thumbnail_thread)
         self.namespace["ThumbnailThread"].assert_called_once()
+        menu = self.tray.screen_menus["screen-b"]
+        menu.aboutToShow.emit()
+        menu.actions()[-1].menu().actions()[0].trigger()
+        self.assertEqual(self.tray.follow_controller.graph.sources, {"screen-b": "screen-a"})
+        self.wallpaper.get_playback_time.return_value = 6500
+        self.tray.follow_sync_timer.timeout.emit()
+        other.seek_time.assert_called_once_with(6500)
+        self.tray.shutdown()
+        self.assertFalse(self.tray.follow_sync_timer.isActive())
+        self.assertFalse(self.tray.follow_restore_timer.isActive())
 
 
     def test_screen_creation_failure_keeps_existing_wallpaper_available(self):
@@ -443,25 +425,6 @@ class ImportMenuTests(unittest.TestCase):
         self.assertEqual(self.tray.wallpapers, {"screen-a": self.wallpaper})
         self.wallpaper.shutdown.assert_not_called()
         self.namespace["logger"].exception.assert_called_once()
-
-
-    def test_follow_timer_corrects_progress_and_stops_on_exit(self):
-        """
-        驗證跟隨計時器校正播放進度, 關閉時停止同步與還原計時器
-        """
-
-        follower = self.add_screen("screen-b")
-        menu = self.tray.screen_menus["screen-b"]
-        menu.aboutToShow.emit()
-        menu.actions()[-1].menu().actions()[0].trigger()
-        self.assertEqual(self.tray.follow_controller.graph.sources, {"screen-b": "screen-a"})
-        self.assertTrue(self.tray.follow_sync_timer.isActive())
-        self.wallpaper.get_playback_time.return_value = 6500
-        self.tray.follow_sync_timer.timeout.emit()
-        follower.seek_time.assert_called_once_with(6500)
-        self.tray.shutdown()
-        self.assertFalse(self.tray.follow_sync_timer.isActive())
-        self.assertFalse(self.tray.follow_restore_timer.isActive())
 
 
     def test_follow_startup_waits_for_screens_and_removes_missing_sources_after_grace(self):

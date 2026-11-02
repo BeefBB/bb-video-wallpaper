@@ -173,9 +173,9 @@ class FollowControllerTests(unittest.TestCase):
         self.enterContext(mock.patch("screen_follow.logger"))
 
 
-    def test_join_copies_selection_and_manual_state_without_changing_history(self) -> None:
+    def test_join_preserves_manual_state_and_waits_for_new_media_without_changing_history(self) -> None:
         """
-        驗證加入跟隨會複製媒體, 手動暫停與進度並保存關係, 不更動最近紀錄
+        加入時保留手動暫停, 換片後等待就緒再對齊最新進度, 不更動最近紀錄
         """
 
         source, follower = self.screens["a"], self.screens["b"]
@@ -183,20 +183,11 @@ class FollowControllerTests(unittest.TestCase):
         source.apply_playback_state(PlaybackState("pause"))
         self.assertTrue(self.controller.follow("b", "a"))
         self.assertEqual((follower.play_state, follower.playback_state.requested_state, follower.position), ("pause", "pause", 3500))
-        config = self.store.load()
-        self.assertEqual(config["screenFollows"], {"b": "a"})
-        self.assertEqual(config["screenWallpapers"], {"b": "sample.mp4"})
-        self.assertEqual(config["recentVideo"], ["older.mp4"])
-
-
-    def test_source_media_change_waits_for_load_and_uses_latest_position(self) -> None:
-        """
-        驗證來源換片後等待各跟隨者載入, 再對齊來源的最新進度
-        """
-
-        self.controller.follow("b", "a")
+        self.assertEqual(self.store.load()["screenFollows"], {"b": "a"})
+        self.assertEqual(self.store.load()["screenWallpapers"], {"b": "sample.mp4"})
         self.controller.follow("c", "b")
-        source = self.screens["a"]
+        for key in "bc":
+            self.screens[key].seeks.clear()
         source.current_media = self.media.with_name("new.mp4")
         self.controller.synchronize("a")
         source.position = 4500
@@ -211,6 +202,7 @@ class FollowControllerTests(unittest.TestCase):
             self.assertEqual(target.seeks, [4500])
 
         self.assertEqual(self.store.load()["screenWallpapers"], {"b": "new.mp4", "c": "new.mp4"})
+        self.assertEqual(self.store.load()["recentVideo"], ["older.mp4"])
 
 
     def test_small_drift_and_loop_boundary_do_not_seek(self) -> None:
@@ -235,7 +227,13 @@ class FollowControllerTests(unittest.TestCase):
         驗證群組只在全部成員受阻時自動暫停, 並保留來源的手動暫停
         """
 
+        # 可見的跟隨者加入後, 來源從自動暫停恢復播放
+        source = self.screens["a"]
+        source.blocked = True
+        source.apply_playback_state(PlaybackState("play", (("a", "fullscreen"),)))
         self.controller.follow("b", "a")
+        self.assertEqual(source.play_state, "play")
+        self.assertEqual(self.screens["b"].play_state, "play")
         self.controller.follow("c", "b")
         for key in "ab":
             self.screens[key].blocked = True
@@ -252,42 +250,6 @@ class FollowControllerTests(unittest.TestCase):
         self.controller.check_auto_pause(self.screens["b"])
         self.assertEqual([self.screens[key].play_state for key in "abc"], ["pause"] * 3)
         self.assertEqual(self.screens["d"].play_state, "play")
-
-
-    def test_joining_visible_follower_resumes_an_auto_paused_source(self) -> None:
-        """
-        驗證可見的跟隨者加入後, 原本因全螢幕而自動暫停的來源恢復播放
-        """
-
-        source = self.screens["a"]
-        source.blocked = True
-        source.apply_playback_state(PlaybackState("play", (("a", "fullscreen"),)))
-        self.controller.follow("b", "a")
-        self.assertEqual(source.play_state, "play")
-        self.assertEqual(self.screens["b"].play_state, "play")
-
-
-    def test_group_timers_only_scan_once_but_member_notifications_still_apply_immediately(self) -> None:
-        """
-        驗證只有來源的輪詢計時器掃描群組, 成員通知仍立即更新自動暫停
-        """
-
-        self.controller.follow("b", "a")
-        source, follower = self.screens["a"], self.screens["b"]
-        with (
-            mock.patch.object(source, "get_auto_pause_reason", return_value="fullscreen") as first,
-            mock.patch.object(follower, "get_auto_pause_reason", return_value="fullscreen") as second,
-        ):
-            self.controller.check_auto_pause(follower, from_timer=True)
-            first.assert_not_called()
-            second.assert_not_called()
-            self.controller.check_auto_pause(source, from_timer=True)
-            first.assert_called_once()
-            second.assert_called_once()
-            self.assertEqual(source.play_state, "pause")
-            second.return_value = None
-            self.controller.check_auto_pause(follower)
-            self.assertEqual(source.play_state, "play")
 
 
     def test_relation_change_during_media_copy_does_not_overwrite_local_output(self) -> None:
