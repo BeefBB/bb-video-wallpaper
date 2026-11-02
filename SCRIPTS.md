@@ -108,19 +108,32 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 
 ### 測試範圍
 
+自動測試集中在難以穩定手動重現的時序, 故障注入, 原生資源生命週期與資料保護. 一般操作改用下方手動驗收清單. 同一流程依層分工: 選單測試驗證匯入結果等待重掛且只套用一次, 播放測試驗證切換媒體時捨棄舊進度, 真實 VLC 測試驗證輸出恢復與關閉
+
 測試腳本                                                           | 檢查重點
 ---                                                                | ---
-[test_config.py](./tests/test_config.py)                           | 預設設定, 欄位與路徑驗證, 各螢幕桌布及紀錄, 語言載入與讀寫失敗處理
-[test_screen_follow.py](./tests/test_screen_follow.py)             | 循環驗證, 連鎖跟隨與群組拆分, 設定保存, 群組暫停及進度校正
-[test_startup.py](./tests/test_startup.py)                         | 匯入不初始化
-[test_media_import.py](./tests/test_media_import.py)               | 去重, 命名, 容量檢查, 取消後清理
-[test_import_menu.py](./tests/test_import_menu.py)                 | 主執行緒進度更新, 取消及退出處理
-[test_media_preview.py](./tests/test_media_preview.py)             | 過期縮圖, Qt 訊號
-[test_playback_state.py](./tests/test_playback_state.py)           | 媒體切換與暫停, 載入時序, 桌布重掛排程, 重試及退出取消
+[test_app_ui.py](./tests/test_app_ui.py)                           | 匯入取消與過期回呼, 螢幕變動, 主執行緒更新, 預覽過期結果, 匯入主程式不初始化
+[test_config.py](./tests/test_config.py)                           | 初始化與讀寫失敗不破壞原檔, 損壞設定與路徑邊界
+[test_screen_follow.py](./tests/test_screen_follow.py)             | 循環與群組拆分, 群組暫停, 進度誤差與循環邊界, 過期同步訊號
+[test_media_import.py](./tests/test_media_import.py)               | 命名衝突, 磁碟空間邊界, 複製中寫滿與各階段取消後清理
+[test_playback_state.py](./tests/test_playback_state.py)           | 延遲播放事件, 重掛順序與重試, 舊進度失效, 關閉與螢幕移除競態
 [test_video_recovery.py](./tests/test_video_recovery.py)           | 主程式實際載入 VLC, 影片輸出失效後的重建, 播放及暫停狀態與進度恢復
-[test_windows_integration.py](./tests/test_windows_integration.py) | 模擬掛載, 螢幕識別, 電源及排程 API, 以隱藏視窗驗證桌面重建通知, 獨立監聽視窗與備援容器
-[test_image_display.py](./tests/test_image_display.py)             | 圖片讀取, 隱藏及顯示, 原生子視窗重綁與釋放
-[test_thumbnails.py](./tests/test_thumbnails.py)                   | 快取命名與清理, 儲存失敗處理, 實際影片縮圖比例, 非正方形像素, 旋轉方向, 多影像軌, 取消及錯誤處理
+[test_windows_integration.py](./tests/test_windows_integration.py) | 螢幕識別變動, 64 位元 handle, 掛載失敗, 桌面通知, 圖片原生子視窗重綁與釋放
+[test_thumbnails.py](./tests/test_thumbnails.py)                   | 快取保護與儲存失敗, 非正方形像素, 旋轉方向, 多影像軌, AV1 解碼逾時與取消
+
+Qt 測試共用 [app_loader.py](./tests/app_loader.py) 的 `QtTestCase`, 統一建立 `QApplication`, 並在個別案例清理後處理延後刪除. 新增 Qt 測試時沿用此基底, 避免先建立 `QCoreApplication` 使 GUI 測試依執行順序被跳過
+
+### 手動驗收
+
+使用測試媒體與可還原的設定資料, 在發佈前或修改相關功能後確認:
+
+- 啟動與退出: 系統匣可操作, 各螢幕有桌布, 退出後桌布消失且程序結束
+- 播放操作: 切換圖片與影片, 播放, 暫停及停止; 選擇損壞圖片失敗後, 原桌布與已保存選擇仍保留
+- 匯入與預覽: 一般匯入完成後選單恢復可操作, 各螢幕選單可預覽同一媒體, 縮圖內容與方向正確
+- 設定與紀錄: 各螢幕選擇不同桌布, 清除最近紀錄後重啟仍還原各自桌布; 媒體暫時遺失時使用備援且不覆寫原選擇; 舊版僅有最近紀錄的設定仍可載入
+- 跟隨操作: 從選單加入或解除跟隨, 來源切換媒體後跟隨者同步, 重啟後還原關係; 來源拔除再接回不自動恢復已解除的跟隨
+- 自動暫停: 在目標與另一螢幕分別最大化視窗, 切換虛擬桌面, 關閉再開啟螢幕及切換供電, 確認對應選項生效且手動暫停不被解除
+- 開機啟動: 從含空白的安裝路徑啟用與停用排程, 確認可啟動且參數正確; 排程允許電池供電, 不因切換電池而停止, 且沒有執行時間上限
 
 ### 測試環境與執行影響
 

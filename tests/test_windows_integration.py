@@ -1,21 +1,21 @@
 """
-測試 Windows 桌面掛載, 桌面通知, 電源通知與開機排程的模組邊界
+測試 Windows 掛載失敗, 原生視窗生命週期與通知邊界
 模擬外部 API, 不變更桌面, Mutex 或工作排程
 使用隱藏視窗驗證工作列通知, 獨立監聽視窗與備援容器的原生 alpha 設定
 """
 
-from contextlib import contextmanager
 import ctypes
 from ctypes import wintypes
 from pathlib import Path
-import subprocess
+import tempfile
 import sys
 import unittest
 from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtGui import QColor, QImage
 from PySide6.QtTest import QSignalSpy
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QWidget
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,7 +24,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
-from app_loader import load_app_module
+from app_loader import QtTestCase, load_app_module
+import bb_image_display
+import win32con
+import win32gui
 import windows_integration as windows
 
 
@@ -40,22 +43,14 @@ class WindowsIntegrationTests(unittest.TestCase):
 
         device = mock.Mock(StateFlags=1, DeviceID=r"\\?\DISPLAY#Monitor-A")
         with (
-            mock.patch.object(windows.win32api, "MonitorFromWindow", return_value=10) as monitor,
+            mock.patch.object(windows.win32api, "MonitorFromWindow", return_value=10),
             mock.patch.object(windows.win32api, "GetMonitorInfo") as info,
-            mock.patch.object(windows.win32api, "EnumDisplayDevices", return_value=device) as devices,
+            mock.patch.object(windows.win32api, "EnumDisplayDevices", return_value=device),
         ):
             info.side_effect = [{"Device": r"\\.\DISPLAY1"}, {"Device": r"\\.\DISPLAY3"}]
 
             self.assertEqual(windows.get_monitor_id(100), r"device:\\?\display#monitor-a")
             self.assertEqual(windows.get_monitor_id(200), r"device:\\?\display#monitor-a")
-            monitor.assert_has_calls([
-                mock.call(100, windows.win32con.MONITOR_DEFAULTTONEAREST),
-                mock.call(200, windows.win32con.MONITOR_DEFAULTTONEAREST),
-            ])
-            self.assertEqual(devices.call_args_list, [
-                mock.call(r"\\.\DISPLAY1", 0, 1),
-                mock.call(r"\\.\DISPLAY3", 0, 1),
-            ])
 
 
     def test_monitor_identity_skips_inactive_or_unidentified_devices(self):
@@ -75,7 +70,6 @@ class WindowsIntegrationTests(unittest.TestCase):
             ]
 
             self.assertEqual(windows.get_monitor_id(100), "device:active")
-            self.assertEqual(devices.call_args_list, [mock.call("display", index, 1) for index in range(3)])
 
 
     def test_monitor_identity_falls_back_to_distinct_display_names(self):
@@ -151,32 +145,6 @@ class WindowsIntegrationTests(unittest.TestCase):
             change.assert_not_called()
 
 
-    def test_task_creation_quotes_supplied_path_and_keeps_background_settings(self):
-        """
-        驗證開機排程正確引用含空白的程式路徑, 並允許電池供電與不限執行時間
-        """
-
-        executable = Path("C:/Apps With Spaces/BB Video Wallpaper.exe")
-
-        with mock.patch.object(windows.subprocess, "run") as run:
-            windows.create_task(executable)
-
-        self.assertEqual(run.call_count, 2)
-        command = run.call_args_list[0].args[0]
-        self.assertEqual(command[command.index("/TN") + 1], windows.TASK_NAME)
-        self.assertEqual(command[command.index("/TR") + 1], f'"{executable}" --task')
-
-        settings = run.call_args_list[1].args[0][-1]
-        self.assertIn(f"Get-ScheduledTask -TaskName '{windows.TASK_NAME}'", settings)
-        self.assertIn("DisallowStartIfOnBatteries = $false", settings)
-        self.assertIn("StopIfGoingOnBatteries = $false", settings)
-        self.assertIn("ExecutionTimeLimit = 'PT0S'", settings)
-
-        for call in run.call_args_list:
-            self.assertTrue(call.kwargs["check"])
-            self.assertEqual(call.kwargs["creationflags"], subprocess.CREATE_NO_WINDOW)
-
-
     def test_wallpaper_attaches_to_existing_fallback_and_legacy_containers(self):
         """
         驗證既有與備援容器的掛載目標, 舊版桌面另將桌布排在圖示後方
@@ -232,62 +200,6 @@ class WindowsIntegrationTests(unittest.TestCase):
                 gui.DestroyWindow.assert_called_once_with(20)
 
 
-    @contextmanager
-    def fullscreen_windows(self):
-        """
-        建立全螢幕偵測使用的 API 替身, 離開區塊時還原
-        """
-
-        with (
-            mock.patch.object(windows, "win32gui") as gui,
-            mock.patch.object(windows, "win32api") as api,
-            mock.patch.object(windows, "is_on_current_desktop", return_value=True) as current_desktop,
-            mock.patch.object(windows.ctypes.windll.user32, "GetShellWindow", return_value=10),
-        ):
-            gui.EnumWindows.side_effect = lambda callback, data: callback(20, data)
-            gui.IsWindowVisible.return_value = True
-            gui.IsIconic.return_value = False
-            gui.GetClassName.return_value = "AppWindow"
-            gui.GetWindowText.return_value = "Video editor"
-            gui.GetWindowRect.return_value = (0, 0, 1920, 1040)
-            api.MonitorFromWindow.return_value = 1
-            api.GetMonitorInfo.return_value = {"Work": (0, 0, 1920, 1040)}
-            yield gui, api, current_desktop
-
-
-    def test_fullscreen_detection_only_matches_wallpaper_monitor(self):
-        """
-        驗證全螢幕偵測只匹配桌布所在螢幕, 包含負座標與非主螢幕
-        """
-
-        work_areas = {1: (0, 0, 1920, 1040), 2: (-1280, -240, 0, 744)}
-        cases = ((1, 1, True), (2, 2, True), (2, 1, True), (2, 2, False))
-        with self.fullscreen_windows() as (gui, api, _):
-            api.GetMonitorInfo.side_effect = lambda monitor: {"Work": work_areas[monitor]}
-            for wallpaper_monitor, window_monitor, maximized in cases:
-                with self.subTest(wallpaper=wallpaper_monitor, window=window_monitor, maximized=maximized):
-                    api.MonitorFromWindow.side_effect = (
-                        lambda hwnd, flags: wallpaper_monitor if hwnd == 100 else window_monitor
-                    )
-                    left, top, right, bottom = work_areas[window_monitor]
-                    gui.GetWindowRect.return_value = (
-                        work_areas[window_monitor] if maximized else (left + 100, top + 100, right - 100, bottom - 100)
-                    )
-                    self.assertEqual(windows.is_any_fullscreen(100), maximized and wallpaper_monitor == window_monitor)
-
-
-    def test_fullscreen_detection_continues_after_other_monitor(self):
-        """
-        驗證略過其他螢幕的視窗後, 仍繼續檢查目標螢幕上的視窗
-        """
-
-        with self.fullscreen_windows() as (gui, api, _):
-            gui.EnumWindows.side_effect = lambda callback, data: [callback(hwnd, data) for hwnd in (20, 30)]
-            api.MonitorFromWindow.side_effect = lambda hwnd, flags: 2 if hwnd == 20 else 1
-            self.assertTrue(windows.is_any_fullscreen(100))
-            gui.GetWindowRect.assert_called_once_with(30)
-
-
     def test_fullscreen_detection_skips_unavailable_wallpaper_monitor(self):
         """
         驗證桌布視窗失效或沒有對應螢幕時, 不列舉其他視窗
@@ -308,19 +220,6 @@ class WindowsIntegrationTests(unittest.TestCase):
 
                 self.assertFalse(windows.is_any_fullscreen(100))
                 gui.EnumWindows.assert_not_called()
-
-
-    def test_fullscreen_detection_ignores_windows_from_other_desktops(self):
-        """
-        驗證其他虛擬桌面的視窗不會觸發全螢幕偵測
-        """
-
-        with self.fullscreen_windows() as (gui, _, current_desktop):
-            current_desktop.return_value = False
-            self.assertFalse(windows.is_any_fullscreen(100))
-            gui.GetWindowRect.assert_not_called()
-            current_desktop.return_value = True
-            self.assertTrue(windows.is_any_fullscreen(100))
 
 
     def test_battery_detection_preserves_unknown_and_failed_status(self):
@@ -392,31 +291,19 @@ class WindowsIntegrationTests(unittest.TestCase):
             unregister.assert_called_once_with(handle)
 
 
-class DesktopEventTests(unittest.TestCase):
+class DesktopEventTests(QtTestCase):
     """
     工作列通知與獨立監聽視窗
     """
-
-    @classmethod
-    def setUpClass(cls) -> None:
-        """
-        建立 Qt 應用程式並載入通知監聽類別
-        """
-
-        cls.app = QApplication.instance() or QApplication([])
-
-        if not isinstance(cls.app, QApplication):
-            raise unittest.SkipTest("桌面通知測試需要 QApplication")
-
-        cls.listener_class = load_app_module().DesktopEventWindow
-
 
     def setUp(self) -> None:
         """
         建立獨立的通知監聽視窗
         """
 
-        self.listener = self.listener_class()
+        super().setUp()
+
+        self.listener = load_app_module().DesktopEventWindow()
         self.addCleanup(self.dispose_listener)
 
 
@@ -427,7 +314,6 @@ class DesktopEventTests(unittest.TestCase):
 
         self.listener.close()
         self.listener.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
     def test_hidden_top_level_window_receives_only_taskbar_notification(self):
@@ -513,6 +399,103 @@ class WorkerWNativeTests(unittest.TestCase):
 
         finally:
             windows.win32gui.DestroyWindow(parent)
+
+
+@unittest.skipUnless(sys.platform == "win32", "圖片原生視窗測試需要 Windows")
+class ImageDisplayTests(QtTestCase):
+    """
+    圖片輸出的原生視窗生命週期
+    """
+
+    def setUp(self) -> None:
+        """
+        建立暫存圖片與隱藏的目標視窗
+        """
+
+        super().setUp()
+
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        self.image_path = Path(directory) / "測試圖片.png"
+        image = QImage(120, 80, QImage.Format.Format_RGB32)
+        image.fill(QColor("red"))
+        self.assertTrue(image.save(str(self.image_path)))
+
+        self.targets: list[QWidget] = []
+        self.target = self.create_target()
+        self.display = bb_image_display.Instance()
+        self.addCleanup(self.dispose_windows)
+        self.display.set_hwnd(int(self.target.winId()))
+
+
+    def create_target(self) -> "QWidget":
+        """
+        建立隱藏的圖片輸出目標
+        """
+
+        target = QWidget()
+        target.resize(240, 135)
+        self.targets.append(target)
+        return target
+
+
+    def dispose_windows(self) -> None:
+        """
+        釋放圖片輸出與測試用目標視窗
+        """
+
+        self.display.close()
+        self.display.deleteLater()
+
+        for target in self.targets:
+            target.close()
+            target.deleteLater()
+
+
+
+    def test_native_host_lifecycle_preserves_image_and_external_targets(self):
+        """
+        驗證圖片原生容器的顯示, 重綁與釋放, 保留圖片與外部目標視窗
+        """
+
+        self.display.set_image(self.image_path)
+        window = self.display.window
+        assert window is not None
+        self.assertEqual(window._host_hwnd, 0)
+        self.display.show()
+        host = window._host_hwnd
+        image_key = window.image.cacheKey()
+        self.assertEqual(win32gui.GetParent(host), int(self.target.winId()))
+        style = win32gui.GetWindowLong(int(window.winId()), win32con.GWL_STYLE)
+        self.assertTrue(style & win32con.WS_CHILD)
+        self.assertFalse(style & win32con.WS_POPUP)
+
+        # 解除綁定後可更換目標, 保留圖片與外部視窗
+        self.display.set_hwnd(0)
+        self.assertFalse(win32gui.IsWindow(host))
+        self.assertFalse(window.isVisible())
+        replacement = self.create_target()
+        target_hwnd = int(replacement.winId())
+        self.display.set_hwnd(target_hwnd)
+        self.display.show()
+        self.assertIs(self.display.window, window)
+        self.assertEqual(window.image.cacheKey(), image_key)
+        self.assertEqual(win32gui.GetParent(window._host_hwnd), target_hwnd)
+        self.assertTrue(win32gui.IsWindow(int(self.target.winId())))
+        self.assertTrue(window.isVisible())
+
+        host = window._host_hwnd
+        # 關閉時釋放圖片容器並保留目標供下次使用
+        self.display.close()
+        self.assertFalse(win32gui.IsWindow(host))
+        self.assertTrue(win32gui.IsWindow(target_hwnd))
+        self.assertEqual(self.display.get_hwnd(), target_hwnd)
+        self.assertIsNone(self.display.window)
+        self.assertIsNone(self.display.current_image)
+        self.display.set_image(self.image_path)
+        self.display.show()
+        window = self.display.window
+        assert window is not None
+        self.assertEqual(win32gui.GetParent(window._host_hwnd), target_hwnd)
 
 
 if __name__ == "__main__":

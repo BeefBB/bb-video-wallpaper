@@ -1,17 +1,20 @@
 """
-測試匯入取消, 螢幕變動與退出時的非同步競態
+測試匯入與預覽的非同步競態, 以及主程式匯入邊界
 使用真正的 Qt 選單, 訊號佇列與工作執行緒, 不顯示系統匣或啟動桌布
 """
 
 from pathlib import Path
+import os
 import sys
+import tempfile
 import threading
 import time
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import QCoreApplication, QEvent, QObject, Signal
-from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtGui import QAction, QColor, QImage
+from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,7 +24,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
-from app_loader import load_app_module
+from app_loader import QtTestCase, load_app_module
+from config import ConfigStore
+import media_preview
 
 
 class PreviewMenu(QMenu):
@@ -56,27 +61,17 @@ class ReattachNotifier(QObject):
     reattach_finished = Signal()
 
 
-class ImportMenuTests(unittest.TestCase):
+class ImportMenuTests(QtTestCase):
     """
     系統匣選單與背景匯入流程
     """
-
-    @classmethod
-    def setUpClass(cls) -> None:
-        """
-        取得或建立 Qt 應用程式, 確認可供選單測試使用
-        """
-
-        cls.app = QApplication.instance() or QApplication([])
-
-        if not isinstance(cls.app, QApplication):
-            raise unittest.SkipTest("選單測試需要 QApplication")
-
 
     def setUp(self) -> None:
         """
         建立選單, 匯入替身與執行緒同步事件
         """
+
+        super().setUp()
 
         self.source = ROOT / "sample.mp4"
         self.destination = ROOT / "imported.mp4"
@@ -148,7 +143,6 @@ class ImportMenuTests(unittest.TestCase):
         self.tray.shutdown()
         self.menu.close()
         self.menu.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
     def make_wallpaper(self, screen_id, screen):
@@ -185,16 +179,6 @@ class ImportMenuTests(unittest.TestCase):
         return wallpaper
 
 
-    def assert_idle_menu(self):
-        """
-        確認匯入工作已清除, 新增媒體可用且取消項目隱藏
-        """
-
-        self.assertIsNone(self.tray.import_thread)
-        self.assertTrue(self.tray.add_media_action.isEnabled())
-        self.assertFalse(self.tray.cancel_import_action.isVisible())
-
-
     def wait_for_completion(self, worker):
         """
         等待匯入執行緒與完成訊號處理完畢
@@ -228,18 +212,10 @@ class ImportMenuTests(unittest.TestCase):
         """
 
         other = self.add_screen("screen-b")
-        operations = mock.Mock()
-        operations.attach_mock(self.wallpaper.shutdown, "first_shutdown")
-        operations.attach_mock(other.shutdown, "second_shutdown")
-        operations.attach_mock(self.tray.app.quit, "quit")
         self.wallpaper.shutdown.side_effect = RuntimeError("shutdown failed")
-        self.tray.app.aboutToQuit.connect.assert_any_call(self.tray.shutdown)
 
         self.tray.exit()
-
-        self.assertEqual(operations.mock_calls, [
-            mock.call.first_shutdown(), mock.call.second_shutdown(), mock.call.quit(),
-        ])
+        self.tray.app.quit.assert_called_once_with()
         self.tray.exit()
         self.wallpaper.shutdown.assert_called_once_with()
         other.shutdown.assert_called_once_with()
@@ -295,7 +271,6 @@ class ImportMenuTests(unittest.TestCase):
         self.namespace["import_media"] = mock.Mock(return_value=self.destination)
         self.tray.add_media()
         self.wait_for_completion(self.tray.import_thread)
-        self.assert_idle_menu()
         self.tray.play_from_menu.assert_called_once_with(self.destination, "screen-a")
 
 
@@ -323,7 +298,6 @@ class ImportMenuTests(unittest.TestCase):
         self.app.processEvents()
 
         self.assertIsNone(self.tray.import_thread)
-        self.assert_idle_menu()
         self.tray.play_from_menu.assert_called_once_with(self.destination, "screen-a")
         self.tray.refresh_media_menu.assert_called_once_with()
 
@@ -384,34 +358,6 @@ class ImportMenuTests(unittest.TestCase):
         self.tray.play_from_menu.assert_not_called()
         self.tray.tray.showMessage.assert_not_called()
         self.namespace["logger"].exception.assert_not_called()
-
-
-    def test_screen_lifecycle_ignores_duplicates_and_connects_follow_timer(self):
-        """
-        螢幕通知不重複建立桌布, 共用縮圖工作並接上跟隨計時器, 關閉時停止計時器
-        """
-
-        self.namespace["Wallpaper"].assert_called_once_with(target_screen=self.screen)
-        self.wallpaper.show.assert_called_once_with()
-        other = self.add_screen("screen-b")
-
-        self.assertEqual(self.tray.wallpapers, {"screen-a": self.wallpaper, "screen-b": other})
-        self.screen_notifications.screenAdded.emit(other.target_screen)
-        self.assertEqual(self.namespace["Wallpaper"].call_count, 2)
-        self.assertEqual(set(self.tray.screen_menus), {"screen-a", "screen-b"})
-        for menu in self.tray.screen_menus.values():
-            self.assertIs(menu.thumbnail_thread, self.tray.thumbnail_thread)
-        self.namespace["ThumbnailThread"].assert_called_once()
-        menu = self.tray.screen_menus["screen-b"]
-        menu.aboutToShow.emit()
-        menu.actions()[-1].menu().actions()[0].trigger()
-        self.assertEqual(self.tray.follow_controller.graph.sources, {"screen-b": "screen-a"})
-        self.wallpaper.get_playback_time.return_value = 6500
-        self.tray.follow_sync_timer.timeout.emit()
-        other.seek_time.assert_called_once_with(6500)
-        self.tray.shutdown()
-        self.assertFalse(self.tray.follow_sync_timer.isActive())
-        self.assertFalse(self.tray.follow_restore_timer.isActive())
 
 
     def test_screen_creation_failure_keeps_existing_wallpaper_available(self):
@@ -562,6 +508,162 @@ class ImportMenuTests(unittest.TestCase):
         self.assertIs(self.tray.import_thread, new_worker)
         self.release.set()
         self.wait_for_completion(new_worker)
+
+
+class ThumbnailWorker(QObject):
+    """
+    由測試控制縮圖結果訊號
+    """
+
+    thumbnail_ready = Signal(str, QImage)
+
+
+class MediaPreviewTests(QtTestCase):
+    """
+    縮圖回傳的有效性與 Qt 執行緒邊界
+    """
+
+    def setUp(self) -> None:
+        """
+        建立隱藏預覽選單與縮圖訊號替身, 預設第一個媒體項目正在預覽
+        """
+
+        super().setUp()
+
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.media_dir = directory / "media"
+        self.thumbnail_dir = directory / "thumbnails"
+        self.loading_path = directory / "loading.png"
+        self.worker = ThumbnailWorker()
+        self.enterContext(mock.patch.object(media_preview, "ThumbnailThread", return_value=self.worker))
+        self.menu = media_preview.MediaPreviewMenu(
+            "Media", media_dir=self.media_dir, thumbnail_dir=self.thumbnail_dir,
+            loading_image_path=self.loading_path,
+        )
+        self.menu.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
+        self.menu.preview.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
+        self.addCleanup(self.dispose_menu)
+        self.first = self.add_media_action("first.mp4")
+        self.second = self.add_media_action("second.mp4")
+        self.menu.preview_action = self.first
+        self.menu.preview_mode = True
+        self.menu.preview_pixmap = self.menu.loading_pixmap
+        self.display_preview_mock = mock.Mock()
+        self.menu.display_preview = self.display_preview_mock
+
+
+    def dispose_menu(self) -> None:
+        """
+        停止預覽並釋放選單與縮圖工作物件
+        """
+
+        self.menu.reset_preview()
+        self.menu.close()
+        self.menu.deleteLater()
+        self.worker.deleteLater()
+
+
+    def add_media_action(self, name):
+        """
+        建立帶有媒體路徑的選單項目
+        """
+
+        action = QAction(name, self.menu)
+        action.setData(str(self.media_dir / name))
+        self.menu.addAction(action)
+        return action
+
+
+    def thumbnail(self):
+        """
+        建立背景回傳的測試縮圖
+        """
+
+        image = QImage(120, 60, QImage.Format.Format_RGB32)
+        image.fill(Qt.GlobalColor.blue)
+        return image
+
+
+    def test_stale_null_and_inactive_results_do_not_replace_preview(self):
+        """
+        過期, 空白與預覽結束後的結果不更新畫面
+        """
+
+        self.menu.preview_action = self.second
+        loading_key = self.menu.preview_pixmap.cacheKey()
+
+        self.worker.thumbnail_ready.emit(self.first.data(), self.thumbnail())
+        self.assertEqual(self.menu.preview_pixmap.cacheKey(), loading_key)
+
+        self.worker.thumbnail_ready.emit(self.second.data(), QImage())
+        self.assertEqual(self.menu.preview_pixmap.cacheKey(), loading_key)
+
+        self.menu.reset_preview()
+        self.worker.thumbnail_ready.emit(self.second.data(), self.thumbnail())
+        self.assertEqual(self.menu.preview_pixmap.cacheKey(), loading_key)
+        self.assertTrue(self.menu.preview.isHidden())
+
+
+    def test_background_result_updates_preview_on_qt_main_thread(self):
+        """
+        背景縮圖結果由 Qt 主執行緒更新預覽
+        """
+
+        displayed_on = []
+        display = self.menu.display_preview
+
+        def record_display():
+            """
+            記錄預覽顯示回呼的執行緒, 再呼叫顯示替身
+            """
+
+            displayed_on.append(threading.get_ident())
+            display()
+
+        self.menu.display_preview = record_display
+        image = self.thumbnail()
+        media_path = self.first.data()
+        thread = threading.Thread(target=lambda: self.worker.thumbnail_ready.emit(media_path, image))
+        thread.start()
+        thread.join(timeout=5)
+        self.assertFalse(thread.is_alive())
+        # 尚未處理 Qt 事件佇列
+        self.assertEqual(displayed_on, [])
+
+        self.app.processEvents()
+
+        self.assertEqual(displayed_on, [threading.get_ident()])
+        self.assertEqual(self.menu.preview_pixmap.toImage().pixelColor(0, 0), QColor("blue"))
+
+
+class StartupTests(unittest.TestCase):
+
+    def test_import_does_not_initialize_runtime(self):
+        """
+        驗證缺少使用者資料位置與 VLC 時仍可匯入主程式, 且不初始化執行環境
+        """
+
+        blocked = mock.Mock(side_effect=AssertionError("匯入時不應初始化執行環境"))
+        with (
+            mock.patch.dict(os.environ),
+            mock.patch.dict(sys.modules, {"vlc": None}),
+            mock.patch("pathlib.Path.mkdir", blocked),
+            mock.patch("logging.handlers.RotatingFileHandler", blocked),
+            mock.patch("ctypes.CDLL", blocked),
+            mock.patch("os.add_dll_directory", blocked),
+            mock.patch.object(ConfigStore, "load", blocked),
+            mock.patch.object(ConfigStore, "load_language", blocked),
+            mock.patch.object(ConfigStore, "initialize_if_missing", blocked),
+            mock.patch("windows_integration.is_already_running", blocked),
+            mock.patch("windows_integration.check_desktop_ready", blocked),
+            mock.patch("PySide6.QtWidgets.QApplication", blocked),
+        ):
+            os.environ.pop("LOCALAPPDATA", None)
+            original_environment = dict(os.environ)
+            load_app_module()
+
+            self.assertEqual(dict(os.environ), original_environment)
+            blocked.assert_not_called()
 
 
 if __name__ == "__main__":

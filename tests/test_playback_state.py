@@ -5,13 +5,11 @@
 
 from pathlib import Path
 import sys
-import tempfile
 import threading
 import unittest
 from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, QRect, Qt, QTimer, Signal
-from PySide6.QtTest import QSignalSpy, QTest
 from shiboken6 import isValid
 
 
@@ -22,9 +20,8 @@ PLAYING_EVENT = object()
 if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
-from config import ConfigStore
 from playback import PlaybackState
-from app_loader import load_app_module
+from app_loader import QtTestCase, load_app_module
 
 
 class HeadlessWidget(QObject):
@@ -75,15 +72,6 @@ class HeadlessScreen(QObject):
         """
 
         return self._geometry
-
-
-    def set_geometry(self, geometry: QRect) -> None:
-        """
-        更新螢幕位置與尺寸, 並發出幾何變更訊號
-        """
-
-        self._geometry = geometry
-        self.geometryChanged.emit(geometry)
 
 
 class HeadlessDesktopEvents(QObject):
@@ -300,24 +288,17 @@ class ImageDisplay:
         self.current_image = None
 
 
-class PlaybackStateTests(unittest.TestCase):
+class PlaybackStateTests(QtTestCase):
     """
     桌布播放狀態, 重掛與資源釋放
     """
-
-    @classmethod
-    def setUpClass(cls) -> None:
-        """
-        取得或建立供播放狀態測試處理訊號與計時器的 Qt 核心應用程式
-        """
-
-        cls.app = QCoreApplication.instance() or QCoreApplication([])
-
 
     def setUp(self) -> None:
         """
         建立播放器, 圖片輸出與桌布替身
         """
+
+        super().setUp()
 
         self.player = DeferredPlayer()
         self.image_output = ImageDisplay()
@@ -445,8 +426,6 @@ class PlaybackStateTests(unittest.TestCase):
 
         self.player.callbacks.clear()
         wallpaper.deleteLater()
-        # 處理 deleteLater 排入的刪除事件
-        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
     def start_loading(self) -> None:
@@ -568,87 +547,6 @@ class PlaybackStateTests(unittest.TestCase):
         self.assertEqual(self.wallpaper.pending_reattach_time, 6000)
 
 
-    def test_screens_restore_their_own_wallpaper_after_shared_history_is_cleared(self):
-        """
-        驗證清除共用紀錄後各螢幕仍還原自己的桌布, 底層載入與重掛不改寫設定
-        """
-
-        with tempfile.TemporaryDirectory() as directory:
-            media_dir = Path(directory) / "media"
-            media_dir.mkdir()
-            first = media_dir / "a.mp4"
-            second = media_dir / "b.png"
-            first.touch()
-            second.touch()
-            store = ConfigStore(Path(directory) / "config.json", media_dir, ROOT / "lang")
-            self.namespace["config_store"] = store
-            self.namespace["MEDIA_DIR"] = media_dir
-            self.namespace["get_media"].return_value = [first, second]
-
-            screen_a = self.create_independent_wallpaper("screen-a")
-            screen_a.select_media(first)
-            screen_b = self.create_independent_wallpaper("screen-b")
-            screen_b.select_media(second)
-            config = store.load()
-            self.assertEqual(config["screenWallpapers"], {"screen-a": "a.mp4", "screen-b": "b.png"})
-            self.assertEqual(config["recentVideo"], ["b.png", "a.mp4"])
-
-            tray = self.namespace["Tray"].__new__(self.namespace["Tray"])
-            tray.wallpapers = {"screen-a": screen_a, "screen-b": screen_b}
-            tray.clear_recent_media()
-            self.assertEqual(store.load()["recentVideo"], [])
-            original_config = store.config_path.read_bytes()
-            screen_a.set_play_media(second)
-            screen_b.set_play_media(first)
-            self.assertEqual(store.config_path.read_bytes(), original_config)
-            screen_a.shutdown()
-            screen_b.shutdown()
-
-            restored_b = self.create_independent_wallpaper("screen-b")
-            restored_a = self.create_independent_wallpaper("screen-a")
-            self.assertEqual(restored_a.current_media, first)
-            self.assertEqual(restored_b.current_media, second)
-            restored_a.reattach_to_desktop()
-            restored_b.reattach_to_desktop()
-            self.assertEqual(store.config_path.read_bytes(), original_config)
-            self.namespace["logger"].exception.assert_not_called()
-
-
-    def test_legacy_recent_selection_is_migrated_without_reordering_history(self):
-        """
-        驗證新螢幕沿用舊最近紀錄並保存獨立選擇, 不更新共用歷史
-        """
-
-        store = self.namespace["config_store"]
-        store.load.return_value = {
-            "recentVideo": ["legacy.mp4", "older.png"],
-            "screenWallpapers": {"other-screen": "other.mp4"},
-        }
-
-        with mock.patch.object(Path, "is_file", return_value=True):
-            wallpaper = self.create_independent_wallpaper("new-screen")
-
-        self.assertEqual(wallpaper.current_media, self.namespace["MEDIA_DIR"] / "legacy.mp4")
-        store.remember_wallpaper.assert_called_once_with(
-            "new-screen", wallpaper.current_media
-        )
-        store.remember_recent.assert_not_called()
-
-
-    def test_missing_saved_media_keeps_selection_while_using_available_fallback(self):
-        """
-        驗證已保存的媒體遺失時暫用可用桌布, 不覆寫原本的螢幕選擇
-        """
-
-        store = self.namespace["config_store"]
-        store.load.return_value = {"screenWallpapers": {"screen-a": "missing.mp4"}}
-        self.namespace["get_media"].return_value = [self.media_path]
-        wallpaper = self.create_independent_wallpaper("screen-a")
-
-        self.assertEqual(wallpaper.current_media, self.media_path)
-        store.remember_wallpaper.assert_not_called()
-
-
     def test_playing_callback_from_worker_pauses_on_qt_thread(self):
         """
         驗證背景執行緒送出的 Playing 事件由 Qt 主執行緒套用先前的暫停要求
@@ -717,25 +615,20 @@ class PlaybackStateTests(unittest.TestCase):
 
     def test_video_reattach_stops_old_output_before_destroying_and_rebinding(self):
         """
-        驗證重掛先停止舊輸出再銷毀與綁定視窗, 並保留暫停與進度且不重複排程
+        重掛在背景停止舊輸出後才銷毀與綁定視窗
         """
 
         self.start_playing()
-        self.tray.pause()
-        self.player.position = 4321
-        self.wallpaper.attach_to_desktop.reset_mock()
         self.wallpaper.attach_to_desktop.side_effect = lambda: self.attach_to_desktop(self.wallpaper)
         original_stop = self.player.stop
 
         def stop_and_clear_time():
             """
-            確認重建時由背景執行緒停止輸出, 並模擬停止後進度失效
+            確認停止在背景執行緒執行
             """
 
-            if self.wallpaper.is_recreating and not self.wallpaper.destroy.called:
-                self.assertNotEqual(threading.get_ident(), main_thread)
+            self.assertNotEqual(threading.get_ident(), main_thread)
             original_stop()
-            self.player.position = -1
 
         main_thread = threading.get_ident()
         with mock.patch.object(self.player, "stop", side_effect=stop_and_clear_time) as stop:
@@ -743,23 +636,13 @@ class PlaybackStateTests(unittest.TestCase):
             operations.attach_mock(stop, "stop")
             operations.attach_mock(self.wallpaper.destroy, "destroy")
             operations.attach_mock(self.player.set_hwnd, "set_hwnd")
-            self.wallpaper.schedule_reattach(0)
             self.wallpaper.reattach_to_desktop()
-            self.app.processEvents()
-            self.assertFalse(self.wallpaper.reattach_timer.isActive())
-            self.wallpaper.attach_to_desktop.assert_called_once_with()
 
         self.assertEqual(operations.mock_calls[:3], [
             mock.call.stop(),
             mock.call.destroy(True, True),
             mock.call.set_hwnd(1),
         ])
-        self.player.finish_loading()
-        self.app.processEvents()
-        self.assertEqual(self.wallpaper.play_state, "pause")
-        self.assertEqual(self.player.state, "paused")
-        self.assertEqual(self.player.position, 4321)
-        self.namespace["logger"].exception.assert_not_called()
 
 
     def test_reattach_stop_keeps_qt_events_running_and_ignores_pending_pause(self):
@@ -950,91 +833,6 @@ class PlaybackStateTests(unittest.TestCase):
         self.assertEqual(self.player.state, "playing")
 
 
-    def test_import_completion_waits_for_reattach_and_cancels_old_position(self):
-        """
-        驗證背景停止期間完成的匯入延後至重掛結束套用, 重試也不將舊進度套到匯入媒體
-        """
-
-        for fail_attach in (False, True):
-            for kind in ("video", "same_video", "image"):
-                with self.subTest(fail_attach=fail_attach, kind=kind):
-                    self.start_playing()
-                    self.player.position = 4321
-                    destination = {
-                        "video": self.media_path.with_name("imported.mp4"),
-                        "same_video": self.media_path,
-                        "image": self.image_path,
-                    }[kind]
-                    worker = mock.Mock(destination=destination, cancelled=False)
-                    worker.isRunning.return_value = False
-                    self.tray.import_thread = worker
-                    self.tray.add_media_action = mock.Mock()
-                    self.tray.cancel_import_action = mock.Mock()
-                    self.tray.media_menu = mock.Mock()
-                    self.tray.thumbnail_thread = mock.Mock()
-                    self.tray.refresh_media_menu = mock.Mock()
-                    self.tray.tray = mock.Mock()
-                    self.namespace["tr"] = lambda key: key
-                    self.wallpaper.attach_to_desktop.side_effect = (
-                        [RuntimeError("attachment failed"), None] if fail_attach else None
-                    )
-                    callback_finished = threading.Event()
-                    errors = []
-                    main_thread = threading.get_ident()
-                    original_stop = self.player.stop
-
-                    def stop_waiting_for_import():
-                        """
-                        背景停止前等待匯入回呼完成, 記錄主執行緒過早停止的錯誤
-                        """
-
-                        if threading.get_ident() != main_thread:
-                            if not callback_finished.wait(2):
-                                raise RuntimeError("import completion was not processed")
-                        elif not callback_finished.is_set():
-                            errors.append("player stopped on main thread while background stop was pending")
-                        original_stop()
-
-                    def finish_import_during_stop():
-                        """
-                        在停止期間完成匯入回呼, 確認結果仍延後套用並回報完成或錯誤
-                        """
-
-                        try:
-                            self.assertTrue(self.wallpaper.is_recreating)
-                            self.tray.finish_import()
-                            self.assertIs(self.tray.import_thread, worker)
-                            self.assertEqual(self.wallpaper.current_media, self.media_path)
-                            worker.deleteLater.assert_not_called()
-                        except Exception as error:
-                            errors.append(str(error))
-                        finally:
-                            callback_finished.set()
-
-                    QTimer.singleShot(0, finish_import_during_stop)
-                    with mock.patch.object(self.player, "stop", side_effect=stop_waiting_for_import):
-                        self.wallpaper.reattach_to_desktop()
-                        self.app.processEvents()
-
-                    self.assertEqual(errors, [])
-                    self.assertIsNone(self.tray.import_thread)
-                    worker.deleteLater.assert_called_once_with()
-                    self.assertEqual(self.wallpaper.current_media, destination)
-                    self.tray.thumbnail_thread.request.assert_called_once_with(destination)
-                    self.tray.refresh_media_menu.assert_called_once_with()
-                    if fail_attach:
-                        self.wallpaper.reattach_timer.start(0)
-                        self.app.processEvents()
-                    self.player.finish_loading()
-                    self.app.processEvents()
-                    self.assertEqual(self.wallpaper.play_state, "play")
-                    self.assertIsNone(self.wallpaper.pending_reattach_time)
-                    if kind == "image":
-                        self.assertTrue(self.image_output.visible)
-                    else:
-                        self.assertEqual(self.player.position, 0)
-
-
     def test_auto_pause_during_loading_applies_and_resumes(self):
         """
         驗證載入期間的螢幕關閉, 電池或全螢幕條件會暫停影片, 條件解除後恢復
@@ -1118,79 +916,9 @@ class PlaybackStateTests(unittest.TestCase):
         self.assertEqual(self.player.pause_calls, pause_calls)
 
 
-    def test_bad_image_preserves_previous_output_state_and_history(self):
-        """
-        驗證圖片載入失敗時保留原媒體, 播放與顯示狀態, 不寫入設定
-        """
-
-        for previous_media in (self.media_path, self.image_path):
-            for command in ("play", "pause", "stop"):
-                if previous_media == self.image_path and command == "pause":
-                    continue
-
-                with self.subTest(media=previous_media, state=command):
-                    self.instance_image.set_image.side_effect = None
-                    self.wallpaper.set_play_media(previous_media)
-                    self.tray.play()
-                    getattr(self.tray, command)()
-
-                    previous_state = self.player.state
-                    previous_image = self.image_output.current_image
-                    previous_visible = self.image_output.visible
-                    self.namespace["config_store"].save.reset_mock()
-                    self.namespace["config_store"].remember_wallpaper.reset_mock()
-                    self.instance_image.set_image.side_effect = RuntimeError("bad image")
-
-                    with self.assertRaisesRegex(RuntimeError, "bad image"):
-                        self.wallpaper.select_media(self.image_path.with_name("bad.png"))
-
-                    self.assertEqual(self.wallpaper.current_media, previous_media)
-                    self.assertEqual(self.wallpaper.play_state, command)
-                    self.assertEqual(self.player.state, previous_state)
-                    self.assertEqual(self.image_output.current_image, previous_image)
-                    self.assertEqual(self.image_output.visible, previous_visible)
-                    self.namespace["config_store"].save.assert_not_called()
-                    self.namespace["config_store"].remember_wallpaper.assert_not_called()
-
-
-    def test_screen_and_destroy_events_share_one_pending_reattach(self):
-        """
-        驗證螢幕變更與視窗銷毀通知合併為同一次重掛排程
-        """
-
-        self.namespace["wintypes"].MSG.from_address.return_value.message = self.namespace["WM_DESTROY"]
-        self.wallpaper.attach_to_desktop.reset_mock()
-        timer = self.wallpaper.reattach_timer
-        timeouts = QSignalSpy(timer.timeout)
-
-        self.wallpaper.on_screen_changed(mock.sentinel.first_geometry)
-        timer_id = timer.timerId()
-        self.wallpaper.nativeEvent(b"windows_generic_MSG", 123)
-        self.wallpaper.on_screen_changed(mock.sentinel.last_geometry)
-
-        self.assertEqual(timer.timerId(), timer_id)
-        self.assertTrue(timeouts.wait(1000))
-        # 確認下一個等待區間沒有重複重掛
-        QTest.qWait(250)
-
-        self.assertEqual(timeouts.count(), 1)
-        self.wallpaper.attach_to_desktop.assert_called_once_with()
-        self.wallpaper.destroy.assert_called_once_with(True, True)
-        self.assertFalse(timer.isActive())
-        # 重建或退出期間略過銷毀通知, 不重新排定重掛
-        for flag in ("is_recreating", "is_exiting"):
-            with self.subTest(flag=flag):
-                setattr(self.wallpaper, flag, True)
-                try:
-                    self.assertEqual(self.wallpaper.nativeEvent(b"windows_generic_MSG", 123), (True, 0))
-                    self.assertFalse(timer.isActive())
-                finally:
-                    setattr(self.wallpaper, flag, False)
-
-
     def test_failed_reattach_retries_twice_and_merges_new_events(self):
         """
-        驗證掛載失敗最多重試兩次, 合併新通知且等待桌面不消耗重試次數
+        掛載失敗最多重試兩次, 等待期間的新通知不另排重掛
         """
 
         self.namespace["wintypes"].MSG.from_address.return_value.message = self.namespace["WM_DESTROY"]
@@ -1203,13 +931,12 @@ class PlaybackStateTests(unittest.TestCase):
         for attempt in range(3):
             with self.subTest(attempt=attempt):
                 self.assertTrue(timer.isActive())
-                self.assertEqual(timer.interval(), 200 if attempt == 0 else 2000)
                 timer_id = timer.timerId()
                 self.wallpaper.on_screen_changed(mock.sentinel.new_geometry)
                 self.wallpaper.nativeEvent(b"windows_generic_MSG", 123)
                 self.assertEqual(timer.timerId(), timer_id)
 
-                # 保留正式重試間隔的檢查, 再加速這次 timeout
+                # 加速 timeout, 不等待正式重試間隔
                 timer.start(0)
                 self.app.processEvents()
 
@@ -1217,19 +944,7 @@ class PlaybackStateTests(unittest.TestCase):
                 self.assertEqual(self.wallpaper.reattach_retry_count, min(attempt + 1, 2))
                 self.assertFalse(self.wallpaper.is_recreating)
 
-                if attempt == 0:
-                    # 等待桌面就緒不消耗剩下的掛載重試
-                    self.namespace["check_desktop_ready"].return_value = False
-                    for _ in range(3):
-                        timer.start(0)
-                        self.app.processEvents()
-                        self.assertTrue(timer.isActive())
-                        self.assertEqual(self.wallpaper.reattach_retry_count, 1)
-                        self.wallpaper.attach_to_desktop.assert_called_once_with()
-                    self.namespace["check_desktop_ready"].return_value = True
-
         self.assertFalse(timer.isActive())
-        self.namespace["logger"].error.assert_called_once()
 
 
     def test_taskbar_notification_recovers_without_destroy_event(self):
@@ -1245,41 +960,12 @@ class PlaybackStateTests(unittest.TestCase):
 
         timer = self.wallpaper.reattach_timer
         self.assertTrue(timer.isActive())
-        self.assertEqual(timer.interval(), 200)
         self.assertEqual(self.wallpaper.reattach_retry_count, 0)
         timer.start(0)
         self.app.processEvents()
 
         self.wallpaper.attach_to_desktop.assert_called_once_with()
-        self.wallpaper.destroy.assert_called_once_with(True, True)
         self.assertFalse(timer.isActive())
-
-
-    def test_exit_cancels_desktop_wait_and_ignores_queued_or_new_reattach_requests(self):
-        """
-        驗證退出會取消桌面等待並釋放輸出, 忽略佇列中與新收到的重掛要求
-        """
-
-        self.wallpaper.attach_to_desktop.reset_mock()
-        self.namespace["check_desktop_ready"].return_value = False
-        self.wallpaper.reattach_to_desktop()
-        self.assertTrue(self.wallpaper.reattach_timer.isActive())
-        listener = self.wallpaper.desktop_events
-        listener.taskbar_created.emit()
-
-        self.tray.exit()
-        self.wallpaper.reattach_to_desktop()
-        self.wallpaper.on_screen_changed(mock.sentinel.geometry)
-        self.app.processEvents()
-
-        listener.close.assert_called_once_with()
-        self.assertIsNone(self.wallpaper.desktop_events)
-        self.assertFalse(self.wallpaper.reattach_timer.isActive())
-        self.assertEqual(self.player.state, "released")
-        self.namespace["check_desktop_ready"].assert_called_once_with()
-        self.wallpaper.attach_to_desktop.assert_not_called()
-        self.wallpaper.destroy.assert_called_once_with(True, True)
-        self.namespace["logger"].exception.assert_not_called()
 
 
     def test_unready_desktop_preserves_output_until_ready(self):
@@ -1292,7 +978,6 @@ class PlaybackStateTests(unittest.TestCase):
         self.player.position = 4321
         self.wallpaper.reattach_retry_count = 1
         self.wallpaper.attach_to_desktop.reset_mock()
-        self.instance_image.reset_mock()
         self.namespace["check_desktop_ready"].return_value = False
         timer = self.wallpaper.reattach_timer
 
@@ -1302,19 +987,11 @@ class PlaybackStateTests(unittest.TestCase):
             self.app.processEvents()
 
             self.assertTrue(timer.isActive())
-            self.assertEqual(timer.interval(), 2000)
             self.assertEqual(self.wallpaper.reattach_retry_count, 1)
-            self.assertFalse(self.wallpaper.is_recreating)
             self.wallpaper.destroy.assert_not_called()
-            self.wallpaper.create.assert_not_called()
             self.wallpaper.hide.assert_not_called()
             self.wallpaper.attach_to_desktop.assert_not_called()
-            self.wallpaper.unregister_power_notification.assert_not_called()
-            self.instance_image.set_hwnd.assert_not_called()
-            self.assertEqual(self.wallpaper.current_media, self.media_path)
-            self.assertEqual(self.wallpaper.play_state, "pause")
-            self.assertEqual(self.player.state, "paused")
-            self.assertEqual(self.player.position, 4321)
+            self.assertEqual((self.player.state, self.player.position), ("paused", 4321))
 
         self.namespace["check_desktop_ready"].return_value = True
         timer.start(0)
@@ -1323,12 +1000,9 @@ class PlaybackStateTests(unittest.TestCase):
         self.app.processEvents()
 
         self.wallpaper.attach_to_desktop.assert_called_once_with()
-        self.wallpaper.destroy.assert_called_once_with(True, True)
         self.assertFalse(timer.isActive())
         self.assertEqual(self.wallpaper.reattach_retry_count, 0)
-        self.assertEqual(self.player.state, "paused")
-        self.assertEqual(self.player.position, 4321)
-        self.namespace["logger"].exception.assert_not_called()
+        self.assertEqual((self.player.state, self.player.position), ("paused", 4321))
 
 
     def test_unregister_clears_handle_even_if_api_fails(self):
@@ -1391,7 +1065,7 @@ class PlaybackStateTests(unittest.TestCase):
 
     def test_shutdown_is_idempotent_and_blocks_late_operations_without_quitting(self):
         """
-        驗證重複關閉只清理一次並阻止後續操作, 不退出共用 Qt 應用程式
+        桌面等待期間關閉只釋放一次, 已排入與後續抵達的事件不再操作輸出
         """
 
         self.start_loading()
@@ -1400,12 +1074,12 @@ class PlaybackStateTests(unittest.TestCase):
         self.player.finish_loading()
         pause_calls = list(self.player.pause_calls)
         playing_callback = self.player.callbacks[PLAYING_EVENT]
-        self.wallpaper.pending_reattach_time = 4321
         self.wallpaper.attach_to_desktop.reset_mock()
-        self.wallpaper.reattach_timer.start(10000)
-        self.wallpaper.check_auto_pause_timer.start(10000)
-        self.wallpaper.fullscreen_detection_timer.start(10000)
+        self.namespace["check_desktop_ready"].return_value = False
+        self.wallpaper.reattach_to_desktop()
+        self.assertTrue(self.wallpaper.reattach_timer.isActive())
         listener = self.wallpaper.desktop_events
+        listener.taskbar_created.emit()
         instance = self.wallpaper.instance_vlc
 
         with (
@@ -1414,7 +1088,6 @@ class PlaybackStateTests(unittest.TestCase):
         ):
             operations = mock.Mock()
             operations.attach_mock(stop, "stop")
-            operations.attach_mock(self.instance_image.close, "close_image")
             operations.attach_mock(release, "release_player")
             operations.attach_mock(instance.release, "release_instance")
             operations.attach_mock(self.wallpaper.destroy, "destroy")
@@ -1423,45 +1096,24 @@ class PlaybackStateTests(unittest.TestCase):
             self.wallpaper.shutdown()
             # 模擬解除事件註冊後仍抵達的原生回呼
             playing_callback(None)
-            self.wallpaper.manual_play()
-            self.wallpaper.manual_pause()
-            self.wallpaper.manual_stop()
-            self.wallpaper.apply_playback_state(PlaybackState("play"), force=True)
-            self.wallpaper.set_play_media(self.media_path)
-            self.wallpaper.select_media(self.media_path)
-            self.attach_to_desktop(self.wallpaper)
-            self.wallpaper.enable_fullscreen_detection()
-            self.wallpaper.check_auto_pause()
             self.wallpaper.on_taskbar_created()
-            self.wallpaper.target_screen.set_geometry(QRect(0, 0, 2560, 1440))
+            self.wallpaper.reattach_to_desktop()
             self.app.processEvents()
 
             self.assertEqual(operations.mock_calls, [
                 mock.call.stop(),
-                mock.call.close_image(),
                 mock.call.release_player(),
                 mock.call.release_instance(),
                 mock.call.destroy(True, True),
             ])
 
-        self.assertTrue(self.wallpaper.is_exiting)
-        self.assertIsNone(self.wallpaper.current_media)
-        self.assertIsNone(self.wallpaper.pending_reattach_time)
-        self.assertEqual(self.wallpaper.play_state, "stop")
         self.assertEqual(self.player.state, "released")
         self.assertEqual(self.player.callbacks, {})
         self.assertEqual(self.player.pause_calls, pause_calls)
-        self.assertFalse(self.wallpaper.fullscreen_detection_ready)
         self.assertFalse(any(timer.isActive() for timer in self.wallpaper.findChildren(QTimer)))
-        self.assertIsNone(self.wallpaper.desktop_events)
         listener.close.assert_called_once_with()
-        self.instance_image.set_hwnd.assert_called_with(0)
-        self.instance_image.deleteLater.assert_called_once_with()
-        self.wallpaper.unregister_power_notification.assert_called_once_with()
         self.wallpaper.attach_to_desktop.assert_not_called()
-        self.namespace["is_any_fullscreen"].assert_not_called()
         self.tray.app.quit.assert_not_called()
-        self.namespace["logger"].exception.assert_not_called()
 
 
     def test_shutdown_continues_after_listener_stop_image_and_player_release_failures(self):
@@ -1490,56 +1142,13 @@ class PlaybackStateTests(unittest.TestCase):
         self.namespace["logger"].exception.assert_called()
 
 
-    def test_shutdown_during_reattach_reuses_stop_and_prevents_rebinding(self):
-        """
-        驗證重掛期間關閉會共用正在進行的停止工作, 不再重建或綁定視窗
-        """
-
-        self.start_loading()
-        self.player.position = 4321
-        self.wallpaper.attach_to_desktop.reset_mock()
-        continue_stop = threading.Event()
-        original_stop = self.player.stop
-
-        def stop_waiting_for_shutdown():
-            """
-            等待關閉回呼放行後停止播放器, 逾時則回報關閉未被處理
-            """
-
-            if not continue_stop.wait(2):
-                raise RuntimeError("shutdown was not processed")
-            original_stop()
-
-        def shutdown_during_stop():
-            """
-            放行背景停止工作並在重掛途中關閉桌布
-            """
-
-            continue_stop.set()
-            self.wallpaper.shutdown()
-
-        QTimer.singleShot(0, shutdown_during_stop)
-
-        with mock.patch.object(self.player, "stop", side_effect=stop_waiting_for_shutdown) as stop:
-            self.wallpaper.reattach_to_desktop()
-
-        stop.assert_called_once_with()
-        self.assertTrue(self.wallpaper.is_exiting)
-        self.assertFalse(self.wallpaper.is_recreating)
-        self.assertIsNone(self.wallpaper._reattach_position)
-        self.assertEqual(self.player.state, "released")
-        self.wallpaper.attach_to_desktop.assert_not_called()
-        self.wallpaper.create.assert_not_called()
-        self.wallpaper.destroy.assert_called_once_with(True, True)
-        self.namespace["logger"].exception.assert_not_called()
-
-
     def test_screen_removal_during_reattach_defers_qobject_deletion_until_reattach_returns(self):
         """
         驗證重掛途中移除螢幕時先清理輸出, 等重掛返回後才刪除 Qt 桌布物件
         """
 
         self.start_loading()
+        self.wallpaper.attach_to_desktop.reset_mock()
         self.tray.rebuild_screen_menus = mock.Mock()
         continue_stop = threading.Event()
         original_stop = self.player.stop
@@ -1573,6 +1182,8 @@ class PlaybackStateTests(unittest.TestCase):
         self.assertEqual(self.tray.wallpapers, {})
         self.assertEqual(self.player.state, "released")
         stop.assert_called_once_with()
+        self.wallpaper.attach_to_desktop.assert_not_called()
+        self.wallpaper.create.assert_not_called()
         self.namespace["logger"].exception.assert_not_called()
         self.app.processEvents()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)

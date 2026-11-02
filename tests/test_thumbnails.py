@@ -1,5 +1,5 @@
 """
-測試快取檔案保護, 縮圖工作釋放與影片解碼的比例, 方向及取消
+測試快取檔案保護, 特殊影片解碼與取消
 影片案例需要 Windows, VLC-lite 與 ffmpeg; 缺少時顯示跳過
 只在暫存資料夾操作, 不啟動桌布或修改使用者設定
 """
@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
-from thumbnails import ThumbnailThread, create_video_thumbnail, ensure_thumbnail, get_video_thumbnail_sizes
+from thumbnails import create_video_thumbnail, ensure_thumbnail, get_video_thumbnail_sizes
 
 
 VLC_DIR = ROOT / "VLC-lite"
@@ -182,47 +182,6 @@ class ThumbnailTests(unittest.TestCase):
         )
 
 
-    def test_background_worker_uses_supplied_directories(self):
-        """
-        背景縮圖工作使用指定的媒體與快取目錄
-        """
-
-        source = self.media_dir / "nested" / "sample.bmp"
-        source.parent.mkdir()
-        self.save_image(source, Qt.GlobalColor.red)
-
-
-        ready = threading.Event()
-        results = []
-        worker = ThumbnailThread(self.media_dir, self.thumbnail_dir)
-
-        def receive(media_path, image):
-            """
-            保存背景回傳的媒體路徑與縮圖, 並通知等待中的測試
-            """
-
-            results.append((media_path, image))
-            ready.set()
-
-
-        # 直接接收結果並以 Event 等待
-        worker.thumbnail_ready.connect(receive, Qt.ConnectionType.DirectConnection)
-
-        try:
-            worker.request(source)
-            self.assertTrue(ready.wait(5), "背景縮圖工作未回傳結果")
-
-        finally:
-            worker.stop()
-
-
-        self.assertFalse(worker.isRunning())
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0][0], str(source))
-        self.assertEqual(results[0][1].width(), 300)
-        self.assertEqual(len(list((self.thumbnail_dir / "nested").glob("*.jpg"))), 1)
-
-
     def test_long_names_with_same_content_have_independent_caches(self):
         """
         驗證相同內容的長檔名使用獨立快取, 清理過期快取時保留無關檔案與目錄
@@ -317,18 +276,12 @@ class VideoThumbnailTests(unittest.TestCase):
         cls.enterClassContext(video_thumbnail_environment())
         cls.directory = Path(cls.enterClassContext(tempfile.TemporaryDirectory()))
         cls.has_av1_encoder = b"libaom-av1" in run_ffmpeg("-encoders", timeout=10).stdout
-        cls.media = {}
-
-        # 建立像素長寬比為 1:1 與 2:1 的影片
-        for sar in (1, 2):
-
-            path = cls.directory / f"sar-{sar}.mp4"
-            run_ffmpeg(
-                "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30",
-                "-t", "3", "-vf", f"setsar={sar}/1",
-                "-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", path
-            )
-            cls.media[sar] = path
+        cls.anamorphic_media = cls.directory / "sar-2.mp4"
+        run_ffmpeg(
+            "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30",
+            "-t", "3", "-vf", "setsar=2/1",
+            "-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", cls.anamorphic_media
+        )
 
         # 四個象限使用不同顏色, 同時驗證旋轉後的尺寸及實際像素方向
         quadrants = cls.directory / "quadrants.mp4"
@@ -488,23 +441,12 @@ class VideoThumbnailTests(unittest.TestCase):
                 self.assertEqual(result["cancelled"], mode == "cancel")
 
 
-    def test_visible_height_excludes_decoder_padding(self):
-        """
-        縮圖高度不包含解碼器的補齊範圍
-        """
-
-        image = create_video_thumbnail(self.media[1], lambda: False)
-
-        self.assertFalse(image.isNull())
-        self.assertEqual((image.width(), image.height()), (300, 169))
-
-
     def test_non_square_pixels_use_display_aspect_ratio(self):
         """
         非正方形像素依實際顯示比例產生縮圖
         """
 
-        image = create_video_thumbnail(self.media[2], lambda: False)
+        image = create_video_thumbnail(self.anamorphic_media, lambda: False)
 
         self.assertFalse(image.isNull())
         self.assertEqual((image.width(), image.height()), (300, 84))

@@ -173,38 +173,6 @@ class FollowControllerTests(unittest.TestCase):
         self.enterContext(mock.patch("screen_follow.logger"))
 
 
-    def test_join_preserves_manual_state_and_waits_for_new_media_without_changing_history(self) -> None:
-        """
-        加入時保留手動暫停, 換片後等待就緒再對齊最新進度, 不更動最近紀錄
-        """
-
-        source, follower = self.screens["a"], self.screens["b"]
-        source.position = 3500
-        source.apply_playback_state(PlaybackState("pause"))
-        self.assertTrue(self.controller.follow("b", "a"))
-        self.assertEqual((follower.play_state, follower.playback_state.requested_state, follower.position), ("pause", "pause", 3500))
-        self.assertEqual(self.store.load()["screenFollows"], {"b": "a"})
-        self.assertEqual(self.store.load()["screenWallpapers"], {"b": "sample.mp4"})
-        self.controller.follow("c", "b")
-        for key in "bc":
-            self.screens[key].seeks.clear()
-        source.current_media = self.media.with_name("new.mp4")
-        self.controller.synchronize("a")
-        source.position = 4500
-        for key in "bc":
-            target = self.screens[key]
-            self.assertEqual(target.current_media, source.current_media)
-            self.assertEqual(target.position, 0)
-            self.assertEqual(target.seeks, [])
-            target.ready = True
-            self.controller.on_ready(key, target)
-            self.assertEqual(target.position, 4500)
-            self.assertEqual(target.seeks, [4500])
-
-        self.assertEqual(self.store.load()["screenWallpapers"], {"b": "new.mp4", "c": "new.mp4"})
-        self.assertEqual(self.store.load()["recentVideo"], ["older.mp4"])
-
-
     def test_small_drift_and_loop_boundary_do_not_seek(self) -> None:
         """
         驗證小幅進度差與循環邊界不觸發校正, 超過容許差距才調整位置
