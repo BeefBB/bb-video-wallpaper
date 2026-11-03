@@ -310,6 +310,29 @@ class Wallpaper(QWidget):
 
         super().__init__()
 
+        # 正在退出
+        self.is_exiting = False
+        # 監聽螢幕亮滅的事件
+        self.power_notify = None
+        # 不掛在桌布視窗或 Explorer 之下的獨立頂層 HWND
+        self.desktop_events = None
+
+        self.playback_started.connect(self.apply_pending_reattach_time, Qt.ConnectionType.QueuedConnection)
+        self.playback_started.connect(self.apply_pending_pause, Qt.ConnectionType.QueuedConnection)
+
+        try:
+            self._initialize(target_screen)
+
+        except Exception:
+            self.shutdown()
+            self.deleteLater()
+            raise
+
+
+    def _initialize(self, target_screen: QScreen | None) -> None:
+        """
+        建立桌布資源
+        """
 
         # 未指定時使用建立當下的主螢幕, 重掛時保留同一個目標
         if target_screen is None:
@@ -321,6 +344,7 @@ class Wallpaper(QWidget):
 
         # 這個桌布將掛載到的螢幕
         self.target_screen = target_screen
+        self.target_screen.geometryChanged.connect(self.on_screen_changed)
 
         # 設定檔
         config = config_store.load()
@@ -329,8 +353,6 @@ class Wallpaper(QWidget):
         self.is_recreating = False
         # 重掛失敗重試次數
         self.reattach_retry_count = 0
-        # 正在退出
-        self.is_exiting = False
         self._video_stop_thread: VlcStopThread | None = None
 
         # 重掛用計時器
@@ -359,8 +381,6 @@ class Wallpaper(QWidget):
 
         # 螢幕亮滅
         self.screen_off = False
-        # 監聽螢幕亮滅的事件
-        self.power_notify = None
 
         # 自動暫停設定
         self.auto_pause_if_fullscreen = config.get("autoPauseIfFullscreen", True)
@@ -400,10 +420,6 @@ class Wallpaper(QWidget):
             initial_media = media_files[0]
 
 
-        # 螢幕解析度變更事件
-        self.target_screen.geometryChanged.connect(self.on_screen_changed)
-
-
         # VLC 播放器物件
         instance_vlc = vlc.Instance(
             "--no-video-title-show",
@@ -421,9 +437,6 @@ class Wallpaper(QWidget):
         # 圖片共用主程式的 QApplication 與桌布 HWND
         self.instance_image = bb_image_display.Instance()
 
-
-        self.playback_started.connect(self.apply_pending_reattach_time, Qt.ConnectionType.QueuedConnection)
-        self.playback_started.connect(self.apply_pending_pause, Qt.ConnectionType.QueuedConnection)
 
         self.player_events = self.instance_vlc_player.event_manager()
         self.player_events.event_attach(
@@ -463,8 +476,6 @@ class Wallpaper(QWidget):
         self.check_auto_pause_timer.timeout.connect(lambda: self.check_auto_pause(from_timer=True))
         self.check_auto_pause_timer.start(500)
 
-        # 不掛在桌布視窗或 Explorer 之下的獨立頂層 HWND
-        self.desktop_events = None
 
         try:
             self.desktop_events = DesktopEventWindow()
@@ -1035,37 +1046,41 @@ class Wallpaper(QWidget):
         self.desktop_events = None
 
         steps = [
-            ("停止重掛計時器", self.reattach_timer.stop),
-            ("停止自動暫停計時器", self.check_auto_pause_timer.stop),
-            ("停止全螢幕偵測等待", self.fullscreen_detection_timer.stop),
-            ("解除螢幕訊號", lambda: self.target_screen.geometryChanged.disconnect(self.on_screen_changed)),
-            ("解除 VLC 回呼", lambda: self.player_events.event_detach(getattr(vlc.EventType, "MediaPlayerPlaying"))),
-            ("解除進度恢復訊號", lambda: self.playback_started.disconnect(self.apply_pending_reattach_time)),
-            ("解除暫停恢復訊號", lambda: self.playback_started.disconnect(self.apply_pending_pause)),
+            ("停止重掛計時器", "reattach_timer", lambda: self.reattach_timer.stop()),
+            ("停止自動暫停計時器", "check_auto_pause_timer", lambda: self.check_auto_pause_timer.stop()),
+            ("停止全螢幕偵測等待", "fullscreen_detection_timer", lambda: self.fullscreen_detection_timer.stop()),
+            ("解除螢幕訊號", "target_screen", lambda: self.target_screen.geometryChanged.disconnect(self.on_screen_changed)),
+            ("解除 VLC 回呼", "player_events", lambda: self.player_events.event_detach(getattr(vlc.EventType, "MediaPlayerPlaying"))),
+            ("解除進度恢復訊號", None, lambda: self.playback_started.disconnect(self.apply_pending_reattach_time)),
+            ("解除暫停恢復訊號", None, lambda: self.playback_started.disconnect(self.apply_pending_pause)),
         ]
 
         if desktop_events is not None:
             steps.extend([
-                ("解除桌面通知訊號", lambda: desktop_events.taskbar_created.disconnect(self.on_taskbar_created)),
-                ("關閉桌面通知視窗", desktop_events.close),
-                ("釋放桌面通知視窗", desktop_events.deleteLater),
+                ("解除桌面通知訊號", None, lambda: desktop_events.taskbar_created.disconnect(self.on_taskbar_created)),
+                ("關閉桌面通知視窗", None, desktop_events.close),
+                ("釋放桌面通知視窗", None, desktop_events.deleteLater),
             ])
 
         steps.extend([
-            ("取消電源通知", self.unregister_power_notification),
-            ("停止影片輸出", self.stop_video_output),
-            ("關閉圖片輸出", self.instance_image.close),
-            ("解除圖片目標視窗", lambda: self.instance_image.set_hwnd(0)),
-            ("釋放圖片物件", self.instance_image.deleteLater),
-            ("解除影片目標視窗", lambda: self.instance_vlc_player.set_hwnd(0)),
-            ("釋放 VLC 播放器", self.instance_vlc_player.release),
-            ("釋放 VLC 實例", self.instance_vlc.release),
-            ("隱藏桌布視窗", self.hide),
-            ("釋放桌布視窗", lambda: self.destroy(True, True)),
+            ("取消電源通知", None, self.unregister_power_notification),
+            ("停止影片輸出", "instance_vlc_player", self.stop_video_output),
+            ("關閉圖片輸出", "instance_image", lambda: self.instance_image.close()),
+            ("解除圖片目標視窗", "instance_image", lambda: self.instance_image.set_hwnd(0)),
+            ("釋放圖片物件", "instance_image", lambda: self.instance_image.deleteLater()),
+            ("解除影片目標視窗", "instance_vlc_player", lambda: self.instance_vlc_player.set_hwnd(0)),
+            ("釋放 VLC 播放器", "instance_vlc_player", lambda: self.instance_vlc_player.release()),
+            ("釋放 VLC 實例", "instance_vlc", lambda: self.instance_vlc.release()),
+            ("隱藏桌布視窗", None, self.hide),
+            ("釋放桌布視窗", None, lambda: self.destroy(True, True)),
         ])
 
         # 單一步驟失敗時仍繼續釋放其餘資源
-        for description, cleanup in steps:
+        for description, resource, cleanup in steps:
+            # 建構失敗時只清理已建立的資源
+            if resource is not None and getattr(self, resource, None) is None:
+                continue
+
             try:
                 cleanup()
 

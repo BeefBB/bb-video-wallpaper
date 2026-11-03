@@ -1079,6 +1079,56 @@ class PlaybackStateTests(QtTestCase):
                 self.namespace["logger"].exception.assert_not_called()
 
 
+    def test_initialization_failure_releases_partial_resources_and_preserves_error(self):
+        """
+        初始化各階段失敗時釋放已建立的資源, 清理失敗也不覆蓋原始錯誤
+        """
+
+        wallpaper_class = self.namespace["Wallpaper"]
+        for stage in ("instance", "player", "image", "attach", "cleanup"):
+            with self.subTest(stage=stage):
+                error = RuntimeError("initialization failed")
+                instance = mock.Mock()
+                player = DeferredPlayer()
+                instance.media_player_new.return_value = player
+                if stage == "player":
+                    instance.media_player_new.side_effect = error
+                image = mock.Mock(wraps=ImageDisplay())
+                if stage == "cleanup":
+                    image.close.side_effect = RuntimeError("cleanup failed")
+                failed_wallpapers = []
+
+                def fail_attach(wallpaper):
+                    """
+                    保留失敗物件以驗證延後刪除
+                    """
+
+                    failed_wallpapers.append(wallpaper)
+                    raise error
+
+                self.namespace["logger"].reset_mock()
+                with (
+                    mock.patch.object(self.namespace["vlc"], "Instance", return_value=instance,
+                                      side_effect=error if stage == "instance" else None),
+                    mock.patch.object(self.namespace["bb_image_display"], "Instance", return_value=image,
+                                      side_effect=error if stage == "image" else None),
+                    mock.patch.object(wallpaper_class, "attach_to_desktop", fail_attach),
+                    self.assertRaises(RuntimeError) as raised,
+                ):
+                    wallpaper_class(target_screen=HeadlessScreen(QRect(0, 0, 1920, 1080)))
+
+                self.assertIs(raised.exception, error)
+                self.assertEqual(instance.release.call_count, int(stage != "instance"))
+                self.assertEqual(player.state, "stopped" if stage in ("instance", "player") else "released")
+                self.assertEqual(player.callbacks, {})
+                self.assertEqual(image.close.call_count, int(stage in ("attach", "cleanup")))
+                self.assertEqual(image.deleteLater.call_count, int(stage in ("attach", "cleanup")))
+                self.assertEqual(self.namespace["logger"].exception.call_count, int(stage == "cleanup"))
+                QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+                for wallpaper in failed_wallpapers:
+                    self.assertFalse(isValid(wallpaper))
+
+
     def test_shutdown_is_idempotent_and_blocks_late_operations_without_quitting(self):
         """
         桌面等待期間關閉只釋放一次, 已排入與後續抵達的事件不再操作輸出
