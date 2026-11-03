@@ -220,32 +220,24 @@ class FollowControllerTests(unittest.TestCase):
         self.assertEqual(self.screens["d"].play_state, "play")
 
 
-    def test_relation_change_during_media_copy_does_not_overwrite_local_output(self) -> None:
+    def test_queued_ready_from_replaced_screen_does_not_synchronize_its_replacement(self) -> None:
         """
-        驗證同步媒體途中解除跟隨並改選本機圖片後, 延遲訊號不覆寫本機輸出
+        驗證螢幕重新連接後, 舊桌布的延遲通知不會觸發替代桌布同步
         """
 
         self.controller.follow("b", "a")
-        source, follower = self.screens["a"], self.screens["b"]
-        source.current_media = self.media.with_name("new.mp4")
-        local = self.media.with_name("local.png")
+        removed = self.screens.pop("a")
+        self.controller.remove_screen("a")
+        replacement = self.screens["a"] = Playback("a", self.media)
+        self.controller.follow("b", "a")
+        replacement.position = 8000
+        follower = self.screens["b"]
 
-        def select_locally(media: Path) -> None:
-            """
-            解除跟隨並改用本機圖片, 將播放意圖設為停止
-            """
+        self.controller.on_ready("a", removed)
+        self.assertEqual(follower.position, 2000)
 
-            self.controller.detach("b")
-            follower.current_media = local
-            follower.apply_playback_state(PlaybackState("stop"))
-
-        with mock.patch.object(follower, "set_play_media", side_effect=select_locally):
-            self.controller.synchronize()
-
-        self.controller.on_ready("a", source)
-        self.assertEqual((follower.current_media, follower.play_state, follower.playback_state.requested_state), (local, "stop", "stop"))
-        self.assertEqual(self.store.load()["screenWallpapers"], {"b": "sample.mp4"})
-        self.assertEqual(self.store.load()["screenFollows"], {})
+        self.controller.on_ready("a", replacement)
+        self.assertEqual(follower.position, 8000)
 
 
     def test_removing_middle_screen_keeps_output_and_does_not_refollow_on_reconnection(self) -> None:

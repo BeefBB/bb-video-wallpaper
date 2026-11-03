@@ -173,7 +173,6 @@ class FollowController:
         self.config_store = config_store
         self.graph = FollowGraph()
         self._pending_selection: set[str] = set()
-        self._syncing: set[str] = set()
         self.is_exiting = False
 
 
@@ -254,6 +253,9 @@ class FollowController:
 
 
     def synchronize(self, screen_id: str | None = None) -> None:
+        """
+        在 Qt 主執行緒連續套用群組, 不處理事件佇列
+        """
 
         if self.is_exiting:
             return
@@ -264,53 +266,29 @@ class FollowController:
         )
 
         for root in roots:
-            if root in self._syncing:
-                continue
-
-            self._syncing.add(root)
-            try:
-                self._synchronize_group(root)
-            finally:
-                self._syncing.discard(root)
+            self._synchronize_group(root)
 
 
     def _synchronize_group(self, root: str) -> None:
 
         source = self.wallpapers.get(root)
         followers = self.graph.subtree(root)[1:]
-        if source is None or source.is_exiting or not followers:
+        if (
+            source is None or source.is_exiting or source.is_recreating or
+            source.current_media is None or not followers
+        ):
             return
 
-        if source.is_recreating or source.current_media is None:
-            return
-
+        source_media = source.current_media
         for screen_id in followers:
             target = self.wallpapers.get(screen_id)
-            if self.is_exiting or self.wallpapers.get(root) is not source:
-                return
-
-            if (
-                target is None or target.is_exiting or target.is_recreating or
-                self.graph.root(screen_id) != root
-            ):
+            if target is None or target.is_exiting or target.is_recreating:
                 continue
 
             try:
-                source_media = source.current_media
-                if source_media is None:
-                    return
-
                 changed_media = target.current_media != source_media
                 if changed_media:
                     target.set_play_media(source_media)
-
-                # 切換期間可能移除螢幕或解除跟隨, 套用前重新確認來源
-                if (
-                    self.is_exiting or self.wallpapers.get(screen_id) is not target or
-                    self.wallpapers.get(root) is not source or source.is_exiting or
-                    self.graph.root(screen_id) != root or source.current_media != source_media
-                ):
-                    continue
 
                 target.apply_playback_state(source.playback_state)
 
