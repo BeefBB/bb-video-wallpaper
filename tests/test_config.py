@@ -109,9 +109,9 @@ class ConfigTests(unittest.TestCase):
                 self.assertEqual(self.config_path.read_bytes(), original)
 
 
-    def test_loading_and_initialization_preserve_original_file(self):
+    def test_loading_and_initialization_validate_config(self):
         """
-        初始化不覆蓋原檔, 損壞內容與欄位修復只影響記憶體
+        讀取不改寫原檔, 初始化只對物件設定寫回補齊與修復的欄位
         """
 
         defaults = self.store.validate({})
@@ -122,14 +122,27 @@ class ConfigTests(unittest.TestCase):
             "language": "ja-JP",
             "futureOption": 9,
         }).encode("utf-8")
-        cases = [(contents, defaults) for contents in (b"", b"{broken", b"\xff", b"[]", b"null")]
-        cases.extend([(invalid_values, repaired), (json.dumps(repaired).encode("utf-8"), repaired)])
-        for contents, expected in cases:
+        cases = [(contents, defaults, False) for contents in (b"", b"{broken", b"\xff", b"[]", b"null")]
+        cases.extend([
+            (invalid_values, repaired, True),
+            (json.dumps(repaired).encode("utf-8"), repaired, True),
+        ])
+        for contents, expected, write_back in cases:
             with self.subTest(contents=contents):
                 self.config_path.write_bytes(contents)
-                self.store.initialize_if_missing()
                 self.assertEqual(self.store.load(), expected)
                 self.assertEqual(self.config_path.read_bytes(), contents)
+
+                self.store.initialize_if_missing()
+
+                if write_back:
+                    self.assertEqual(
+                        json.loads(self.config_path.read_text(encoding="utf-8")),
+                        expected,
+                    )
+
+                else:
+                    self.assertEqual(self.config_path.read_bytes(), contents)
 
 
     def test_save_failure_preserves_previous_file(self):

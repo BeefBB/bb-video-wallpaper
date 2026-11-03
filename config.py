@@ -236,17 +236,27 @@ class ConfigStore:
 
     def initialize_if_missing(self) -> None:
         """
-        設定檔不存在時寫入完整預設值, 保留既有檔案
+        設定檔或欄位缺少時補齊預設值
         """
 
         try:
-            self.config_path.stat()
+            with open(self.config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
 
         except FileNotFoundError:
-            self.save(self.validate({}))
+            config = {}
 
-        except OSError:
-            logger.exception("檢查 config 是否存在時發生錯誤")
+        except Exception:
+            logger.exception("初始化 config 時讀取設定發生錯誤")
+            return
+
+
+        if not isinstance(config, dict):
+            logger.warning("設定檔最外層必須是物件, 不寫回預設設定")
+            return
+
+
+        self.save(self.validate(config))
 
 
     def load(self) -> dict:
