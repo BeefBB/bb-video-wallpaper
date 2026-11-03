@@ -201,12 +201,12 @@ class MediaPreviewMenu(QMenu):
         self.preview.adjustSize()
 
 
-        # 優先放在選單右側, 空間不足時改放左側
+        # 優先放在選單左側, 空間不足時改放右側
         menu_rect = self.frameGeometry()
-        x = menu_rect.right() + 8
+        x = menu_rect.left() - self.preview.width() - 8
 
-        if x + self.preview.width() > available.right() + 1:
-            x = menu_rect.left() - self.preview.width() - 8
+        if x < available.left():
+            x = menu_rect.right() + 8
 
 
         y = self.mapToGlobal(self.actionGeometry(action).topLeft()).y()
