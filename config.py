@@ -113,6 +113,14 @@ class ConfigStore:
         config["fontSize"] = max(6, min(48, font_size))
 
 
+        # 最近紀錄顯示筆數使用整數, 0 表示隱藏, 最多顯示 20 筆
+        recent_display_count = config.get("recentDisplayCount", 6)
+        if type(recent_display_count) is not int:
+            logger.warning("設定欄位 recentDisplayCount 無效, 使用預設值")
+            recent_display_count = 6
+        config["recentDisplayCount"] = max(0, min(20, recent_display_count))
+
+
         # 未指定語言時優先使用安裝語言, 再使用系統語言與繁體中文
         if "language" not in config:
 
@@ -175,11 +183,11 @@ class ConfigStore:
                     seen.add(path)
                     normalized_recent.append(path.as_posix())
 
-                    if len(normalized_recent) == 5:
+                    if len(normalized_recent) == 20:
                         break
 
         if normalized_recent != recent:
-            logger.warning("設定欄位 recentVideo 已移除無效或重複項目, 最多保留 5 筆")
+            logger.warning("設定欄位 recentVideo 已移除無效或重複項目, 最多保留 20 筆")
 
         config["recentVideo"] = normalized_recent
 
@@ -223,7 +231,7 @@ class ConfigStore:
         recent = config["recentVideo"]
         config["recentVideo"] = [media_path] + [
             item for item in recent if Path(item) != Path(media_path)
-        ][:4]
+        ][:19]
 
         self.save(config)
 

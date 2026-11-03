@@ -1531,7 +1531,8 @@ class Tray:
         新增最近紀錄與媒體清單項目
         """
 
-        recent = config_store.load().get("recentVideo", [])[:5]
+        config = config_store.load()
+        recent = config["recentVideo"][:config["recentDisplayCount"]]
 
         for media_path in recent:
             self.add_media_menu_action(MEDIA_DIR / media_path, screen_id, menu)
