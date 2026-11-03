@@ -1007,16 +1007,11 @@ class Wallpaper(QWidget):
         取消註冊 Windows 螢幕電源通知
         """
 
-        if self.power_notify:
+        handle = self.power_notify
+        self.power_notify = None
 
-            try:
-                unregister_power_notification(self.power_notify)
-
-            except Exception:
-                logger.exception("取消註冊電源通知時發生錯誤")
-
-            finally:
-                self.power_notify = None
+        if handle:
+            unregister_power_notification(handle)
 
 
     def shutdown(self) -> None:

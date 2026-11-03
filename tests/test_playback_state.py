@@ -22,6 +22,7 @@ if __name__ == "__main__":
 
 from playback import PlaybackState
 from app_loader import QtTestCase, load_app_module
+import windows_integration as windows
 
 
 class HeadlessWidget(QObject):
@@ -970,7 +971,7 @@ class PlaybackStateTests(QtTestCase):
 
     def test_unready_desktop_preserves_output_until_ready(self):
         """
-        驗證等待桌面就緒時保留既有輸出與重試次數, 就緒後恢復暫停與進度
+        驗證等待工作列與桌面視窗恢復時保留輸出與重試次數, 就緒後恢復暫停與進度
         """
 
         self.start_playing()
@@ -978,26 +979,31 @@ class PlaybackStateTests(QtTestCase):
         self.player.position = 4321
         self.wallpaper.reattach_retry_count = 1
         self.wallpaper.attach_to_desktop.reset_mock()
-        self.namespace["check_desktop_ready"].return_value = False
+        self.namespace["check_desktop_ready"].side_effect = windows.check_desktop_ready
         timer = self.wallpaper.reattach_timer
+        desktop_windows = {}
 
-        for _ in range(3):
-            self.wallpaper.schedule_reattach(0)
+        with mock.patch.object(
+            windows.win32gui, "FindWindow",
+            side_effect=lambda class_name, _: desktop_windows.get(class_name, 0),
+        ):
+            for desktop_windows in ({}, {"Shell_TrayWnd": 1}, {"Progman": 2}):
+                self.wallpaper.schedule_reattach(0)
+                timer.start(0)
+                self.app.processEvents()
+
+                self.assertTrue(timer.isActive())
+                self.assertEqual(self.wallpaper.reattach_retry_count, 1)
+                self.wallpaper.destroy.assert_not_called()
+                self.wallpaper.hide.assert_not_called()
+                self.wallpaper.attach_to_desktop.assert_not_called()
+                self.assertEqual((self.player.state, self.player.position), ("paused", 4321))
+
+            desktop_windows = {"Shell_TrayWnd": 1, "Progman": 2}
             timer.start(0)
             self.app.processEvents()
-
-            self.assertTrue(timer.isActive())
-            self.assertEqual(self.wallpaper.reattach_retry_count, 1)
-            self.wallpaper.destroy.assert_not_called()
-            self.wallpaper.hide.assert_not_called()
-            self.wallpaper.attach_to_desktop.assert_not_called()
-            self.assertEqual((self.player.state, self.player.position), ("paused", 4321))
-
-        self.namespace["check_desktop_ready"].return_value = True
-        timer.start(0)
-        self.app.processEvents()
-        self.player.finish_loading()
-        self.app.processEvents()
+            self.player.finish_loading()
+            self.app.processEvents()
 
         self.wallpaper.attach_to_desktop.assert_called_once_with()
         self.assertFalse(timer.isActive())
@@ -1005,20 +1011,30 @@ class PlaybackStateTests(QtTestCase):
         self.assertEqual((self.player.state, self.player.position), ("paused", 4321))
 
 
-    def test_unregister_clears_handle_even_if_api_fails(self):
+    def test_unregister_failure_logs_native_error_and_releases_handle_once(self):
         """
-        驗證取消電源通知失敗時仍清除保存的 handle 並記錄例外
+        驗證原生取消通知回傳失敗時記錄錯誤, 清除 handle 且不重複取消
         """
 
         handle = 2**40 + 1
         self.wallpaper.power_notify = handle
-        self.namespace["unregister_power_notification"].side_effect = OSError("invalid handle")
+        self.namespace["unregister_power_notification"].side_effect = windows.unregister_power_notification
 
-        self.unregister_power_notification(self.wallpaper)
+        with (
+            mock.patch.object(windows.ctypes.windll.user32, "UnregisterPowerSettingNotification", return_value=0) as unregister,
+            mock.patch.object(windows.ctypes, "GetLastError", return_value=6) as last_error,
+            mock.patch.object(windows, "logger") as logger,
+        ):
+            self.unregister_power_notification(self.wallpaper)
+            self.unregister_power_notification(self.wallpaper)
+
+        unregister.assert_called_once_with(handle)
+        last_error.assert_called_once_with()
+        logger.warning.assert_called_once()
 
         self.namespace["unregister_power_notification"].assert_called_once_with(handle)
         self.assertIsNone(self.wallpaper.power_notify)
-        self.namespace["logger"].exception.assert_called_once()
+        self.namespace["logger"].exception.assert_not_called()
 
 
     def test_image_reattach_rebinds_without_reload_or_vlc_seek(self):

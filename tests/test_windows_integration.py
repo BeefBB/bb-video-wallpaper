@@ -277,7 +277,7 @@ class WindowsIntegrationTests(unittest.TestCase):
 
         with (
             mock.patch.object(windows.ctypes.windll.user32, "RegisterPowerSettingNotification", return_value=handle) as register,
-            mock.patch.object(windows.ctypes.windll.user32, "UnregisterPowerSettingNotification") as unregister,
+            mock.patch.object(windows.ctypes.windll.user32, "UnregisterPowerSettingNotification", return_value=1) as unregister,
         ):
             self.assertEqual(windows.register_power_notification(hwnd), handle)
             self.assertIs(register.restype, wintypes.HANDLE)

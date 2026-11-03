@@ -17,8 +17,6 @@ import win32event
 import win32process
 import winerror
 
-import psutil
-
 from comtypes import GUID as ComGUID, HRESULT, IUnknown, COMMETHOD
 from comtypes.client import CreateObject
 
@@ -141,7 +139,9 @@ def unregister_power_notification(handle: int) -> None:
     unregister = ctypes.windll.user32.UnregisterPowerSettingNotification
     unregister.restype = wintypes.BOOL
     unregister.argtypes = [wintypes.HANDLE]
-    unregister(handle)
+
+    if not unregister(handle):
+        logger.warning("取消螢幕電源通知失敗 - handle=%#x error=%s", handle, ctypes.GetLastError())
 
 
 def get_display_state(message: wintypes.MSG) -> int | None:
@@ -181,27 +181,13 @@ def run_as_admin() -> None:
 
 def check_desktop_ready() -> bool:
     """
-    檢查是否登入且載入桌面
+    檢查工作列與桌面視窗是否已建立
     """
 
-    if not win32gui.FindWindow("Shell_TrayWnd", None):
-        return False
-
-
-    if not win32gui.FindWindow("Progman", None):
-        return False
-
-
-    for proc in psutil.process_iter(["name"]):
-        try:
-            if proc.info["name"] and proc.info["name"].lower() == "explorer.exe":
-                return True
-
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            continue
-
-
-    return False
+    return bool(
+        win32gui.FindWindow("Shell_TrayWnd", None) and
+        win32gui.FindWindow("Progman", None)
+    )
 
 
 def register_taskbar_created_notification(hwnd: int) -> int:
