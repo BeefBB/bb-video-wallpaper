@@ -16,7 +16,7 @@ from win32con import WM_DESTROY
 
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog
 from PySide6.QtCore import QByteArray, QEventLoop, Qt, QTimer, QThread, Slot, Signal
-from PySide6.QtGui import QAction, QIcon, QFont, QScreen
+from PySide6.QtGui import QAction, QIcon, QFont, QScreen, QCursor
 
 import bb_image_display
 from config import CONFIG_DEFAULTS, ConfigStore, SUPPORTED_LANGUAGES
@@ -1197,6 +1197,11 @@ class Tray:
         self.options_language_menu.aboutToShow.connect(self.refresh_language_menu)
 
         self.tray.setContextMenu(menu)
+        self.tray.activated.connect(
+            lambda reason: menu.popup(QCursor.pos())
+            if reason == QSystemTrayIcon.ActivationReason.Trigger
+            else None
+        )
 
         self.follow_sync_timer = QTimer(menu)
         self.follow_sync_timer.timeout.connect(self.follow_controller.synchronize)
