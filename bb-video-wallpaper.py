@@ -1456,12 +1456,15 @@ class Tray:
                 submenu.deleteLater()
 
         menu.clear()
+
         self.add_playback_actions(menu, screen_id)
         menu.addSeparator()
-        self.add_media_menu_actions(menu, screen_id)
+
         if len(self.wallpapers) > 1:
-            menu.addSeparator()
             self.add_follow_menu(menu, screen_id)
+            menu.addSeparator()
+
+        self.add_media_menu_actions(menu, screen_id)
 
 
     def add_follow_menu(self, menu: QMenu, screen_id: str) -> None:
