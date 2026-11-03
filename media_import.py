@@ -12,7 +12,7 @@ from thumbnails import SUPPORTED_MEDIA_EXTENSIONS
 
 
 # 匯入媒體時預留的額外空間
-IMPORT_RESERVE_BYTES = 100 * 1024 * 1024
+IMPORT_RESERVE_BYTES = 200 * 1024 * 1024  # 200 MB
 
 
 class MediaImportCancelled(Exception):
@@ -27,7 +27,7 @@ def check_import_cancelled(cancelled) -> None:
 
 def calculate_sha256(path: Path, cancelled=lambda: False) -> bytes:
     """
-    分塊讀取檔案並計算 SHA-256
+    計算 SHA-256
     """
 
     digest = hashlib.sha256()
@@ -37,6 +37,7 @@ def calculate_sha256(path: Path, cancelled=lambda: False) -> bytes:
         while True:
 
             check_import_cancelled(cancelled)
+
             chunk = file.read(1024 * 1024)
 
             if not chunk:
@@ -61,6 +62,7 @@ def import_media(
     """
 
     check_import_cancelled(cancelled)
+
     source = source.resolve(strict=True)
 
     if (
@@ -109,7 +111,9 @@ def import_media(
     required_space = source_size + IMPORT_RESERVE_BYTES
 
     if free_space < required_space:
+
         megabyte = 1024 * 1024
+
         raise OSError(
             translate("media_insufficient_space").format(
                 required=(source_size + megabyte - 1) // megabyte,
@@ -149,7 +153,7 @@ def import_media(
 
                 destination_file.write(chunk)
                 copied += len(chunk)
-                # 正式檔名建立後才回報 100%, 包含關閉檔案時的寫入失敗
+                # 卡 99%, 正式檔名建立後才回報 100%
                 percent = min(99, copied * 100 // max(1, source_size))
 
                 if progress is not None and percent != last_percent:
@@ -165,7 +169,7 @@ def import_media(
 
             try:
 
-                # Windows 的 rename 不會覆蓋已存在的檔案
+                # .rename() 不會覆蓋已存在的檔案
                 temp_path.rename(destination)
 
                 if progress is not None:

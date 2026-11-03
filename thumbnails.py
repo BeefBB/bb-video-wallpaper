@@ -14,7 +14,7 @@ import threading
 import time
 
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QImage, QImageReader
+from PySide6.QtGui import QImage, QImageReader, QImageWriter
 
 
 logger = logging.getLogger(__name__)
@@ -289,7 +289,11 @@ def create_video_thumbnail(path: Path, cancelled) -> QImage:
             if time.monotonic() >= deadline:
                 raise TimeoutError("擷取影片縮圖逾時")
 
-            if player.get_state() in (vlc.State.Error, vlc.State.Ended, vlc.State.Stopped):  # type: ignore
+            if player.get_state() in (
+                getattr(vlc.State, "Error"),
+                getattr(vlc.State, "Ended"),
+                getattr(vlc.State, "Stopped"),
+            ):
                 raise RuntimeError("影片沒有可用的畫面")
 
             if thumbnail_size is None:
@@ -404,8 +408,15 @@ def ensure_thumbnail(
 
     try:
 
-        if not image.save(str(temp_path), "JPG", 85):  # type: ignore
-            raise OSError("無法儲存縮圖")
+        writer = QImageWriter(str(temp_path), b"JPG")
+        writer.setQuality(85)
+
+        try:
+            if not writer.write(image):
+                raise OSError("無法儲存縮圖")
+
+        finally:
+            writer.device().close()
 
         os.replace(temp_path, destination)
 

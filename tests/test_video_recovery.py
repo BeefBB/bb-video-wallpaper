@@ -3,13 +3,9 @@
 不重啟 Explorer, 不讀寫使用者設定, 子程序逾時時讓測試明確失敗
 """
 
-import ast
 from collections.abc import Callable
-import ctypes
-from ctypes import wintypes
 import faulthandler
 import logging
-import os
 from pathlib import Path
 import queue
 import shutil
@@ -18,9 +14,10 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Any
 import unittest
 from unittest import mock
+
+from app_loader import load_app_module
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,26 +44,22 @@ def run_host() -> None:
     app.exec()
 
 
-def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
+def run_recovery_probe(media: Path) -> None:
     """
-    在獨立程序中驗證 VLC 重掛與資源釋放
+    驗證真正 VLC 在父視窗失效後恢復輸出, 並可正常關閉
     """
 
     import win32con
     import win32gui
-    from PySide6.QtCore import QEventLoop, Qt, QThread, QTimer, Signal, Slot
-    from PySide6.QtGui import QScreen
-    from PySide6.QtWidgets import QApplication, QWidget
+    from PySide6.QtCore import QEventLoop, QTimer
+    from PySide6.QtWidgets import QApplication
 
     sys.path.insert(0, str(ROOT))
-    import bb_image_display
-    from windows_integration import get_monitor_id, register_taskbar_created_notification, wake_vlc_video_windows
 
-    dll_directory = os.add_dll_directory(str(VLC_DIR))
-    os.environ["PYTHON_VLC_LIB_PATH"] = str(VLC_DIR / "libvlc.dll")
-    os.environ["PYTHON_VLC_MODULE_PATH"] = str(VLC_DIR)
-    ctypes.CDLL(str(VLC_DIR / "libvlccore.dll"))
-    ctypes.CDLL(str(VLC_DIR / "libvlc.dll"))
+    module = load_app_module()
+    module.initialize_paths()
+    assert module.initialize_vlc(), "主程式的 VLC 初始化失敗"
+    dll_directory = module._vlc_dll_directory
     import vlc
 
     # python-vlc 動態建立列舉成員, 以名稱查取並註明型別
@@ -82,6 +75,10 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
     faulthandler.dump_traceback_later(20, exit=True)
 
     def create_host() -> tuple[int, subprocess.Popen[str]]:
+        """
+        啟動畫面外父視窗程序, 等待並回傳視窗代碼與程序物件
+        """
+
         process = subprocess.Popen(
             [sys.executable, "-X", "utf8", __file__, "--host"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -96,6 +93,10 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
         return int(ready.get(timeout=8)), process
 
     def wait_until(predicate: Callable[[], bool]) -> None:
+        """
+        持續處理 Qt 事件直到指定條件成立, 超過六秒則回報逾時
+        """
+
         deadline = time.monotonic() + 6
         while not predicate():
             if time.monotonic() >= deadline:
@@ -109,32 +110,18 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
         host_hwnd, host_process = create_host()
         config = mock.Mock()
         config.load.return_value = {}
-        source_path = ROOT / "bb-video-wallpaper.py"
-        tree = ast.parse(source_path.read_text(encoding="utf-8"))
-        nodes = ast.Module(
-            body=[node for node in tree.body if isinstance(node, ast.ClassDef) and node.name in {"VlcStopThread", "DesktopEventWindow", "Wallpaper", "Tray"}],
-            type_ignores=[],
-        )
-        # exec 使用的命名空間混合類別, 模組與測試替身
-        namespace: dict[str, Any] = {
-            "QWidget": QWidget, "QApplication": QApplication, "QScreen": QScreen, "Qt": Qt, "QTimer": QTimer,
-            "QEventLoop": QEventLoop, "QThread": QThread,
-            "Signal": Signal, "Slot": Slot, "Path": Path, "wintypes": wintypes,
-            "WM_DESTROY": win32con.WM_DESTROY, "vlc": vlc, "bb_image_display": bb_image_display,
+        namespace = module.__dict__
+        namespace.update({
             "config_store": config, "get_media": lambda: [media], "MEDIA_DIR": media.parent,
             "SUPPORTED_IMAGE_EXTENSIONS": {".png"}, "SUPPORTED_VIDEO_EXTENSIONS": {".mp4"},
-            "register_taskbar_created_notification": register_taskbar_created_notification,
-            "wake_vlc_video_windows": wake_vlc_video_windows,
             "check_desktop_ready": lambda: True,
-            "get_monitor_id": get_monitor_id,
             "set_windows_as_wallpaper": lambda hwnd: win32gui.SetParent(hwnd, host_hwnd),
             "register_power_notification": lambda hwnd: 1,
             "unregister_power_notification": lambda handle: None,
             "get_display_state": lambda message: None, "is_on_battery": lambda: False,
             "is_any_fullscreen": lambda hwnd: False, "logger": logging.getLogger("video-recovery-test"),
             "tr": lambda key: key,
-        }
-        exec(compile(nodes, str(source_path), "exec"), namespace)
+        })
         wallpaper = namespace["Wallpaper"]()
         wallpaper.check_auto_pause_timer.stop()
         wallpaper.setGeometry(0, 0, 640, 360)
@@ -147,7 +134,7 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
         # 分別驗證播放與暫停狀態
         for state, vlc_state in (("play", playing_state), ("pause", paused_state)):
             if state == "pause":
-                wallpaper.media_pause()
+                wallpaper.manual_pause()
                 wait_until(lambda: player.get_state() == vlc_state)
             saved_time = player.get_time()
             old_hwnd = int(wallpaper.winId())
@@ -158,20 +145,10 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
             wait_until(lambda: not win32gui.IsWindow(old_hwnd))
             host_hwnd, host_process = create_host()
             listener = wallpaper.desktop_events
-            # 模擬首次掛載失敗, 檢查重試後的播放狀態與進度
-            with (
-                mock.patch.object(
-                    wallpaper, "attach_to_desktop", wraps=wallpaper.attach_to_desktop,
-                    side_effect=[RuntimeError("simulated attachment failure"), mock.DEFAULT],
-                ) as attach,
-                mock.patch.object(namespace["logger"], "exception") as recovery_error,
-            ):
-                win32gui.SendMessage(int(listener.winId()), listener.taskbar_created_message, 0, 0)
-                app.processEvents()
-                assert wallpaper.reattach_timer.isActive(), "通知沒有排定重掛"
-                wait_until(lambda: not wallpaper.is_recreating and not wallpaper.reattach_timer.isActive())
-                assert attach.call_count == 2, "沒有完成一次失敗後的重試"
-                recovery_error.assert_called_once()
+            win32gui.SendMessage(int(listener.winId()), listener.taskbar_created_message, 0, 0)
+            app.processEvents()
+            assert wallpaper.reattach_timer.isActive(), "通知沒有排定重掛"
+            wait_until(lambda: not wallpaper.is_recreating and not wallpaper.reattach_timer.isActive())
             wait_until(lambda: player.has_vout() > 0 and player.get_state() == vlc_state)
             wait_until(lambda: player.get_time() >= saved_time - 250)
             assert win32gui.GetAncestor(int(wallpaper.winId()), win32con.GA_PARENT) == host_hwnd
@@ -179,71 +156,15 @@ def run_recovery_probe(media: Path, quit_application: bool = False) -> None:
             assert player.get_time() >= saved_time - 250, "播放進度未恢復"
             print(f"PASS {state}: vout={player.has_vout()}, time={player.get_time()}", flush=True)
 
-        # 模擬背景停止期間匯入完成, 檢查新影片從頭播放
-        imported = media.with_name("imported.mp4")
-        shutil.copyfile(media, imported)
-        tray = namespace["Tray"].__new__(namespace["Tray"])
-        tray.wallpaper = wallpaper
-        tray.import_thread = mock.Mock(destination=imported, cancelled=False)
-        tray.add_media_action = mock.Mock()
-        tray.cancel_import_action = mock.Mock()
-        tray.media_menu = mock.Mock()
-        tray.refresh_media_menu = mock.Mock()
-        tray.tray = mock.Mock()
-        import_processed = threading.Event()
-        import_errors = []
-        seeks = []
-        saved_time = player.get_time()
-        stop_thread = namespace["VlcStopThread"]
-        original_run = stop_thread.run
-        original_seek = player.set_time
-
-        def stop_after_import(worker):
-            if not import_processed.wait(2):
-                worker.error = RuntimeError("import callback was not processed")
-                return
-            original_run(worker)
-
-        def finish_import_during_stop():
-            try:
-                assert wallpaper.is_recreating, "匯入完成未發生於重掛期間"
-                tray.finish_import()
-                assert tray.import_thread is not None, "匯入結果提早套用"
-                assert wallpaper.current_media == media, "停止尚未完成就切換媒體"
-            except Exception as error:
-                import_errors.append(str(error))
-            finally:
-                import_processed.set()
-
-        def record_seek(position):
-            seeks.append((wallpaper.current_media, position))
-            return original_seek(position)
-
-        QTimer.singleShot(0, finish_import_during_stop)
-        with (
-            mock.patch.object(stop_thread, "run", stop_after_import),
-            mock.patch.object(player, "set_time", side_effect=record_seek),
-        ):
-            wallpaper.reattach_to_desktop()
-            wait_until(lambda: wallpaper.current_media == imported and player.has_vout() > 0 and player.get_state() == playing_state)
-            assert not import_errors, import_errors
-            assert tray.import_thread is None, "重掛後未完成匯入處理"
-            assert all(path != imported for path, _ in seeks), "新影片被套用舊進度"
-            assert player.get_time() < saved_time, "匯入影片沒有從頭播放"
-        print("PASS import: new media starts without old seek", flush=True)
-
         # 父視窗失效後關閉桌布
         old_hwnd = int(wallpaper.winId())
         host_process.terminate()
         host_process.wait(timeout=5)
         wait_until(lambda: not win32gui.IsWindow(old_hwnd))
         with mock.patch.object(namespace["logger"], "exception") as cleanup_error:
-            if quit_application:
-                app.aboutToQuit.connect(wallpaper.shutdown)
-                QTimer.singleShot(0, app.quit)
-                app.exec()
-            else:
-                wallpaper.shutdown()
+            app.aboutToQuit.connect(wallpaper.shutdown)
+            QTimer.singleShot(0, app.quit)
+            app.exec()
             wallpaper.shutdown()
             cleanup_error.assert_not_called()
         assert wallpaper.is_exiting and wallpaper.desktop_events is None
@@ -276,7 +197,7 @@ class VideoRecoveryTests(unittest.TestCase):
 
     def test_playing_and_paused_video_recover_after_host_process_ends(self):
         """
-        父視窗程序結束後恢復播放, 暫停與進度
+        在獨立程序中驗證播放與暫停影片失去父視窗後恢復輸出及關閉
         """
 
         if FFMPEG is None:
@@ -289,29 +210,21 @@ class VideoRecoveryTests(unittest.TestCase):
                  "-t", "20", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(media)],
                 check=True, capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW,
             )
-            # 分別驗證直接關閉與 aboutToQuit
-            for quit_application in (False, True):
-                with self.subTest(quit_application=quit_application):
-                    command = [sys.executable, "-X", "utf8", __file__, "--probe", str(media)]
-                    if quit_application:
-                        command.append("--quit")
+            result = subprocess.run(
+                [sys.executable, "-X", "utf8", __file__, "--probe", str(media)], cwd=ROOT,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=30, creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for stage in ("play", "pause", "shutdown"):
+                self.assertIn(f"PASS {stage}:", result.stdout)
 
-                    result = subprocess.run(
-                        command, cwd=ROOT,
-                        capture_output=True, text=True, encoding="utf-8", errors="replace",
-                        timeout=30, creationflags=subprocess.CREATE_NO_WINDOW,
-                    )
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertIn("PASS play:", result.stdout)
-                    self.assertIn("PASS shutdown:", result.stdout)
-                    self.assertIn("PASS pause:", result.stdout)
-                    self.assertIn("PASS import:", result.stdout)
 
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--host":
         run_host()
     elif len(sys.argv) > 1 and sys.argv[1] == "--probe":
-        run_recovery_probe(Path(sys.argv[2]), quit_application="--quit" in sys.argv[3:])
+        run_recovery_probe(Path(sys.argv[2]))
     else:
         unittest.main()

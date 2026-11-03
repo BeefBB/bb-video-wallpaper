@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 import subprocess
 import sys
+from typing import TYPE_CHECKING
 
 import win32gui
 import win32con
@@ -15,8 +16,6 @@ import win32api
 import win32event
 import win32process
 import winerror
-
-import psutil
 
 from comtypes import GUID as ComGUID, HRESULT, IUnknown, COMMETHOD
 from comtypes.client import CreateObject
@@ -73,6 +72,7 @@ def is_already_running() -> tuple[bool, object]:
     if win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS:
         return True, mutex
 
+
     return False, mutex
 
 
@@ -119,13 +119,14 @@ GUID_CONSOLE_DISPLAY_STATE = GUID(
 
 def register_power_notification(hwnd: int) -> int | None:
     """
-    註冊螢幕電源通知, 保留完整的原生 Handle
+    註冊螢幕電源通知
     """
 
     # 明確指定型別, 避免 64 位元 Handle 被截斷
     register = ctypes.windll.user32.RegisterPowerSettingNotification
     register.restype = wintypes.HANDLE
     register.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD]
+
 
     return register(hwnd, ctypes.byref(GUID_CONSOLE_DISPLAY_STATE), DEVICE_NOTIFY_WINDOW_HANDLE)
 
@@ -138,7 +139,9 @@ def unregister_power_notification(handle: int) -> None:
     unregister = ctypes.windll.user32.UnregisterPowerSettingNotification
     unregister.restype = wintypes.BOOL
     unregister.argtypes = [wintypes.HANDLE]
-    unregister(handle)
+
+    if not unregister(handle):
+        logger.warning("取消螢幕電源通知失敗 - handle=%#x error=%s", handle, ctypes.GetLastError())
 
 
 def get_display_state(message: wintypes.MSG) -> int | None:
@@ -153,6 +156,7 @@ def get_display_state(message: wintypes.MSG) -> int | None:
 
     if bytes(setting.PowerSetting) != bytes(GUID_CONSOLE_DISPLAY_STATE):
         return None
+
 
     return setting.Data
 
@@ -170,34 +174,20 @@ def run_as_admin() -> None:
 
     if not is_admin:
         logger.error("請以系統管理員執行")
-        input("請以系統管理員執行。Press Enter...")
+        input("請以系統管理員執行. Press Enter...")
 
         sys.exit()
 
 
 def check_desktop_ready() -> bool:
     """
-    檢查是否登入且載入桌面
+    檢查工作列與桌面視窗是否已建立
     """
 
-    if not win32gui.FindWindow("Shell_TrayWnd", None):
-        return False
-
-
-    if not win32gui.FindWindow("Progman", None):
-        return False
-
-
-    for proc in psutil.process_iter(["name"]):
-        try:
-            if proc.info["name"] and proc.info["name"].lower() == "explorer.exe":
-                return True
-
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            continue
-
-
-    return False
+    return bool(
+        win32gui.FindWindow("Shell_TrayWnd", None) and
+        win32gui.FindWindow("Progman", None)
+    )
 
 
 def register_taskbar_created_notification(hwnd: int) -> int:
@@ -210,6 +200,7 @@ def register_taskbar_created_notification(hwnd: int) -> int:
     if not message:
         raise RuntimeError("無法註冊 TaskbarCreated 訊息")
 
+
     change_filter = ctypes.windll.user32.ChangeWindowMessageFilterEx
     change_filter.restype = wintypes.BOOL
     change_filter.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.DWORD, ctypes.c_void_p]
@@ -217,6 +208,7 @@ def register_taskbar_created_notification(hwnd: int) -> int:
     # MSGFLT_ALLOW = 1, 只放行此視窗的工作列重建訊息
     if not change_filter(hwnd, message, 1, None):
         logger.warning("允許工作列重建通知失敗 - hwnd=%#x error=%s", hwnd, ctypes.GetLastError())
+
 
     return message
 
@@ -336,6 +328,7 @@ def task_exists() -> bool:
         creationflags=subprocess.CREATE_NO_WINDOW
     )
 
+
     return result.returncode == 0
 
 
@@ -389,12 +382,13 @@ def create_workerw(parent_hwnd) -> int:
 
         raise
 
+
     return hwnd
 
 
 def _log_wallpaper_window(role: str, hwnd: int) -> None:
     """
-    記錄掛載相關視窗的結構, 診斷失敗不影響掛載結果
+    記錄掛載相關視窗的結構
     """
 
     if not hwnd:
@@ -475,7 +469,7 @@ def set_windows_as_wallpaper(hwnd: int) -> None:
 
         if not workerw_old:
 
-            # 新版 Windows 11: 在 Progman 底下找尋或建立 WorkerW
+            # 新版: 在 Progman 底下找尋或建立 WorkerW
             mode = "progman-workerw"
             workerw = win32gui.FindWindowEx(progman, None, "WorkerW", None)
 
@@ -510,7 +504,6 @@ def set_windows_as_wallpaper(hwnd: int) -> None:
             )
 
 
-        # 父層檢查只供診斷, 不因結構不符或查詢失敗中斷既有流程
         try:
             # 使用實際父層, 避免 GetParent 把頂層視窗的 owner 當成 parent
             actual_parent = win32gui.GetAncestor(hwnd, win32con.GA_PARENT)
@@ -549,6 +542,9 @@ CLSID_VIRTUAL_DESKTOP_MANAGER = ComGUID("{AA509086-5CA9-4C25-8F95-589D3C07B48A}"
 
 class IVirtualDesktopManager(IUnknown):
 
+    if TYPE_CHECKING:
+        def IsWindowOnCurrentVirtualDesktop(self, top_level_window: int) -> int: ...
+
     _iid_ = ComGUID("{A5CD92FF-29BE-454C-8D04-D82879FB3F1B}")
     _methods_ = [
         COMMETHOD(
@@ -580,7 +576,7 @@ def is_on_current_desktop(hwnd: int) -> bool:
                 interface=IVirtualDesktopManager
             )
 
-        return bool(_virtual_desktop_manager.IsWindowOnCurrentVirtualDesktop(hwnd))  # type: ignore
+        return bool(_virtual_desktop_manager.IsWindowOnCurrentVirtualDesktop(hwnd))
 
     except Exception:
         return False

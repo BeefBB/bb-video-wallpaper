@@ -6,6 +6,7 @@
 #define MyAppNameC "BB 影片桌布"
 #define MyAppNameCN "BB 视频壁纸"
 #define MyAppNameJA "BB 動画壁紙"
+#define MyAppNameKO "BB 동영상 배경화면"
 #define MyAppVersion "1.16.1"
 #define MyAppPublisher "BeefBB"
 #define MyAppExeName "BB Video Wallpaper.exe"
@@ -48,16 +49,19 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "chinesetraditional"; MessagesFile: "compiler:Languages\ChineseTraditional.isl"
 Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Name: "japanese"; MessagesFile: "compiler:Languages\Japanese.isl"
+Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 
 [CustomMessages]
 english.ShortcutName={#MyAppName}
 chinesetraditional.ShortcutName={#MyAppNameC}
 chinesesimplified.ShortcutName={#MyAppNameCN}
 japanese.ShortcutName={#MyAppNameJA}
+korean.ShortcutName={#MyAppNameKO}
 english.AppLanguage=en-US
 chinesetraditional.AppLanguage=zh-TW
 chinesesimplified.AppLanguage=zh-CN
 japanese.AppLanguage=ja-JP
+korean.AppLanguage=ko-KR
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -82,10 +86,12 @@ Type: files; Name: "{autoprograms}\{#MyAppName}.lnk"
 Type: files; Name: "{autoprograms}\{#MyAppNameC}.lnk"
 Type: files; Name: "{autoprograms}\{#MyAppNameCN}.lnk"
 Type: files; Name: "{autoprograms}\{#MyAppNameJA}.lnk"
+Type: files; Name: "{autoprograms}\{#MyAppNameKO}.lnk"
 Type: files; Name: "{autodesktop}\{#MyAppName}.lnk"
 Type: files; Name: "{autodesktop}\{#MyAppNameC}.lnk"
 Type: files; Name: "{autodesktop}\{#MyAppNameCN}.lnk"
 Type: files; Name: "{autodesktop}\{#MyAppNameJA}.lnk"
+Type: files; Name: "{autodesktop}\{#MyAppNameKO}.lnk"
 
 [Icons]
 Name: "{autoprograms}\{cm:ShortcutName}"; Filename: "{app}\{#MyAppExeName}"

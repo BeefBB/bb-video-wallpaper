@@ -1,0 +1,343 @@
+"""
+螢幕跟隨關係與播放同步
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping
+import logging
+from pathlib import Path
+from typing import TYPE_CHECKING, Protocol, TypeGuard, cast
+
+from playback import PlaybackTarget, update_auto_pause
+
+if TYPE_CHECKING:
+    from config import ConfigStore
+
+
+logger = logging.getLogger(__name__)
+
+SYNC_INTERVAL_MS = 60_000
+SYNC_TOLERANCE_MS = 500
+RESTORE_DELAY_MS = 3_000
+
+
+class FollowWallpaper(PlaybackTarget, Protocol):
+
+    def set_play_media(self, path: Path, /) -> None: ...
+
+    def get_playback_time(self) -> int | None: ...
+
+    def get_playback_length(self) -> int: ...
+
+    def seek_time(self, position: int) -> bool: ...
+
+
+class AutoPauseHandler(Protocol):
+
+    def __call__(self, wallpaper: FollowWallpaper, *, from_timer: bool = False) -> bool: ...
+
+
+def valid_screen_id(value: object) -> TypeGuard[str]:
+
+    return isinstance(value, str) and bool(value.strip()) and "\0" not in value
+
+
+class FollowGraph:
+    """
+    以跟隨者識別查找直接來源
+    """
+
+    def __init__(self, sources: object = None) -> None:
+
+        self._sources: dict[str, str] = self.normalize(sources)
+
+
+    @staticmethod
+    def normalize(raw: object) -> dict[str, str]:
+        """
+        略過無效識別, 並移除循環內的關係
+        """
+
+        if not isinstance(raw, dict):
+            return {}
+
+        entries = cast(dict[object, object], raw)
+        sources: dict[str, str] = {
+            follower: source for follower, source in entries.items()
+            if valid_screen_id(follower) and valid_screen_id(source) and follower != source
+        }
+        visited: set[str] = set()
+        cyclic: set[str] = set()
+
+        for start in sources:
+            path: list[str] = []
+            positions: dict[str, int] = {}
+            screen_id = start
+
+            while screen_id in sources and screen_id not in visited:
+                if screen_id in positions:
+                    cyclic.update(path[positions[screen_id]:])
+                    break
+
+                positions[screen_id] = len(path)
+                path.append(screen_id)
+                screen_id = sources[screen_id]
+
+            visited.update(path)
+
+        return {follower: source for follower, source in sources.items() if follower not in cyclic}
+
+
+    @property
+    def sources(self) -> dict[str, str]:
+
+        return self._sources.copy()
+
+
+    def root(self, screen_id: str) -> str:
+
+        while screen_id in self._sources:
+            screen_id = self._sources[screen_id]
+
+        return screen_id
+
+
+    def subtree(self, screen_id: str) -> tuple[str, ...]:
+        """
+        依來源先於跟隨者的順序取得子群組, 包含指定螢幕
+        """
+
+        result = [screen_id]
+
+        for source in result:
+            result.extend(follower for follower, parent in self._sources.items() if parent == source)
+
+        return tuple(result)
+
+
+    def can_follow(self, follower: str, source: str) -> bool:
+
+        return (
+            valid_screen_id(follower) and valid_screen_id(source) and
+            follower != source and source not in self.subtree(follower)
+        )
+
+
+    def follow(self, follower: str, source: str) -> None:
+
+        if not self.can_follow(follower, source):
+            raise ValueError("跟隨關係不能形成循環")
+
+        self._sources[follower] = source
+
+
+    def detach(self, screen_id: str) -> bool:
+
+        return self._sources.pop(screen_id, None) is not None
+
+
+    def remove_screen(self, screen_id: str) -> bool:
+        """
+        移除以此螢幕為任一端點的關係
+        """
+
+        removed = [
+            follower for follower, source in self._sources.items()
+            if follower == screen_id or source == screen_id
+        ]
+
+        for follower in removed:
+            del self._sources[follower]
+
+        return bool(removed)
+
+
+    def retain_screens(self, screen_ids: Iterable[str]) -> None:
+
+        available = set(screen_ids)
+        self._sources = {
+            follower: source for follower, source in self._sources.items()
+            if follower in available and source in available
+        }
+
+
+class FollowController:
+    """
+    依跟隨關係套用來源的媒體, 狀態與進度
+    """
+
+    def __init__(self, wallpapers: Mapping[str, FollowWallpaper], config_store: ConfigStore) -> None:
+
+        self.wallpapers = wallpapers
+        self.config_store = config_store
+        self.graph = FollowGraph()
+        self._pending_selection: set[str] = set()
+        self.is_exiting = False
+
+
+    def save(self) -> None:
+
+        config = self.config_store.load()
+        config["screenFollows"] = self.graph.sources
+        self.config_store.save(config)
+
+
+    def restore(self, sources: object) -> None:
+
+        if self.is_exiting:
+            return
+
+        self.graph = FollowGraph(sources)
+        self.graph.retain_screens(self.wallpapers)
+        if self.graph.sources != sources:
+            self.save()
+
+        self._pending_selection.update(self.graph.sources)
+        self.synchronize()
+
+
+    def can_follow(self, follower: str, source: str) -> bool:
+
+        target = self.wallpapers.get(follower)
+        origin = self.wallpapers.get(source)
+        return bool(
+            not self.is_exiting and target is not None and origin is not None and
+            not target.is_exiting and not origin.is_exiting and origin.current_media and
+            self.graph.can_follow(follower, source)
+        )
+
+
+    def follow(self, follower: str, source: str) -> bool:
+
+        if not self.can_follow(follower, source):
+            return False
+
+        self.graph.follow(follower, source)
+        self._pending_selection.update(self.graph.subtree(follower))
+        self.save()
+        self.synchronize(source)
+        self.check_auto_pause(self.wallpapers[source])
+        return True
+
+
+    def detach(self, screen_id: str) -> None:
+
+        if self.is_exiting:
+            return
+
+        if self.graph.detach(screen_id):
+            self.save()
+
+        self._pending_selection.intersection_update(self.graph.sources)
+
+
+    def remove_screen(self, screen_id: str) -> None:
+
+        if self.is_exiting:
+            return
+
+        if self.graph.remove_screen(screen_id):
+            self.save()
+
+        self._pending_selection.intersection_update(self.graph.sources)
+
+
+    def on_ready(self, screen_id: str, wallpaper: FollowWallpaper) -> None:
+        """
+        只處理登錄表中仍指向同一桌布物件的通知
+        """
+
+        if not self.is_exiting and self.wallpapers.get(screen_id) is wallpaper:
+            self.synchronize(screen_id)
+
+
+    def synchronize(self, screen_id: str | None = None) -> None:
+        """
+        在 Qt 主執行緒連續套用群組, 不處理事件佇列
+        """
+
+        if self.is_exiting:
+            return
+
+        roots = (
+            (self.graph.root(screen_id),) if screen_id is not None else
+            tuple(dict.fromkeys(self.graph.root(follower) for follower in self.graph.sources))
+        )
+
+        for root in roots:
+            self._synchronize_group(root)
+
+
+    def _synchronize_group(self, root: str) -> None:
+
+        source = self.wallpapers.get(root)
+        followers = self.graph.subtree(root)[1:]
+        if (
+            source is None or source.is_exiting or source.is_recreating or
+            source.current_media is None or not followers
+        ):
+            return
+
+        source_media = source.current_media
+        for screen_id in followers:
+            target = self.wallpapers.get(screen_id)
+            if target is None or target.is_exiting or target.is_recreating:
+                continue
+
+            try:
+                changed_media = target.current_media != source_media
+                if changed_media:
+                    target.set_play_media(source_media)
+
+                target.apply_playback_state(source.playback_state)
+
+                if changed_media or screen_id in self._pending_selection:
+                    self.config_store.remember_wallpaper(screen_id, source_media)
+                    self._pending_selection.discard(screen_id)
+
+                if source.is_image() or source.play_state == "stop":
+                    continue
+
+                source_time = source.get_playback_time()
+                target_time = target.get_playback_time()
+                if source_time is None or target_time is None:
+                    continue
+
+                difference = abs(source_time - target_time)
+                length = source.get_playback_length()
+                if length > 0 and difference <= length:
+                    difference = min(difference, length - difference)
+
+                if difference > SYNC_TOLERANCE_MS:
+                    target.seek_time(source_time)
+
+            except Exception:
+                logger.exception("同步跟隨螢幕失敗 - %s -> %s", screen_id, root)
+
+
+    def check_auto_pause(self, wallpaper: FollowWallpaper, *, from_timer: bool = False) -> bool:
+        """
+        檢查指定桌布所在群組, 未登錄的桌布交回呼叫端處理
+        """
+
+        if self.is_exiting or self.wallpapers.get(wallpaper.screen_id) is not wallpaper:
+            return False
+
+        root = self.graph.root(wallpaper.screen_id)
+        members = [self.wallpapers[screen_id] for screen_id in self.graph.subtree(root) if screen_id in self.wallpapers]
+        # 跟隨者的計時通知不重複掃描同一群組
+        if from_timer and wallpaper.screen_id != root:
+            return True
+
+        if update_auto_pause(members):
+            logger.info("auto_pause - %s", members[0].play_state)
+            self.synchronize(root)
+
+        return True
+
+
+    def shutdown(self) -> None:
+
+        self.is_exiting = True
+        self._pending_selection.clear()

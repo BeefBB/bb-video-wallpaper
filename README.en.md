@@ -1,6 +1,6 @@
 # BB Video Wallpaper
 
-**[繁體中文](README.md) | [简体中文](README.cn.md) | [日本語](README.ja.md) | English**
+**[繁體中文](README.md) | [简体中文](README.cn.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | English**
 
 Play videos as your desktop wallpaper while keeping it lightweight and simple to manage.  
 Store your wallpapers in a single folder, making it easy to switch between them at any time.  
@@ -55,9 +55,12 @@ bb-video-wallpaper/
  │   ├─ libvlccore.dll
  │   └─ ...
  ├─ bb-video-wallpaper.py
+ ├─ bb_image_display.py
  ├─ config.py
  ├─ media_import.py
  ├─ media_preview.py
+ ├─ playback.py
+ ├─ screen_follow.py
  ├─ windows_integration.py
  ├─ thumbnails.py
  ├─ libvlc.dll
@@ -100,7 +103,7 @@ Folder/
 `bb-video-wallpaper-setup.exe` includes a reduced version of **VLC 3.0.24**, containing only the components required by BB Video Wallpaper for video playback.  
 VLC is open-source software. For copyright and license information, please refer to the VLC license documents located in `Installation Directory/VLC/`.  
 
-# Copyright
+# License
 
 BB Video Wallpaper is licensed under the MIT License.  
 The included VLC 3.0.24 components are provided under the applicable VLC license terms.  

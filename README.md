@@ -1,6 +1,6 @@
 # BB 影片桌布
 
-**繁體中文 | [简体中文](README.cn.md) | [日本語](README.ja.md) | [English](README.en.md)**
+**繁體中文 | [简体中文](README.cn.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [English](README.en.md)**
 
 能在桌布播放影片, 同時也是一個極輕量的桌布管理軟體  
 將桌布保存在一個資料夾中, 以便隨時切換  
@@ -55,9 +55,12 @@ bb-video-wallpaper/
  │   ├─ libvlccore.dll
  │   └─ ...
  ├─ bb-video-wallpaper.py
+ ├─ bb_image_display.py
  ├─ config.py
  ├─ media_import.py
  ├─ media_preview.py
+ ├─ playback.py
+ ├─ screen_follow.py
  ├─ windows_integration.py
  ├─ thumbnails.py
  ├─ libvlc.dll
@@ -98,9 +101,9 @@ Folder/
 # VLC
 
 `bb-video-wallpaper-setup.exe` 內含經刪減的 **VLC 3.0.24**, 僅保留 BB 影片桌布 播放影片所需的元件  
-VLC 為開源軟體, 相關版權與授權資訊請參閱 `安裝目錄/VLC/` 中的 VLC 授權文件  
+VLC 為開源軟體, 相關著作權與授權資訊請參閱 `安裝目錄/VLC/` 中的 VLC 授權文件  
 
-# 版權
+# 授權
 
 BB 影片桌布 採用 MIT License  
 軟體內含的 VLC 3.0.24 相關元件依 VLC 所適用的授權條款提供  

@@ -5,9 +5,9 @@
 
 from pathlib import Path
 
-from PySide6.QtWidgets import QApplication, QLabel, QMenu
+from PySide6.QtWidgets import QApplication, QLabel, QMenu, QWidget
 from PySide6.QtCore import Qt, QTimer, Slot
-from PySide6.QtGui import QCursor, QImage, QPixmap
+from PySide6.QtGui import QAction, QCursor, QImage, QPixmap
 
 from thumbnails import ThumbnailThread
 
@@ -20,11 +20,12 @@ class MediaPreviewMenu(QMenu):
     def __init__(
         self,
         title: str,
-        parent=None,
+        parent: QWidget | None = None,
         *,
         media_dir: Path,
         thumbnail_dir: Path,
-        loading_image_path: Path
+        loading_image_path: Path,
+        thumbnail_thread: ThumbnailThread | None = None
     ) -> None:
 
         super().__init__(title, parent)
@@ -51,10 +52,13 @@ class MediaPreviewMenu(QMenu):
 
         self.preview_pixmap = self.loading_pixmap
         self.preview_mode = False
-        self.preview_action = None
+        self.preview_action: QAction | None = None
 
 
-        self.thumbnail_thread = ThumbnailThread(media_dir, thumbnail_dir, self)
+        self.thumbnail_thread: ThumbnailThread = (
+            thumbnail_thread if thumbnail_thread is not None
+            else ThumbnailThread(media_dir, thumbnail_dir, self)
+        )
         self.thumbnail_thread.thumbnail_ready.connect(self.update_preview)
 
 
@@ -197,12 +201,12 @@ class MediaPreviewMenu(QMenu):
         self.preview.adjustSize()
 
 
-        # 優先放在選單右側, 空間不足時改放左側
+        # 優先放在選單左側, 空間不足時改放右側
         menu_rect = self.frameGeometry()
-        x = menu_rect.right() + 8
+        x = menu_rect.left() - self.preview.width() - 8
 
-        if x + self.preview.width() > available.right() + 1:
-            x = menu_rect.left() - self.preview.width() - 8
+        if x < available.left():
+            x = menu_rect.right() + 8
 
 
         y = self.mapToGlobal(self.actionGeometry(action).topLeft()).y()

@@ -10,6 +10,8 @@ import os
 from configparser import ConfigParser, Error as ConfigParserError
 from pathlib import Path
 
+from screen_follow import FollowGraph, valid_screen_id
+
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,7 @@ SUPPORTED_LANGUAGES = {
     "繁體中文": "zh-TW",
     "简体中文": "zh-CN",
     "日本語": "ja-JP",
+    "한국어": "ko-KR",
     "English": "en-US",
 }
 
@@ -66,6 +69,19 @@ class ConfigStore:
         return path.as_posix()
 
 
+    def _relative_media_path(self, path: Path) -> str:
+        """
+        將媒體路徑轉為可保存的相對路徑, 無效時拒絕保存
+        """
+
+        media_path = self._normalize_media_path(path.relative_to(self.media_dir).as_posix())
+
+        if media_path is None:
+            raise ValueError("桌布路徑必須位於媒體資料夾內")
+
+        return media_path
+
+
     def validate(self, raw) -> dict:
         """
         逐欄檢查設定, 異常欄位使用預設值
@@ -87,6 +103,22 @@ class ConfigStore:
             elif not isinstance(config[key], bool):
                 logger.warning("設定欄位 %s 型別錯誤, 使用預設值", key)
                 config[key] = default
+
+
+        # 字體大小使用整數 pt, 超出範圍時限制在 6 到 48
+        font_size = config.get("fontSize", 11)
+        if type(font_size) is not int:
+            logger.warning("設定欄位 fontSize 無效, 使用預設值")
+            font_size = 11
+        config["fontSize"] = max(6, min(48, font_size))
+
+
+        # 最近紀錄顯示筆數使用整數, 0 表示隱藏, 最多顯示 20 筆
+        recent_display_count = config.get("recentDisplayCount", 6)
+        if type(recent_display_count) is not int:
+            logger.warning("設定欄位 recentDisplayCount 無效, 使用預設值")
+            recent_display_count = 6
+        config["recentDisplayCount"] = max(0, min(20, recent_display_count))
 
 
         # 未指定語言時優先使用安裝語言, 再使用系統語言與繁體中文
@@ -151,11 +183,11 @@ class ConfigStore:
                     seen.add(path)
                     normalized_recent.append(path.as_posix())
 
-                    if len(normalized_recent) == 5:
+                    if len(normalized_recent) == 20:
                         break
 
         if normalized_recent != recent:
-            logger.warning("設定欄位 recentVideo 已移除無效或重複項目, 最多保留 5 筆")
+            logger.warning("設定欄位 recentVideo 已移除無效或重複項目, 最多保留 20 筆")
 
         config["recentVideo"] = normalized_recent
 
@@ -166,7 +198,7 @@ class ConfigStore:
 
         if isinstance(screen_wallpapers, dict):
             for screen_id, media_path in screen_wallpapers.items():
-                if not isinstance(screen_id, str) or not screen_id.strip() or "\0" in screen_id:
+                if not valid_screen_id(screen_id):
                     continue
 
                 normalized = self._normalize_media_path(media_path)
@@ -180,6 +212,12 @@ class ConfigStore:
         config["screenWallpapers"] = normalized_wallpapers
 
 
+        screen_follows = config.get("screenFollows", {})
+        config["screenFollows"] = FollowGraph.normalize(screen_follows)
+        if config["screenFollows"] != screen_follows:
+            logger.warning("設定欄位 screenFollows 已移除無效或循環關係")
+
+
         return config
 
 
@@ -188,17 +226,12 @@ class ConfigStore:
         保存最近紀錄
         """
 
-        media_path = self._normalize_media_path(path.relative_to(self.media_dir).as_posix())
-
-        if media_path is None:
-            raise ValueError("桌布路徑必須位於媒體資料夾內")
-
-
+        media_path = self._relative_media_path(path)
         config = self.load()
         recent = config["recentVideo"]
         config["recentVideo"] = [media_path] + [
             item for item in recent if Path(item) != Path(media_path)
-        ][:4]
+        ][:19]
 
         self.save(config)
 
@@ -208,15 +241,10 @@ class ConfigStore:
         保存單一螢幕的選擇
         """
 
-        if not isinstance(screen_id, str) or not screen_id.strip() or "\0" in screen_id:
+        if not valid_screen_id(screen_id):
             raise ValueError("無效的螢幕識別")
 
-        media_path = self._normalize_media_path(path.relative_to(self.media_dir).as_posix())
-
-        if media_path is None:
-            raise ValueError("桌布路徑必須位於媒體資料夾內")
-
-
+        media_path = self._relative_media_path(path)
         config = self.load()
         config["screenWallpapers"][screen_id] = media_path
         self.save(config)
@@ -224,17 +252,27 @@ class ConfigStore:
 
     def initialize_if_missing(self) -> None:
         """
-        設定檔不存在時寫入完整預設值, 保留既有檔案
+        設定檔或欄位缺少時補齊預設值
         """
 
         try:
-            self.config_path.stat()
+            with open(self.config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
 
         except FileNotFoundError:
-            self.save(self.validate({}))
+            config = {}
 
-        except OSError:
-            logger.exception("檢查 config 是否存在時發生錯誤")
+        except Exception:
+            logger.exception("初始化 config 時讀取設定發生錯誤")
+            return
+
+
+        if not isinstance(config, dict):
+            logger.warning("設定檔最外層必須是物件, 不寫回預設設定")
+            return
+
+
+        self.save(self.validate(config))
 
 
     def load(self) -> dict:

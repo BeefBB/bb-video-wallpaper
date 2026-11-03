@@ -1,6 +1,6 @@
 # BB 视频壁纸
 
-**[繁體中文](README.md) | 简体中文 | [日本語](README.ja.md) | [English](README.en.md)**
+**[繁體中文](README.md) | 简体中文 | [日本語](README.ja.md) | [한국어](README.ko.md) | [English](README.en.md)**
 
 可以将视频作为壁纸播放，同时也是一款非常轻量的壁纸管理软件。  
 将壁纸保存在一个文件夹中，以便随时切换。  
@@ -55,9 +55,12 @@ bb-video-wallpaper/
  │   ├─ libvlccore.dll
  │   └─ ...
  ├─ bb-video-wallpaper.py
+ ├─ bb_image_display.py
  ├─ config.py
  ├─ media_import.py
  ├─ media_preview.py
+ ├─ playback.py
+ ├─ screen_follow.py
  ├─ windows_integration.py
  ├─ thumbnails.py
  ├─ libvlc.dll
@@ -100,7 +103,7 @@ Folder/
 `bb-video-wallpaper-setup.exe` 内含经过精简的 **VLC 3.0.24**，仅保留 **BB 视频壁纸**播放视频所需的组件。  
 VLC 是开源软件，相关版权和许可证信息请参阅 `安装目录/VLC/` 中的 VLC 许可证文件。  
 
-# 版权
+# 许可证
 
 BB 视频壁纸采用 MIT License。  
 软件内含的 VLC 3.0.24 相关组件根据 VLC 所适用的许可证条款提供。  
