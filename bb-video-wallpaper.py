@@ -1874,7 +1874,7 @@ def main() -> int:
 
 
     font = QFont()
-    font.setPointSize(11)
+    font.setPointSize(config_store.load()["fontSize"])
     app.setFont(font)
 
 

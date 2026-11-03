@@ -105,6 +105,14 @@ class ConfigStore:
                 config[key] = default
 
 
+        # 字體大小使用整數 pt, 超出範圍時限制在 6 到 48
+        font_size = config.get("fontSize", 11)
+        if type(font_size) is not int:
+            logger.warning("設定欄位 fontSize 無效, 使用預設值")
+            font_size = 11
+        config["fontSize"] = max(6, min(48, font_size))
+
+
         # 未指定語言時優先使用安裝語言, 再使用系統語言與繁體中文
         if "language" not in config:
 

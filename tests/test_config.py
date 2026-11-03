@@ -52,6 +52,7 @@ class ConfigTests(unittest.TestCase):
 
         expected = {
             **CONFIG_DEFAULTS,
+            "fontSize": 11,
             "language": "en-US",
             "recentVideo": [],
             "screenWallpapers": {},
