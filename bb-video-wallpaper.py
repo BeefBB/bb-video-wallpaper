@@ -1626,12 +1626,12 @@ class Tray:
             self.follow_controller.detach(screen_id)
             self.follow_controller.synchronize(screen_id)
 
-        except Exception as error:
+        except Exception:
 
             logger.exception("載入桌布時發生錯誤 - %s", path)
             self.tray.showMessage(
                 tr("app_name"),
-                tr("media_load_failed").format(error=error),
+                tr("media_load_failed"),
                 QSystemTrayIcon.MessageIcon.Information,
                 3000
             )
