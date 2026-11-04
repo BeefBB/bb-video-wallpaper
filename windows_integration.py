@@ -492,8 +492,21 @@ def set_windows_as_wallpaper(hwnd: int) -> None:
         if icon_layer:
             _log_wallpaper_window("SHELLDLL_DefView", icon_layer)
 
+        # 先保存螢幕座標, 掛載後改用父視窗的客戶區座標
+        stage = "GetWindowRect"
+        screen_position = win32gui.GetWindowRect(hwnd)[:2]
+
         stage = "SetParent"
         win32gui.SetParent(hwnd, workerw)
+
+        stage = "ScreenToClient"
+        left, top = win32gui.ScreenToClient(workerw, screen_position)
+
+        stage = "SetWindowPos"
+        win32gui.SetWindowPos(
+            hwnd, 0, left, top, 0, 0,
+            win32con.SWP_NOSIZE | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE
+        )
 
         if workerw_old:
 

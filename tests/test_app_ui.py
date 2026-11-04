@@ -373,19 +373,22 @@ class ImportMenuTests(QtTestCase):
         self.namespace["logger"].exception.assert_called_once()
 
 
-    def test_follow_startup_waits_for_screens_and_removes_missing_sources_after_grace(self):
+    def test_follow_startup_waits_for_screens_and_checks_offline_followers_on_arrival(self):
         """
-        驗證啟動時延後建立桌布, 等待結束後只還原仍有來源螢幕的跟隨關係
+        驗證啟動時保留離線跟隨者, 稍後加入時才還原或清除跟隨
         """
 
-        for source_present in (True, False):
-            with self.subTest(source_present=source_present):
+        saved = {"screen-b": "screen-a"}
+        for source_present, follower_present, expected in (
+            (True, True, saved), (False, True, {}), (True, False, saved), (False, False, saved),
+        ):
+            with self.subTest(source_present=source_present, follower_present=follower_present):
                 config_store = self.namespace["config_store"]
-                config_store.load.return_value = {"screenFollows": {"screen-b": "screen-a"}}
+                config_store.load.return_value = {"screenFollows": saved.copy()}
                 screen_a, screen_b = mock.Mock(), mock.Mock()
-                screens = [screen_a, screen_b] if source_present else [screen_b]
+                screens = ([screen_b] if follower_present else []) + ([screen_a] if source_present else [])
                 wallpapers = [self.make_wallpaper(key, screen) for key, screen in
-                              (("screen-a", screen_a), ("screen-b", screen_b)) if screen in screens]
+                              (("screen-b", screen_b), ("screen-a", screen_a)) if screen in screens]
                 application = mock.Mock()
                 application.screens.return_value = screens
                 factory = self.namespace["Wallpaper"] = mock.Mock(side_effect=wallpapers)
@@ -397,13 +400,47 @@ class ImportMenuTests(QtTestCase):
                     factory.assert_not_called()
                     tray.follow_restore_timer.timeout.emit()
                     self.assertEqual(factory.call_count, len(screens))
-                    expected = {"screen-b": "screen-a"} if source_present else {}
                     self.assertEqual(tray.follow_controller.graph.sources, expected)
+                    if not follower_present:
+                        follower = self.make_wallpaper("screen-b", screen_b)
+                        factory.side_effect = None
+                        factory.return_value = follower
+                        screens.append(screen_b)
+                        tray.add_screen(screen_b)
+                        self.assertEqual(tray.follow_controller.graph.sources, saved if source_present else {})
+                        if source_present:
+                            follower.apply_playback_state.assert_called_once_with(wallpapers[0].playback_state)
                     if not source_present:
                         self.assertEqual(config_store.save.call_args.args[0]["screenFollows"], {})
                 finally:
                     tray.shutdown()
                     tray.menu.deleteLater()
+
+
+    def test_follow_reconnection_rechecks_source_without_clearing_other_offline_settings(self):
+        """
+        驗證依序拔除跟隨者與來源後, 跟隨者接回才清除自身失效設定
+        """
+
+        controller = self.tray.follow_controller
+        saved = {"screen-b": "screen-a", "offline": "missing"}
+        self.namespace["config_store"].load.return_value = {"screenFollows": saved.copy()}
+        controller.restore(saved)
+        follower = self.add_screen("screen-b")
+        follower.apply_playback_state.assert_called_once_with(self.wallpaper.playback_state)
+        self.assertEqual(controller.graph.sources, saved)
+
+        for screen in (follower.target_screen, self.screen):
+            self.tray.app.screens.return_value.remove(screen)
+            self.screen_notifications.screenRemoved.emit(screen)
+            self.assertEqual(controller.graph.sources, saved)
+
+        replacement = self.add_screen("screen-b")
+        self.assertEqual(controller.graph.sources, {"offline": "missing"})
+        self.assertEqual(self.namespace["config_store"].save.call_args.args[0]["screenFollows"], {"offline": "missing"})
+        self.add_screen("screen-a")
+        self.assertEqual(controller.graph.sources, {"offline": "missing"})
+        replacement.apply_playback_state.assert_not_called()
 
 
     def test_single_screen_import_does_not_apply_to_screen_added_during_copy(self):

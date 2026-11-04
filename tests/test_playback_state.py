@@ -460,11 +460,186 @@ class PlaybackStateTests(QtTestCase):
         self.namespace["bb_image_display"].Instance.return_value = mock.Mock(wraps=ImageDisplay())
         self.namespace["get_monitor_id"].return_value = screen_id
         wallpaper = self.namespace["Wallpaper"](target_screen=HeadlessScreen(QRect(0, 0, 1920, 1080)))
-        self.addCleanup(wallpaper.deleteLater)
+        self.addCleanup(lambda: wallpaper.deleteLater() if isValid(wallpaper) else None)
         self.addCleanup(wallpaper.shutdown)
         wallpaper.check_auto_pause_timer.stop()
         wallpaper.fullscreen_detection_timer.stop()
         return wallpaper
+
+
+    def wait_for_native_wakeup(self, player) -> None:
+        """
+        模擬 VLC 等待原生視窗喚醒才能完成停止
+        """
+
+        woken = threading.Event()
+        self.namespace["wake_vlc_video_windows"].side_effect = woken.set
+        original_stop = player.stop
+
+        def stop() -> None:
+            if not woken.wait(2):
+                raise RuntimeError("未喚醒 VLC 原生視窗")
+            original_stop()
+
+        self.enterContext(mock.patch.object(player, "stop", side_effect=stop))
+
+
+    def queue_operation(self, operation) -> mock.Mock:
+        """
+        排入可取消的 Qt 操作, 避免失敗案例留下回呼影響後續測試
+        """
+
+        callback = mock.Mock(side_effect=operation)
+        timer = QTimer(self.wallpaper)
+        timer.setSingleShot(True)
+        timer.timeout.connect(callback)
+        timer.start(0)
+        self.addCleanup(timer.stop)
+        return callback
+
+
+    def test_sync_finishes_before_queued_middle_screen_removal(self):
+        """
+        同步期間排入中間螢幕移除, 解除跟隨後不再被舊流程更換媒體
+        """
+
+        self.start_playing()
+        middle = self.add_following_wallpaper("screen-b")
+        downstream = self.add_following_wallpaper("screen-c")
+        for wallpaper in (middle, downstream):
+            wallpaper.set_play_media(self.media_path)
+            wallpaper.manual_play()
+        controller = self.tray.follow_controller
+        controller.graph.follow(middle.screen_id, self.wallpaper.screen_id)
+        controller.graph.follow(downstream.screen_id, middle.screen_id)
+        self.wallpaper.set_play_media(self.media_path.with_name("next.mp4"))
+        self.tray.rebuild_screen_menus = mock.Mock()
+        media_after_removal = []
+
+        def remove_middle() -> None:
+            self.tray.remove_screen(middle.target_screen)
+            media_after_removal.append(downstream.current_media)
+
+        callback = self.queue_operation(remove_middle)
+        self.wait_for_native_wakeup(middle.instance_vlc_player)
+        controller.synchronize()
+        callback.assert_not_called()
+        self.app.processEvents()
+
+        callback.assert_called_once_with()
+        self.assertEqual(controller.graph.sources, {middle.screen_id: self.wallpaper.screen_id})
+        self.assertEqual(downstream.current_media, media_after_removal[0])
+        self.assertNotIn(middle.screen_id, self.tray.wallpapers)
+
+
+    def test_queued_all_play_runs_after_all_stop_finishes(self):
+        """
+        全部停止期間排入全部播放, 每台螢幕最後都採用較新的播放要求
+        """
+
+        self.start_playing()
+        other = self.add_following_wallpaper()
+        other.set_play_media(self.media_path)
+        other.manual_play()
+        callback = self.queue_operation(self.tray.play)
+        self.wait_for_native_wakeup(self.player)
+
+        self.tray.stop()
+        callback.assert_not_called()
+        self.assertEqual([w.play_state for w in self.tray.wallpapers.values()], ["stop", "stop"])
+        self.app.processEvents()
+
+        callback.assert_called_once_with()
+        self.assertEqual([w.play_state for w in self.tray.wallpapers.values()], ["play", "play"])
+
+
+    def test_queued_image_selection_runs_after_all_stop_finishes(self):
+        """
+        全部停止期間替另一螢幕選片, 新圖片不被尚未完成的舊停止要求隱藏
+        """
+
+        self.start_playing()
+        other = self.add_following_wallpaper()
+        other.set_play_media(self.media_path)
+        other.manual_play()
+        callback = self.queue_operation(lambda: self.tray.play_from_menu(self.image_path, other.screen_id))
+        self.wait_for_native_wakeup(self.player)
+
+        self.tray.stop()
+        callback.assert_not_called()
+        self.app.processEvents()
+
+        callback.assert_called_once_with()
+        self.assertEqual(self.wallpaper.play_state, "stop")
+        self.assertEqual((other.current_media, other.play_state), (self.image_path, "play"))
+        self.assertTrue(other.instance_image.visible)
+
+
+    def test_queued_selection_then_stop_does_not_replay_later(self):
+        """
+        停止期間排入選片與後續停止, 選片不額外延後至較新的停止之後播放
+        """
+
+        self.start_playing()
+
+        def select_then_stop() -> None:
+            self.tray.play_from_menu(self.image_path, self.wallpaper.screen_id)
+            self.tray.stop()
+
+        callback = self.queue_operation(select_then_stop)
+        self.wait_for_native_wakeup(self.player)
+        self.tray.stop()
+        callback.assert_not_called()
+        self.app.processEvents()
+        self.app.processEvents()
+
+        callback.assert_called_once_with()
+        self.assertEqual(self.wallpaper.current_media, self.image_path)
+        self.assertEqual(self.wallpaper.playback_state, PlaybackState("stop"))
+        self.assertEqual(self.wallpaper.play_state, "stop")
+        self.assertFalse(self.image_output.visible)
+
+
+    def test_normal_stop_joins_native_wakeup_thread_even_on_failure(self):
+        """
+        停止或喚醒失敗時仍回收執行緒, 並保留停止的原始例外
+        """
+
+        self.start_playing()
+        main_thread = threading.get_ident()
+        original_stop = self.player.stop
+
+        for failure in (None, "stop", "wake"):
+            with self.subTest(failure=failure):
+                woken = threading.Event()
+                workers = []
+                error = RuntimeError("stop failed")
+
+                def wake() -> None:
+                    workers.append(threading.current_thread())
+                    if failure == "wake" and len(workers) == 1:
+                        raise RuntimeError("wake failed")
+                    woken.set()
+
+                def stop() -> None:
+                    self.assertEqual(threading.get_ident(), main_thread)
+                    self.assertTrue(woken.wait(2))
+                    if failure == "stop":
+                        raise error
+                    original_stop()
+
+                self.namespace["wake_vlc_video_windows"].side_effect = wake
+                with mock.patch.object(self.player, "stop", side_effect=stop):
+                    if failure == "stop":
+                        with self.assertRaises(RuntimeError) as raised:
+                            self.tray.stop()
+                        self.assertIs(raised.exception, error)
+                    else:
+                        self.tray.stop()
+
+                self.assertTrue(workers)
+                self.assertTrue(all(worker.ident != main_thread and not worker.is_alive() for worker in workers))
+                self.assertEqual(self.namespace["logger"].exception.call_count, int(failure == "wake"))
 
 
     def test_follow_join_waits_for_playing_before_seeking_and_preserves_manual_pause(self):

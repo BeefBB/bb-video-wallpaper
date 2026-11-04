@@ -12,7 +12,7 @@ import sys
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QWidget
@@ -164,6 +164,8 @@ class WindowsIntegrationTests(unittest.TestCase):
                 gui.FindWindow.return_value = 10
                 gui.FindWindowEx.side_effect = windows_found
                 gui.GetAncestor.return_value = parent
+                gui.GetWindowRect.return_value = (0, 0, 1920, 1080)
+                gui.ScreenToClient.return_value = (0, 0)
                 # SetParent 成功時也可能回傳 0
                 gui.SetParent.return_value = 0
                 windows.set_windows_as_wallpaper(100)
@@ -171,7 +173,7 @@ class WindowsIntegrationTests(unittest.TestCase):
                 gui.SetParent.assert_called_once_with(100, parent)
                 self.assertEqual(create.call_args_list, [mock.call(10)] if creates_container else [])
                 if behind is None:
-                    gui.SetWindowPos.assert_not_called()
+                    self.assertTrue(gui.SetWindowPos.call_args.args[-1] & win32con.SWP_NOZORDER)
                 else:
                     self.assertEqual(gui.SetWindowPos.call_args.args[:2], (100, behind))
 
@@ -366,10 +368,62 @@ class DesktopEventTests(QtTestCase):
                 windows.win32gui.DestroyWindow(container)
 
 
-class WorkerWNativeTests(unittest.TestCase):
+class WorkerWNativeTests(QtTestCase):
     """
-    使用隱藏父視窗驗證真正的 WorkerW
+    使用隱藏父視窗驗證真正的 WorkerW 與桌布掛載
     """
+
+    def test_wallpaper_keeps_screen_geometry_with_offset_parent(self):
+        """
+        驗證正負原點與非客戶區偏移下, 掛載及重複掛載保留桌布的位置與尺寸
+        """
+
+        for origin in ((0, 0), (-800, -200), (800, 200)):
+            for legacy in (False, True):
+                with self.subTest(origin=origin, legacy=legacy):
+                    parent = win32gui.CreateWindowEx(
+                        0, "Static", "", win32con.WS_OVERLAPPEDWINDOW,
+                        *origin, 640, 480, 0, 0, windows.win32api.GetModuleHandle(None), None,
+                    )
+                    wallpaper = QWidget()
+
+                    try:
+                        icon_layer = win32gui.CreateWindowEx(
+                            0, "Static", "", win32con.WS_CHILD,
+                            0, 0, 640, 480, parent, 0, windows.win32api.GetModuleHandle(None), None,
+                        )
+                        wallpaper.setWindowFlags(
+                            Qt.WindowType.FramelessWindowHint |
+                            Qt.WindowType.Tool |
+                            Qt.WindowType.WindowDoesNotAcceptFocus
+                        )
+                        wallpaper.setGeometry(-10000, -10000, 320, 180)
+                        hwnd = int(wallpaper.winId())
+                        expected = win32gui.GetWindowRect(hwnd)
+
+                        for _ in range(2):
+                            found = [parent, icon_layer, parent] if legacy else [0, parent]
+                            # 只替換桌面搜尋與訊息, 掛載和座標操作使用真正的 Windows API
+                            with (
+                                mock.patch.object(win32gui, "FindWindow", return_value=parent),
+                                mock.patch.object(win32gui, "FindWindowEx", side_effect=found),
+                                mock.patch.object(win32gui, "SendMessageTimeout"),
+                            ):
+                                windows.set_windows_as_wallpaper(hwnd)
+
+                            self.assertEqual(win32gui.GetAncestor(hwnd, win32con.GA_PARENT), parent)
+                            self.assertEqual(win32gui.GetWindowRect(hwnd), expected)
+                            wallpaper.show()
+                            self.app.processEvents()
+                            self.assertEqual(win32gui.GetWindowRect(hwnd), expected)
+                            self.assertFalse(win32gui.IsWindowVisible(parent))
+
+                    finally:
+                        wallpaper.destroy()
+                        wallpaper.deleteLater()
+                        if win32gui.IsWindow(parent):
+                            win32gui.DestroyWindow(parent)
+
 
     def test_created_workerw_is_opaque_and_class_can_be_reused(self):
         """

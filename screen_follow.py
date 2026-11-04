@@ -137,14 +137,15 @@ class FollowGraph:
         return self._sources.pop(screen_id, None) is not None
 
 
-    def remove_screen(self, screen_id: str) -> bool:
+    def remove_screen(self, screen_id: str, screen_ids: Iterable[str]) -> bool:
         """
-        移除以此螢幕為任一端點的關係
+        移除在線螢幕指向指定來源的關係
         """
 
+        available = set(screen_ids)
         removed = [
             follower for follower, source in self._sources.items()
-            if follower == screen_id or source == screen_id
+            if follower in available and source == screen_id
         ]
 
         for follower in removed:
@@ -154,11 +155,14 @@ class FollowGraph:
 
 
     def retain_screens(self, screen_ids: Iterable[str]) -> None:
+        """
+        移除在線螢幕指向離線來源的關係
+        """
 
         available = set(screen_ids)
         self._sources = {
             follower: source for follower, source in self._sources.items()
-            if follower in available and source in available
+            if follower not in available or source in available
         }
 
 
@@ -237,7 +241,7 @@ class FollowController:
         if self.is_exiting:
             return
 
-        if self.graph.remove_screen(screen_id):
+        if self.graph.remove_screen(screen_id, self.wallpapers):
             self.save()
 
         self._pending_selection.intersection_update(self.graph.sources)
