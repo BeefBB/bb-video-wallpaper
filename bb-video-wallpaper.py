@@ -4,6 +4,7 @@ import sys
 import os
 from ctypes import wintypes
 from pathlib import Path
+import threading
 import time
 import logging
 from logging.handlers import RotatingFileHandler
@@ -575,9 +576,34 @@ class Wallpaper(QWidget):
             self.instance_image.hide()
 
         else:
-            self.instance_vlc_player.stop()
+            self._stop_video_with_wakeup()
 
         self.play_state = "stop"
+
+
+    def _stop_video_with_wakeup(self) -> None:
+        """
+        同步停止影片, 背景只喚醒原生視窗, 避免 Qt 事件插入目前操作
+        """
+
+        finished = threading.Event()
+
+        def wake() -> None:
+            while not finished.wait(0.05):
+                try:
+                    wake_vlc_video_windows()
+                except Exception:
+                    logger.exception("喚醒 VLC 原生視窗失敗")
+
+        worker = threading.Thread(target=wake, daemon=True)
+        worker.start()
+
+        try:
+            self.instance_vlc_player.stop()
+
+        finally:
+            finished.set()
+            worker.join()
 
 
     def manual_play(self) -> None:

@@ -44,9 +44,9 @@ def run_host() -> None:
     app.exec()
 
 
-def run_recovery_probe(media: Path) -> None:
+def run_recovery_probe(media: Path, operation: str = "reattach") -> None:
     """
-    驗證真正 VLC 在父視窗失效後恢復輸出, 並可正常關閉
+    驗證真正 VLC 在父視窗失效後恢復, 停止或切換媒體, 並可正常關閉
     """
 
     import win32con
@@ -130,6 +130,53 @@ def run_recovery_probe(media: Path) -> None:
         wait_until(lambda: player.has_vout() > 0 and player.get_time() > 1000)
         # 重建途中不顯示尚未掛入測試容器的頂層視窗
         wallpaper.show = lambda: None
+
+        if operation != "reattach":
+            if operation == "pause":
+                wallpaper.manual_pause()
+                wait_until(lambda: player.get_state() == paused_state)
+
+            old_hwnd = int(wallpaper.winId())
+            host_process.terminate()
+            host_process.wait(timeout=5)
+            wait_until(lambda: not win32gui.IsWindow(old_hwnd))
+            wallpaper.reattach_timer.stop()
+
+            if operation in ("video", "image"):
+                host_hwnd, host_process = create_host()
+                # 恢復 Qt 目標但保留舊 VLC 輸出, 讓換片仍需停止失效的輸出
+                wallpaper.is_recreating = True
+                try:
+                    wallpaper.unregister_power_notification()
+                    wallpaper.instance_image.set_hwnd(0)
+                    wallpaper.hide()
+                    wallpaper.destroy(True, True)
+                    wallpaper.create()
+                    wallpaper.setGeometry(0, 0, 640, 360)
+                    wallpaper.attach_to_desktop()
+                finally:
+                    wallpaper.is_recreating = False
+
+            delivered = []
+            QTimer.singleShot(0, lambda: delivered.append(True))
+            if operation in ("stop", "pause"):
+                wallpaper.manual_stop()
+                assert wallpaper.play_state == "stop" and player.get_state() == getattr(vlc.State, "Stopped")
+            else:
+                selected = media if operation == "video" else media.with_suffix(".png")
+                wallpaper.select_media(selected)
+                assert wallpaper.current_media == selected and wallpaper.play_state == "play"
+                assert config.remember_wallpaper.call_args.args[1] == selected
+            assert not delivered, "一般停止或換片期間不可處理排隊的 Qt 操作"
+
+            if operation == "video":
+                wait_until(lambda: player.has_vout() > 0 and player.get_state() == playing_state)
+            elif operation == "image":
+                window = wallpaper.instance_image.window
+                assert window is not None and window.isVisible(), "換片後圖片沒有顯示"
+
+            print(f"PASS {operation}: lost output, synchronous command", flush=True)
+            return
 
         # 分別驗證播放與暫停狀態
         for state, vlc_state in (("play", playing_state), ("pause", paused_state)):
@@ -220,11 +267,43 @@ class VideoRecoveryTests(unittest.TestCase):
                 self.assertIn(f"PASS {stage}:", result.stdout)
 
 
+    def test_lost_video_output_stops_and_switches_media_without_qt_reentry(self):
+        """
+        失效輸出在播放或暫停時可停止, 亦可切換影片與圖片, 期間不執行 Qt 回呼
+        """
+
+        from PySide6.QtGui import QImage
+
+        if FFMPEG is None:
+            self.skipTest("需要 ffmpeg")
+
+        with tempfile.TemporaryDirectory() as directory:
+            media = Path(directory) / "selection.mp4"
+            subprocess.run(
+                [FFMPEG, "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30",
+                 "-t", "20", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(media)],
+                check=True, capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            image = QImage(320, 180, QImage.Format.Format_RGB32)
+            image.fill(0xff336699)
+            self.assertTrue(image.save(str(media.with_suffix(".png"))))
+
+            for operation in ("stop", "pause", "video", "image"):
+                with self.subTest(operation=operation):
+                    result = subprocess.run(
+                        [sys.executable, "-X", "utf8", __file__, "--probe", str(media), operation], cwd=ROOT,
+                        capture_output=True, text=True, encoding="utf-8", errors="replace",
+                        timeout=30, creationflags=subprocess.CREATE_NO_WINDOW,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn(f"PASS {operation}:", result.stdout)
+
+
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--host":
         run_host()
     elif len(sys.argv) > 1 and sys.argv[1] == "--probe":
-        run_recovery_probe(Path(sys.argv[2]))
+        run_recovery_probe(Path(sys.argv[2]), sys.argv[3] if len(sys.argv) > 3 else "reattach")
     else:
         unittest.main()
