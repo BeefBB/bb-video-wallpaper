@@ -527,7 +527,7 @@ class PlaybackStateTests(QtTestCase):
         self.app.processEvents()
 
         callback.assert_called_once_with()
-        self.assertEqual(controller.graph.sources, {})
+        self.assertEqual(controller.graph.sources, {middle.screen_id: self.wallpaper.screen_id})
         self.assertEqual(downstream.current_media, media_after_removal[0])
         self.assertNotIn(middle.screen_id, self.tray.wallpapers)
 

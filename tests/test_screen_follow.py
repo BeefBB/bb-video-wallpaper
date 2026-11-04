@@ -130,14 +130,18 @@ class FollowGraphTests(unittest.TestCase):
 
     def test_detaching_or_removing_source_preserves_lower_relationships(self) -> None:
         """
-        驗證解除跟隨或移除中間螢幕時, 不相關的下層關係仍保留
+        驗證解除跟隨或移除中間螢幕時, 保留離線螢幕設定與不相關的下層關係
         """
 
         for operation in ("detach", "remove_screen"):
             with self.subTest(operation=operation):
-                graph = FollowGraph({"b": "a", "c": "b", "d": "c"})
-                getattr(graph, operation)("b")
-                expected = {"c": "b", "d": "c"} if operation == "detach" else {"d": "c"}
+                graph = FollowGraph({"b": "a", "c": "b", "d": "c", "offline": "b"})
+                if operation == "detach":
+                    graph.detach("b")
+                    expected = {"c": "b", "d": "c", "offline": "b"}
+                else:
+                    graph.remove_screen("b", "acd")
+                    expected = {"b": "a", "d": "c", "offline": "b"}
                 self.assertEqual(graph.sources, expected)
 
 
@@ -240,9 +244,9 @@ class FollowControllerTests(unittest.TestCase):
         self.assertEqual(follower.position, 8000)
 
 
-    def test_removing_middle_screen_keeps_output_and_does_not_refollow_on_reconnection(self) -> None:
+    def test_removing_middle_screen_preserves_own_follow_and_detaches_online_dependents(self) -> None:
         """
-        驗證移除中間螢幕後保留其餘輸出與下層關係, 重新連線不自動恢復舊跟隨
+        驗證拔除中間螢幕後保留自身跟隨設定, 接回不恢復已解除的下層關係
         """
 
         self.controller.follow("b", "a")
@@ -255,9 +259,27 @@ class FollowControllerTests(unittest.TestCase):
         self.assertEqual(self.screens["c"].position, 7300)
         self.screens["b"] = Playback("b", self.media)
         self.controller.synchronize()
-        self.assertEqual(self.controller.graph.sources, {"d": "c"})
+        self.assertEqual(self.controller.graph.sources, {"b": "a", "d": "c"})
         self.assertEqual(self.screens["d"].position, 7300)
-        self.assertEqual(self.store.load()["screenFollows"], {"d": "c"})
+        self.assertEqual(self.store.load()["screenFollows"], {"b": "a", "d": "c"})
+
+
+    def test_offline_follows_survive_other_saves_and_source_removal(self) -> None:
+        """
+        驗證其他螢幕改設跟隨並拔除來源後, 離線螢幕的設定仍完整保存
+        """
+
+        sources = {"offline": "a", "absent": "missing", "b": "a"}
+        self.store.save({"screenFollows": sources})
+        self.controller.restore(sources)
+        self.controller.follow("c", "d")
+        self.assertEqual(self.store.load()["screenFollows"], {**sources, "c": "d"})
+
+        self.screens.pop("a")
+        self.controller.remove_screen("a")
+        expected = {"offline": "a", "absent": "missing", "c": "d"}
+        self.assertEqual(self.controller.graph.sources, expected)
+        self.assertEqual(self.store.load()["screenFollows"], expected)
 
 
     def test_nonseekable_outputs_and_failed_members_do_not_block_other_followers(self) -> None:

@@ -1319,6 +1319,7 @@ class Tray:
         wallpaper.show()
 
         if refresh:
+            self.follow_controller.restore(self.follow_controller.graph.sources)
             self.rebuild_screen_menus()
 
 
