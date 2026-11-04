@@ -1130,6 +1130,12 @@ class Tray:
 
         menu.aboutToShow.connect(self.refresh_playback_actions)
 
+        # 等選單顯示後再取得焦點, 避免首次開啟時點外部無法關閉
+        menu.aboutToShow.connect(
+            lambda: menu.activateWindow() if menu.isVisible() else None,
+            Qt.ConnectionType.QueuedConnection
+        )
+
 
         self.media_menu = MediaPreviewMenu(
             tr("select_video"),
