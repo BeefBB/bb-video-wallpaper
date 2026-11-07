@@ -98,6 +98,74 @@ Folder/
  └─ libvlc.dll
 ```
 
+## 기본값
+
+### config.json
+
+이름 | 항목 | 기본값
+--- | --- | ---
+언어 | "language" | 필드가 없으면: 설치 언어 > 시스템 언어 > 중국어 번체; 필드가 있지만 유효하지 않으면: 중국어 번체
+창 최대화 시 자동 일시 중지 | "autoPauseIfFullscreen" | true
+화면 꺼짐 시 자동 일시 중지 | "autoPauseIfScreenOff" | true
+배터리 사용 시 자동 일시 중지 | "autoPauseIfOnBattery" | false
+글꼴 크기 | "fontSize" | 11 pt, 6-48
+최근 기록 표시 개수 | "recentDisplayCount" | 6개, 0-20
+최근 사용 기록 | "recentVideo" | [], 0-20개
+모니터별 배경화면 | "screenWallpapers" | {}
+모니터 따라가기 관계 | "screenFollows" | {}
+
+언어 코드는 `zh-TW`, `zh-CN`, `ja-JP`, `ko-KR`, `en-US` 중 하나와 정확히 일치해야 합니다. 예를 들어 시스템 언어가 `en-GB`여도 `en-US`로 자동 매핑되지 않습니다.
+
+### 내부 상수
+
+이름 | 항목 | 기본값
+--- | --- | ---
+미디어 폴더 | MEDIA_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\video\`
+단일 파일 가져오기 폴더 | SINGLE_IMPORT_DIR | 미디어 폴더 안의 `_imports/`
+썸네일 폴더 | THUMBNAIL_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\thumbnails\`
+로그 파일 |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\log\log.log`
+VLC 배경화면 재생 옵션 |  | 오디오 비활성화, 동영상 제목 숨김, 반복 옵션 `--input-repeat=65535`
+배경화면 크기 조정 방식 |  | 이미지와 동영상 모두 종횡비를 유지하면서 가운데를 기준으로 잘라 화면을 채움
+시작 시 배경화면 선택 순서 |  | 해당 모니터에 저장된 배경화면 > 최근 기록의 첫 항목 > 미디어 목록의 첫 항목, 앞의 두 후보는 파일이 존재해야 함
+시작 시 최대화 감지 지연 시간 | fullscreen_detection_timer | 10 s
+자동 일시 중지 확인 간격 | check_auto_pause_timer | 0.5 s
+배경화면 재연결 기본 지연 시간 |  | 0.2 s
+바탕 화면이 준비되지 않았을 때 재연결 대기 시간 |  | 2 s
+배경화면 재연결 실패 후 재시도 간격 |  | 2 s
+배경화면 재연결 실패 후 최대 재시도 횟수 |  | 재시도 2회, 최초 시도를 포함해 총 3회
+VLC 중지 시 깨우기 간격 |  | 0.05 s
+시작 시 바탕 화면 준비 상태 확인 간격 |  | 1 s
+알림 표시 시간 |  | 3 s
+로그 수준 |  | INFO
+로그 파일당 최대 크기 |  | 2 MiB
+이전 로그 보관 개수 |  | 3개
+따라가는 모니터의 정기 동기화 간격 | SYNC_INTERVAL_MS | 60 s
+따라가는 모니터의 동기화 오차 허용값 | SYNC_TOLERANCE_MS | 0.5 s
+시작 시 모니터 따라가기 관계 복원 전 대기 시간 | RESTORE_DELAY_MS | 3 s, 저장된 따라가기 관계가 있을 때만 대기
+첫 미리보기 표시 전 대기 시간 | preview_timer | 0.5 s
+항목을 벗어난 뒤 미리보기 모드를 종료하기까지의 시간 | reset_timer | 1 s
+미리보기 이미지 최대 너비 |  | 300 px, 좌우 각각 4 px의 안쪽 여백 제외, 화면 공간이 부족하면 축소
+미리보기 배경색 |  | #202020
+미리보기 안쪽 여백 |  | 4 px
+미리보기와 메뉴 사이 간격 |  | 8 px, 왼쪽에 우선 표시하고 공간이 부족하면 오른쪽에 표시
+로딩 이미지를 불러오지 못했을 때 대체 이미지 |  | 300 x 169 px, 짙은 회색 (`Qt.GlobalColor.darkGray`)
+썸네일 너비 |  | 300 px, 높이는 미디어의 종횡비에 맞춰 조정
+썸네일 형식 및 품질 |  | JPEG 85
+썸네일용 VLC 옵션 |  | 하드웨어 디코딩 (`--avcodec-hw=none`), 오디오, 동영상 제목 및 OSD 비활성화, `--quiet` 활성화
+동영상 정보 분석 제한 시간 |  | 5 s
+동영상 프레임 캡처 제한 시간 |  | 10 s
+분석 및 캡처 대기 중 확인 간격 |  | 0.05 s
+동영상 썸네일에 사용할 프레임 |  | 처음 디코딩된 프레임
+지원하는 동영상 확장자 | SUPPORTED_VIDEO_EXTENSIONS | .mp4, .mkv, .webm, .mov, .avi
+지원하는 이미지 확장자 | SUPPORTED_IMAGE_EXTENSIONS | .jpg, .jpeg, .png, .bmp, .webp
+가져오기 시 추가로 확보할 여유 공간 | IMPORT_RESERVE_BYTES | 200 MiB
+가져오기 읽기 블록 크기 |  | SHA-256 계산과 파일 복사 모두 1 MiB
+최대화 감지 경계 허용값 | FULLSCREEN_MARGIN | 4 px, 모니터 작업 영역을 기준으로 판단
+최대화 감지에서 제외할 창 제목 | WINDOW_TITLE_BLACKLIST | `""`, `default ime`, `msctfime ui`, `windows 輸入體驗`, `搜尋`, `search`, `開始`, `start`, `工作檢視`, `task view`
+최대화 감지에서 제외할 창 클래스 | SHELL_CLASSES | `Progman`, `WorkerW`, `Shell_TrayWnd`, `Shell_SecondaryTrayWnd`
+바탕 화면 연결 메시지당 제한 시간 |  | 1 s
+Windows 시작 시 자동 실행 |  | 기존 작업이 없으면 false, 실제 상태는 Windows 예약 작업의 존재 여부에 따라 결정, 활성화하면 로그온 시 실행
+
 # VLC
 
 `bb-video-wallpaper-setup.exe`에는 BB 동영상 배경화면의 동영상 재생에 필요한 구성 요소만 남긴 **VLC 3.0.24** 축소 버전이 포함되어 있습니다.  

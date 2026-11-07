@@ -98,6 +98,74 @@ Folder/
  └─ libvlc.dll
 ```
 
+## Default Values
+
+### config.json
+
+Name | Item | Default
+--- | --- | ---
+Language | "language" | If the field is missing: installer language > system language > Traditional Chinese; if present but invalid: Traditional Chinese
+Automatically pause when a window is maximized | "autoPauseIfFullscreen" | true
+Automatically pause when the screen is off | "autoPauseIfScreenOff" | true
+Automatically pause when on battery | "autoPauseIfOnBattery" | false
+Font size | "fontSize" | 11 pt, 6-48
+Number of recent entries to display | "recentDisplayCount" | 6 entries, 0-20
+Recently used media | "recentVideo" | [], 0-20 entries
+Wallpaper for each monitor | "screenWallpapers" | {}
+Monitor follow relationships | "screenFollows" | {}
+
+Language codes must exactly match `zh-TW`, `zh-CN`, `ja-JP`, `ko-KR`, or `en-US`; for example, the system language `en-GB` is not automatically mapped to `en-US`.
+
+### Internal constants
+
+Name | Item | Default
+--- | --- | ---
+Media folder | MEDIA_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\video\`
+Single-file import folder | SINGLE_IMPORT_DIR | `_imports/` inside the media folder
+Thumbnail folder | THUMBNAIL_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\thumbnails\`
+Log file |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\log\log.log`
+VLC wallpaper playback options |  | Audio disabled, video title hidden, repeat option `--input-repeat=65535`
+Wallpaper scaling mode |  | Images and videos both fill the screen with a centered crop while preserving the aspect ratio
+Wallpaper selection order on startup |  | Saved wallpaper for the monitor > first recent entry > first media list entry; the file must exist for either of the first two choices
+Delay before detecting maximized windows on startup | fullscreen_detection_timer | 10 s
+Automatic pause check interval | check_auto_pause_timer | 0.5 s
+Default wallpaper reattachment delay |  | 0.2 s
+Reattachment wait when the desktop is not ready |  | 2 s
+Retry interval after wallpaper reattachment fails |  | 2 s
+Wallpaper reattachment retry limit |  | 2 retries, 3 attempts in total including the initial attempt
+Wake interval when stopping VLC |  | 0.05 s
+Desktop readiness check interval on startup |  | 1 s
+Notification display duration |  | 3 s
+Log level |  | INFO
+Maximum size per log file |  | 2 MiB
+Number of rotated logs to keep |  | 3 files
+Periodic synchronization interval for following monitors | SYNC_INTERVAL_MS | 60 s
+Playback synchronization tolerance for following monitors | SYNC_TOLERANCE_MS | 0.5 s
+Delay before restoring monitor follow relationships on startup | RESTORE_DELAY_MS | 3 s, only when saved follow relationships exist
+Delay before showing the first preview | preview_timer | 0.5 s
+Delay before leaving preview mode after moving away | reset_timer | 1 s
+Maximum preview image width |  | 300 px, excluding 4 px of padding on each side; shrinks when screen space is insufficient
+Preview background color |  | #202020
+Preview padding |  | 4 px
+Gap between the preview and menu |  | 8 px, preferably on the left; moves to the right if there is not enough space
+Fallback when the loading image cannot be loaded |  | 300 x 169 px, dark gray (`Qt.GlobalColor.darkGray`)
+Thumbnail width |  | 300 px, height follows the media aspect ratio
+Thumbnail format and quality |  | JPEG 85
+VLC thumbnail options |  | Hardware decoding (`--avcodec-hw=none`), audio, video titles, and OSD disabled; `--quiet` enabled
+Video metadata parsing timeout |  | 5 s
+Video frame capture timeout |  | 10 s
+Polling interval while parsing or capturing |  | 0.05 s
+Frame used for video thumbnails |  | First decoded frame
+Supported video file extensions | SUPPORTED_VIDEO_EXTENSIONS | .mp4, .mkv, .webm, .mov, .avi
+Supported image file extensions | SUPPORTED_IMAGE_EXTENSIONS | .jpg, .jpeg, .png, .bmp, .webp
+Additional disk space reserved for imports | IMPORT_RESERVE_BYTES | 200 MiB
+Import read chunk size |  | 1 MiB for both SHA-256 calculation and file copying
+Maximized window detection edge tolerance | FULLSCREEN_MARGIN | 4 px, based on the monitor work area
+Window titles excluded from maximized window detection | WINDOW_TITLE_BLACKLIST | `""`, `default ime`, `msctfime ui`, `windows 輸入體驗`, `搜尋`, `search`, `開始`, `start`, `工作檢視`, `task view`
+Window classes excluded from maximized window detection | SHELL_CLASSES | `Progman`, `WorkerW`, `Shell_TrayWnd`, `Shell_SecondaryTrayWnd`
+Timeout per desktop attachment message |  | 1 s
+Launch on system startup |  | false when no existing task is present; the actual state depends on whether the Windows scheduled task exists; when enabled, it runs at logon
+
 # VLC
 
 `bb-video-wallpaper-setup.exe` includes a reduced version of **VLC 3.0.24**, containing only the components required by BB Video Wallpaper for video playback.  
