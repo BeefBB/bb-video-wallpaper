@@ -244,7 +244,7 @@ class ImportMenuTests(QtTestCase):
 
     def test_language_restart_ignores_queued_changes_during_shutdown(self):
         """
-        清理期間處理延遲選單訊號時, 不覆寫已保存的語言或重複要求退出
+        清理期間處理延遲選單訊號時, 不覆寫語言或轉為還原預設
         """
 
         store = self.namespace["config_store"]
@@ -255,6 +255,10 @@ class ImportMenuTests(QtTestCase):
             lambda checked=False: self.tray.set_language("ko-KR"),
             Qt.ConnectionType.QueuedConnection
         )
+        action.triggered.connect(
+            lambda checked=False: self.tray.reset_defaults(),
+            Qt.ConnectionType.QueuedConnection
+        )
         action.trigger()
         self.wallpaper.shutdown.side_effect = self.app.processEvents
 
@@ -263,6 +267,35 @@ class ImportMenuTests(QtTestCase):
         store.save.assert_called_once_with({"language": "en-US", "futureOption": 9})
         self.assertEqual(self.tray.current_language_code, "en-US")
         self.assertTrue(self.tray.restart_requested)
+        self.assertFalse(self.tray.reset_requested)
+        self.tray.app.quit.assert_called_once_with()
+        self.wallpaper.shutdown.assert_called_once_with()
+
+
+    def test_reset_request_defers_writes_and_ignores_queued_changes(self):
+        """
+        還原要求只先清理, 延遲語言與還原訊號不寫入設定或重複退出
+        """
+
+        action = QAction(self.menu)
+        action.triggered.connect(
+            lambda checked=False: self.tray.set_language("ko-KR"),
+            Qt.ConnectionType.QueuedConnection
+        )
+        action.triggered.connect(
+            lambda checked=False: self.tray.reset_defaults(),
+            Qt.ConnectionType.QueuedConnection
+        )
+        action.trigger()
+        self.wallpaper.shutdown.side_effect = self.app.processEvents
+
+        self.tray.reset_defaults()
+
+        self.assertTrue(self.tray.restart_requested)
+        self.assertTrue(self.tray.reset_requested)
+        self.assertEqual(self.tray.current_language_code, "zh-TW")
+        self.namespace["config_store"].save.assert_not_called()
+        self.namespace["delete_task"].assert_not_called()
         self.tray.app.quit.assert_called_once_with()
         self.wallpaper.shutdown.assert_called_once_with()
 
@@ -722,33 +755,44 @@ class StartupTests(unittest.TestCase):
 
     def test_restart_cleans_up_before_launch_and_preserves_startup_mode(self):
         """
-        重啟前完成清理並釋放單例鎖, 原始碼與打包模式保留啟動參數且處理啟動失敗
+        重啟前完成清理與還原並釋放單例鎖, 保留啟動參數且處理保存與啟動失敗
         """
 
-        for frozen, restart, launch_fails in (
-            (False, False, False), (False, True, False),
-            (True, True, False), (True, True, True),
+        for frozen, operation, failure in (
+            (False, "exit", None), (False, "restart", None),
+            (True, "restart", None), (True, "restart", "launch"),
+            (False, "reset", None), (True, "reset", None),
+            (False, "reset", "save"),
         ):
-            with self.subTest(frozen=frozen, restart=restart, launch_fails=launch_fails):
+            with self.subTest(frozen=frozen, operation=operation, failure=failure):
+                restart = operation != "exit"
+                reset = operation == "reset"
                 module = load_app_module()
                 application = mock.Mock()
                 application.exec.return_value = 0
-                tray = mock.Mock(restart_requested=restart)
+                tray = mock.Mock(restart_requested=restart, reset_requested=reset)
                 mutex = mock.Mock()
                 log = mock.Mock()
-                launcher = mock.Mock(side_effect=OSError("無法啟動") if launch_fails else None)
+                launcher = mock.Mock(side_effect=OSError("無法啟動") if failure == "launch" else None)
+                delete_task = mock.Mock()
+                store = mock.Mock()
+                store.load.return_value = {
+                    "fontSize": 11, "language": "ja-JP", "recentVideo": ["old.mp4"],
+                    "screenWallpapers": {"screen-a": "old.mp4"},
+                    "screenFollows": {"screen-b": "screen-a"}, "futureOption": 9,
+                }
+                store.save.return_value = failure != "save"
                 lifecycle = mock.Mock()
-                for name, operation in (
+                for name, callback in (
                     ("event_loop", application.exec), ("cleanup", tray.shutdown),
+                    ("save_config", store.save), ("delete_task", delete_task),
                     ("close_log", log.shutdown), ("close_mutex", mutex.Close),
                     ("launch", launcher),
                 ):
-                    lifecycle.attach_mock(operation, name)
+                    lifecycle.attach_mock(callback, name)
 
                 executable = str(ROOT / ("BB Video Wallpaper.exe" if frozen else ".venv/Scripts/python.exe"))
                 entry = Path(executable) if frozen else ROOT / "bb-video-wallpaper.py"
-                store = mock.Mock()
-                store.load.return_value = {"fontSize": 11}
                 module.__dict__.update({
                     "sys": SimpleNamespace(executable=executable, argv=[str(entry), "--task"], frozen=frozen),
                     "FILE": entry, "ROOT_DIR": ROOT,
@@ -762,24 +806,31 @@ class StartupTests(unittest.TestCase):
                     "time": mock.Mock(), "logging": log, "logger": mock.Mock(),
                     "QApplication": mock.Mock(return_value=application), "QFont": mock.Mock(),
                     "Tray": mock.Mock(return_value=tray),
+                    "delete_task": delete_task,
                     "subprocess": SimpleNamespace(Popen=launcher, DETACHED_PROCESS=module.subprocess.DETACHED_PROCESS),
                 })
 
-                self.assertEqual(module.main(), 1 if launch_fails else 0)
+                self.assertEqual(module.main(), int(failure is not None))
 
                 expected = [mock.call.event_loop()]
                 if restart:
-                    command = [executable] + ([] if frozen else [str(entry)]) + ["--task"]
-                    expected.extend([
-                        mock.call.cleanup(), mock.call.close_log(), mock.call.close_mutex(),
-                        mock.call.launch(
-                            command, cwd=ROOT,
-                            env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"},
-                            creationflags=module.subprocess.DETACHED_PROCESS
-                        ),
-                    ])
+                    expected.append(mock.call.cleanup())
+                    if reset:
+                        expected.append(mock.call.save_config({"language": "ja-JP"}))
+                        if failure != "save":
+                            expected.append(mock.call.delete_task())
+                    if failure != "save":
+                        command = [executable] + ([] if frozen else [str(entry)]) + ["--task"]
+                        expected.extend([
+                            mock.call.close_log(), mock.call.close_mutex(),
+                            mock.call.launch(
+                                command, cwd=ROOT,
+                                env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"},
+                                creationflags=module.subprocess.DETACHED_PROCESS
+                            ),
+                        ])
                 self.assertEqual(lifecycle.mock_calls, expected)
-                self.assertEqual(module.logger.exception.call_count, int(launch_fails))
+                self.assertEqual(module.logger.exception.call_count, int(failure == "launch"))
 
 
     def test_import_does_not_initialize_runtime(self):

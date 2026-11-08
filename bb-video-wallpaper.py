@@ -1124,6 +1124,7 @@ class Tray:
         self.screen_menus: dict[str, MediaPreviewMenu] = {}
         self.is_exiting = False
         self.restart_requested = False
+        self.reset_requested = False
 
         # 系統匣圖示與選單
         self.tray = QSystemTrayIcon()
@@ -1213,6 +1214,10 @@ class Tray:
 
         menu.addSeparator()
 
+        self.advanced_menu = menu.addMenu(tr("advanced"))
+
+        menu.addSeparator()
+
         menu.addAction(exit_action)
         # ################
 
@@ -1239,6 +1244,23 @@ class Tray:
         self.options_menu.addSeparator()
 
         self.options_menu.addAction(startup_action)
+        # ################
+
+
+        # 進階子選單
+        # ################
+        open_config_action = QAction(tr("open_config_file"), self.advanced_menu)
+        open_config_action.triggered.connect(self.open_config_file)
+        self.advanced_menu.addAction(open_config_action)
+
+        open_log_action = QAction(tr("open_log_folder"), self.advanced_menu)
+        open_log_action.triggered.connect(self.open_log_folder)
+        self.advanced_menu.addAction(open_log_action)
+
+        reset_menu = self.advanced_menu.addMenu(tr("reset_defaults"))
+        reset_action = QAction(tr("confirm_reset_defaults"), reset_menu)
+        reset_action.triggered.connect(self.reset_defaults)
+        reset_menu.addAction(reset_action)
         # ################
 
 
@@ -1820,6 +1842,28 @@ class Tray:
         os.startfile(str(MEDIA_DIR))
 
 
+    def open_config_file(self) -> None:
+
+        os.startfile(str(CONFIG_PATH))
+
+
+    def open_log_folder(self) -> None:
+
+        os.startfile(str(LOG_DIR))
+
+
+    def reset_defaults(self) -> None:
+        """
+        標記還原要求並執行重啟流程
+        """
+
+        if self.is_exiting:
+            return
+
+        self.reset_requested = True
+        self.restart()
+
+
     def set_auto_pause_option(self, config_key: str, attribute: str, checked: bool) -> None:
 
         config = config_store.load()
@@ -1954,8 +1998,22 @@ def main() -> int:
     # Qt 主迴圈
     exit_code = app.exec()
 
+
     if tray.restart_requested:
+
         tray.shutdown()
+
+        if tray.reset_requested:
+            # 背景工作結束後才清除設定, 避免舊回呼寫回
+            config = {"language": config_store.load()["language"]}
+            if not config_store.save(config):
+                return 1
+
+            delete_task()
+
+            logger.info("reset_defaults")
+
+
         logging.shutdown()
 
         # 新程序啟動前先釋放單例鎖
