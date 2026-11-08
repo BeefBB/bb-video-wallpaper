@@ -6,6 +6,7 @@ from ctypes import wintypes
 from pathlib import Path
 import threading
 import time
+import subprocess
 import logging
 from logging.handlers import RotatingFileHandler
 from typing import TYPE_CHECKING, cast
@@ -1122,6 +1123,7 @@ class Tray:
         self.wallpapers: dict[str, Wallpaper] = {}
         self.screen_menus: dict[str, MediaPreviewMenu] = {}
         self.is_exiting = False
+        self.restart_requested = False
 
         # 系統匣圖示與選單
         self.tray = QSystemTrayIcon()
@@ -1646,13 +1648,19 @@ class Tray:
 
     def set_language(self, language_code: str) -> None:
 
-        if language_code == self.current_language_code:
+        if self.is_exiting or language_code == self.current_language_code:
+            return
+
+        config = config_store.load()
+        config["language"] = language_code
+
+        if not config_store.save(config):
             return
 
         self.current_language_code = language_code
-        config_store.load_language(language_code)
 
         logger.info("set_language - %s", language_code)
+        self.restart()
 
 
     def play_from_menu(self, path: Path, screen_id: str | None = None) -> None:
@@ -1869,6 +1877,18 @@ class Tray:
                 logger.exception("退出時釋放桌布失敗 - %s", screen_id)
 
 
+    def restart(self) -> None:
+        """
+        標記重啟要求並執行退出流程
+        """
+
+        if self.is_exiting:
+            return
+
+        self.restart_requested = True
+        self.exit()
+
+
     def exit(self) -> None:
 
         self.shutdown()
@@ -1932,7 +1952,33 @@ def main() -> int:
 
 
     # Qt 主迴圈
-    return app.exec()
+    exit_code = app.exec()
+
+    if tray.restart_requested:
+        tray.shutdown()
+        logging.shutdown()
+
+        # 新程序啟動前先釋放單例鎖
+        mutex.Close()  # type: ignore
+
+        command = [sys.executable]
+        if not getattr(sys, "frozen", False):
+            command.append(str(FILE))
+        command.extend(sys.argv[1:])
+
+        try:
+            subprocess.Popen(
+                command,
+                cwd=ROOT_DIR,
+                env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"},
+                creationflags=subprocess.DETACHED_PROCESS
+            )
+
+        except OSError:
+            logger.exception("重新啟動程式失敗")
+            return 1
+
+    return exit_code
 
 
 if __name__ == "__main__":

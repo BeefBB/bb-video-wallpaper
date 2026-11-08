@@ -296,7 +296,7 @@ class ConfigStore:
         return self.validate(config)
 
 
-    def save(self, config) -> None:
+    def save(self, config) -> bool:
 
         temp_path = self.config_path.with_suffix(".tmp")
 
@@ -312,6 +312,7 @@ class ConfigStore:
                 os.fsync(f.fileno())
 
             os.replace(temp_path, self.config_path)
+            return True
 
         except Exception:
             logger.exception("儲存 config 時發生錯誤")
@@ -322,6 +323,8 @@ class ConfigStore:
 
             except Exception:
                 pass
+
+            return False
 
 
     def load_language(self, language_code: str = "") -> dict:

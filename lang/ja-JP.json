@@ -1,6 +1,6 @@
 {
   "app_name": "BB 動画壁紙",
-  "language": "言語 (再起動が必要)",
+  "language": "言語 (自動で再起動します)",
   "play": "再生",
   "all_play": "すべて再生",
   "pause": "一時停止",

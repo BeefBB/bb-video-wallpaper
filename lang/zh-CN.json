@@ -1,6 +1,6 @@
 {
   "app_name": "BB 视频壁纸",
-  "language": "语言 (需要重启)",
+  "language": "语言 (将自动重启)",
   "play": "播放",
   "all_play": "全部播放",
   "pause": "暂停",

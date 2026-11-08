@@ -1,11 +1,12 @@
 """
-測試匯入與預覽的非同步競態, 以及主程式匯入邊界
+測試匯入與預覽的非同步競態, 重啟與主程式匯入邊界
 使用真正的 Qt 選單, 訊號佇列與工作執行緒, 不顯示系統匣或啟動桌布
 """
 
 from pathlib import Path
 import os
 import sys
+from types import SimpleNamespace
 import tempfile
 import threading
 import time
@@ -220,6 +221,50 @@ class ImportMenuTests(QtTestCase):
         self.wallpaper.shutdown.assert_called_once_with()
         other.shutdown.assert_called_once_with()
         self.tray.thumbnail_thread.stop.assert_called_once_with()
+
+
+    def test_language_save_failure_keeps_tray_running(self):
+        """
+        語言保存失敗時維持目前語言與背景工作, 不要求重新啟動
+        """
+
+        store = self.namespace["config_store"]
+        store.load.return_value = {"language": "zh-TW", "futureOption": 9}
+        store.save.return_value = False
+
+        self.tray.set_language("en-US")
+
+        store.save.assert_called_once_with({"language": "en-US", "futureOption": 9})
+        self.assertEqual(self.tray.current_language_code, "zh-TW")
+        self.assertFalse(self.tray.restart_requested)
+        self.assertFalse(self.tray.is_exiting)
+        self.tray.app.quit.assert_not_called()
+        self.tray.thumbnail_thread.stop.assert_not_called()
+
+
+    def test_language_restart_ignores_queued_changes_during_shutdown(self):
+        """
+        清理期間處理延遲選單訊號時, 不覆寫已保存的語言或重複要求退出
+        """
+
+        store = self.namespace["config_store"]
+        store.load.return_value = {"language": "zh-TW", "futureOption": 9}
+        store.save.return_value = True
+        action = QAction(self.menu)
+        action.triggered.connect(
+            lambda checked=False: self.tray.set_language("ko-KR"),
+            Qt.ConnectionType.QueuedConnection
+        )
+        action.trigger()
+        self.wallpaper.shutdown.side_effect = self.app.processEvents
+
+        self.tray.set_language("en-US")
+
+        store.save.assert_called_once_with({"language": "en-US", "futureOption": 9})
+        self.assertEqual(self.tray.current_language_code, "en-US")
+        self.assertTrue(self.tray.restart_requested)
+        self.tray.app.quit.assert_called_once_with()
+        self.wallpaper.shutdown.assert_called_once_with()
 
 
     def test_cancel_ignores_late_progress_and_allows_retry_on_main_thread(self):
@@ -674,6 +719,68 @@ class MediaPreviewTests(QtTestCase):
 
 
 class StartupTests(unittest.TestCase):
+
+    def test_restart_cleans_up_before_launch_and_preserves_startup_mode(self):
+        """
+        重啟前完成清理並釋放單例鎖, 原始碼與打包模式保留啟動參數且處理啟動失敗
+        """
+
+        for frozen, restart, launch_fails in (
+            (False, False, False), (False, True, False),
+            (True, True, False), (True, True, True),
+        ):
+            with self.subTest(frozen=frozen, restart=restart, launch_fails=launch_fails):
+                module = load_app_module()
+                application = mock.Mock()
+                application.exec.return_value = 0
+                tray = mock.Mock(restart_requested=restart)
+                mutex = mock.Mock()
+                log = mock.Mock()
+                launcher = mock.Mock(side_effect=OSError("無法啟動") if launch_fails else None)
+                lifecycle = mock.Mock()
+                for name, operation in (
+                    ("event_loop", application.exec), ("cleanup", tray.shutdown),
+                    ("close_log", log.shutdown), ("close_mutex", mutex.Close),
+                    ("launch", launcher),
+                ):
+                    lifecycle.attach_mock(operation, name)
+
+                executable = str(ROOT / ("BB Video Wallpaper.exe" if frozen else ".venv/Scripts/python.exe"))
+                entry = Path(executable) if frozen else ROOT / "bb-video-wallpaper.py"
+                store = mock.Mock()
+                store.load.return_value = {"fontSize": 11}
+                module.__dict__.update({
+                    "sys": SimpleNamespace(executable=executable, argv=[str(entry), "--task"], frozen=frozen),
+                    "FILE": entry, "ROOT_DIR": ROOT,
+                    "APPDATA_DIR": mock.Mock(), "MEDIA_DIR": mock.Mock(),
+                    "CONFIG_PATH": ROOT / "unused-config.json",
+                    "initialize_paths": mock.Mock(), "initialize_logging": mock.Mock(),
+                    "initialize_vlc": mock.Mock(return_value=True),
+                    "is_already_running": mock.Mock(return_value=(False, mutex)),
+                    "ConfigStore": mock.Mock(return_value=store),
+                    "check_desktop_ready": mock.Mock(return_value=True),
+                    "time": mock.Mock(), "logging": log, "logger": mock.Mock(),
+                    "QApplication": mock.Mock(return_value=application), "QFont": mock.Mock(),
+                    "Tray": mock.Mock(return_value=tray),
+                    "subprocess": SimpleNamespace(Popen=launcher, DETACHED_PROCESS=module.subprocess.DETACHED_PROCESS),
+                })
+
+                self.assertEqual(module.main(), 1 if launch_fails else 0)
+
+                expected = [mock.call.event_loop()]
+                if restart:
+                    command = [executable] + ([] if frozen else [str(entry)]) + ["--task"]
+                    expected.extend([
+                        mock.call.cleanup(), mock.call.close_log(), mock.call.close_mutex(),
+                        mock.call.launch(
+                            command, cwd=ROOT,
+                            env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"},
+                            creationflags=module.subprocess.DETACHED_PROCESS
+                        ),
+                    ])
+                self.assertEqual(lifecycle.mock_calls, expected)
+                self.assertEqual(module.logger.exception.call_count, int(launch_fails))
+
 
     def test_import_does_not_initialize_runtime(self):
         """

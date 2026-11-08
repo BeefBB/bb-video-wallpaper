@@ -152,12 +152,12 @@ class ConfigTests(unittest.TestCase):
         寫入或替換失敗時保留原檔並清除暫存檔
         """
 
-        self.store.save({"language": "zh-TW"})
+        self.assertTrue(self.store.save({"language": "zh-TW"}))
         original = self.config_path.read_bytes()
         for target in ("builtins.open", "config.os.replace"):
             with self.subTest(target=target):
                 with mock.patch(target, side_effect=PermissionError):
-                    self.store.save({"language": "ja-JP"})
+                    self.assertFalse(self.store.save({"language": "ja-JP"}))
                 self.assertEqual(self.config_path.read_bytes(), original)
                 self.assertFalse(self.config_path.with_suffix(".tmp").exists())
 
