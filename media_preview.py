@@ -194,7 +194,7 @@ class MediaPreviewMenu(QMenu):
 
         size = (self.target_screen or screen).geometry().size().scaled(
             min(300, max(1, available.width() - 8)),
-            max(1, available.height() - 8),
+            min(300, max(1, available.height() - 8)),
             Qt.AspectRatioMode.KeepAspectRatio
         )
         size = QSize(max(1, size.width()), max(1, size.height()))
