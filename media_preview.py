@@ -6,8 +6,8 @@
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QLabel, QMenu, QWidget
-from PySide6.QtCore import Qt, QTimer, Slot
-from PySide6.QtGui import QAction, QCursor, QImage, QPixmap
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Slot
+from PySide6.QtGui import QAction, QCursor, QImage, QPainter, QPixmap, QScreen
 
 from thumbnails import ThumbnailThread
 
@@ -30,6 +30,7 @@ class MediaPreviewMenu(QMenu):
 
         super().__init__(title, parent)
         self.setMouseTracking(True)
+        self.target_screen: QScreen | None = None
 
 
         # 預覽視窗不搶焦點, 也不攔截滑鼠事件
@@ -187,18 +188,40 @@ class MediaPreviewMenu(QMenu):
             return
 
 
-        # 等比例縮小預覽圖片, 避免超出目前螢幕的可用範圍
+        # 比例依目標螢幕, 尺寸與位置限制依選單所在螢幕
         screen = QApplication.screenAt(cursor) or self.screen()
         available = screen.availableGeometry()
 
-        pixmap = self.preview_pixmap.scaled(
+        size = (self.target_screen or screen).geometry().size().scaled(
             min(300, max(1, available.width() - 8)),
             max(1, available.height() - 8),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation
+            Qt.AspectRatioMode.KeepAspectRatio
         )
+        size = QSize(max(1, size.width()), max(1, size.height()))
+
+        # 直接繪製置中裁切範圍, 避免先放大整張極寬或極高的縮圖
+        scale = max(
+            size.width() / self.preview_pixmap.width(),
+            size.height() / self.preview_pixmap.height()
+        )
+        width = size.width() / scale
+        height = size.height() / scale
+        source = QRectF(
+            (self.preview_pixmap.width() - width) / 2,
+            (self.preview_pixmap.height() - height) / 2,
+            width,
+            height
+        )
+
+        pixmap = QPixmap(size)
+        pixmap.fill(Qt.GlobalColor.black)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.drawPixmap(QRectF(pixmap.rect()), self.preview_pixmap, source)
+        painter.end()
+
         self.preview.setPixmap(pixmap)
-        self.preview.adjustSize()
+        self.preview.setFixedSize(size + QSize(8, 8))
 
 
         # 優先放在選單左側, 空間不足時改放右側

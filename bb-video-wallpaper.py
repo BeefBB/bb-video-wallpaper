@@ -1603,6 +1603,9 @@ class Tray:
         新增最近紀錄與媒體清單項目
         """
 
+        wallpaper = self.wallpapers.get(screen_id) if screen_id is not None else None
+        menu.target_screen = wallpaper.target_screen if wallpaper is not None else None
+
         config = config_store.load()
         recent = config["recentVideo"][:config["recentDisplayCount"]]
 
