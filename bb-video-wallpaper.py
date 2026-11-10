@@ -1954,7 +1954,10 @@ def main() -> int:
 
     if already_running:
 
+        mutex.Close()  # type: ignore
+
         LANG = config_store.load_language()
+
         show_already_running_toast()
 
         return 0
