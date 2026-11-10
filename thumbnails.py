@@ -3,13 +3,13 @@
 匯入時不載入 VLC 或建立資料夾
 """
 
+from collections import deque
 from collections.abc import Callable
 import ctypes
 import hashlib
 import logging
 import os
 from pathlib import Path
-from queue import Queue
 import tempfile
 import threading
 import time
@@ -452,7 +452,7 @@ def ensure_thumbnail(
 
 class ThumbnailThread(QThread):
     """
-    依序處理縮圖要求, 同一路徑在排隊或處理中時不重複加入
+    依序處理縮圖要求, 預覽項目可插隊, 排隊或處理中的同一路徑不重複加入
     """
 
     thumbnail_ready = Signal(str, QImage)
@@ -465,38 +465,58 @@ class ThumbnailThread(QThread):
 
         self.media_dir = media_dir
         self.thumbnail_dir = thumbnail_dir
-        self.queue = Queue()
-        self.pending = set()
-        self.pending_lock = threading.Lock()
+        self.queue: deque[Path] = deque()
+        self.pending: set[Path] = set()
+        self.pending_lock = threading.Condition()
         self.stopping = False
 
 
-    def request(self, path: Path) -> None:
-
-        if self.stopping:
-            return
+    def request(self, path: Path, *, priority: bool = False) -> None:
 
         with self.pending_lock:
 
-            if path in self.pending:
+            if self.stopping:
                 return
 
-            self.pending.add(path)
+            if path in self.pending:
 
-        self.queue.put(path)
+                if not priority:
+                    return
 
-        if not self.isRunning():
-            self.start()
+                try:
+                    self.queue.remove(path)
+
+                except ValueError:
+                    # 已取出的工作正在處理, 不重複排入
+                    return
+
+            else:
+                self.pending.add(path)
+
+            if priority:
+                self.queue.appendleft(path)
+
+            else:
+                self.queue.append(path)
+
+            self.pending_lock.notify()
+
+            if not self.isRunning():
+                self.start()
 
 
     def run(self) -> None:
 
         while not self.isInterruptionRequested():
 
-            path = self.queue.get()
+            with self.pending_lock:
 
-            if path is None or self.isInterruptionRequested():
-                break
+                self.pending_lock.wait_for(lambda: bool(self.queue) or self.stopping)
+
+                if self.stopping or self.isInterruptionRequested():
+                    break
+
+                path = self.queue.popleft()
 
             image = QImage()
 
@@ -529,7 +549,10 @@ class ThumbnailThread(QThread):
 
     def stop(self) -> None:
 
-        self.stopping = True
-        self.requestInterruption()
-        self.queue.put(None)
+        with self.pending_lock:
+
+            self.stopping = True
+            self.requestInterruption()
+            self.pending_lock.notify_all()
+
         self.wait()

@@ -1,5 +1,5 @@
 """
-測試快取檔案保護, 特殊影片解碼與取消
+測試快取檔案保護, 排程時序, 特殊影片解碼與取消
 影片案例需要 Windows, VLC-lite 與 ffmpeg; 缺少時顯示跳過
 只在暫存資料夾操作, 不啟動桌布或修改使用者設定
 """
@@ -26,7 +26,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
-from thumbnails import create_video_thumbnail, ensure_thumbnail, get_video_thumbnail_sizes
+from app_loader import QtTestCase
+from thumbnails import ThumbnailThread, create_video_thumbnail, ensure_thumbnail, get_video_thumbnail_sizes
 
 
 VLC_DIR = ROOT / "VLC-lite"
@@ -279,6 +280,69 @@ class ThumbnailTests(unittest.TestCase):
                 get_video_thumbnail_sizes(media, cancelled)
 
         media.parse_stop.assert_called_once_with()
+
+
+
+class ThumbnailThreadTests(QtTestCase):
+    """
+    指向項目變更與背景工作交錯時的排程
+    """
+
+
+    def test_latest_preview_runs_next_without_duplicate_work(self) -> None:
+        """
+        首項處理中連續切換指向, 驗證已排隊項目可提前且同項目不重複處理
+        """
+
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        thumbnail_path = directory / "thumbnail.jpg"
+        image = QImage(32, 18, QImage.Format.Format_RGB32)
+        image.fill(Qt.GlobalColor.blue)
+        self.assertTrue(image.save(str(thumbnail_path)))
+        first, ordinary, queued, newest, last = (
+            directory / f"{name}.mp4" for name in ("first", "ordinary", "queued", "newest", "last")
+        )
+        started = threading.Event()
+        release = threading.Event()
+        completed = threading.Event()
+        processed: list[Path] = []
+
+        def blocked_thumbnail(path, cancelled, **kwargs):
+            processed.append(path)
+
+            if path == first:
+
+                started.set()
+
+                if not release.wait(5):
+                    raise TimeoutError("測試未放行縮圖工作")
+
+            return thumbnail_path
+
+        self.enterContext(mock.patch("thumbnails.ensure_thumbnail", side_effect=blocked_thumbnail))
+        worker = ThumbnailThread(directory, directory / "thumbnails")
+        self.addCleanup(worker.deleteLater)
+        self.addCleanup(worker.stop)
+        self.addCleanup(release.set)
+        worker.thumbnail_ready.connect(
+            lambda path, image: completed.set() if Path(path) == last else None,
+            Qt.ConnectionType.DirectConnection
+        )
+        worker.request(first)
+        self.assertTrue(started.wait(5), "首項縮圖工作未開始")
+        worker.request(ordinary)
+        worker.request(queued)
+        worker.request(last)
+        worker.request(first)
+        worker.request(first, priority=True)
+        worker.request(queued, priority=True)
+        worker.request(newest, priority=True)
+        worker.request(queued, priority=True)
+        worker.request(ordinary)
+        release.set()
+        self.assertTrue(completed.wait(5), "縮圖佇列未處理完成")
+        worker.stop()
+        self.assertEqual(processed, [first, queued, newest, ordinary, last])
 
 
 

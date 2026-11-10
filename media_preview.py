@@ -153,7 +153,7 @@ class MediaPreviewMenu(QMenu):
         self.preview_pixmap = self.loading_pixmap
         self.display_preview()
 
-        self.thumbnail_thread.request(Path(action.data()))
+        self.thumbnail_thread.request(Path(action.data()), priority=True)
 
 
     @Slot(str, QImage)
