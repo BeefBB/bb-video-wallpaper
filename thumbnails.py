@@ -3,6 +3,7 @@
 匯入時不載入 VLC 或建立資料夾
 """
 
+from collections.abc import Callable
 import ctypes
 import hashlib
 import logging
@@ -52,7 +53,7 @@ def fast_hash(path: Path) -> str:
     return digest.hexdigest()[:8]
 
 
-def get_video_thumbnail_sizes(media, cancelled) -> dict[int, tuple[int, int]]:
+def get_video_thumbnail_sizes(media, cancelled: Callable[[], bool]) -> dict[int, tuple[int, int]]:
     """
     依影像軌 ID 記錄縮圖大小, 使用可見尺寸, 像素比例與方向
     """
@@ -138,7 +139,7 @@ def get_video_thumbnail_sizes(media, cancelled) -> dict[int, tuple[int, int]]:
     return sizes
 
 
-def create_video_thumbnail(path: Path, cancelled) -> QImage:
+def create_video_thumbnail(path: Path, cancelled: Callable[[], bool]) -> QImage:
     """
     使用獨立的靜音 VLC 播放器, 將第一個解碼畫面複製到記憶體, 不建立視窗
     """
@@ -329,10 +330,10 @@ def create_video_thumbnail(path: Path, cancelled) -> QImage:
 
 def ensure_thumbnail(
     path: Path,
-    cancelled,
+    cancelled: Callable[[], bool],
     *,
     media_dir: Path,
-    thumbnail_dir: Path,
+    thumbnail_dir: Path
 ) -> Path:
     """
     驗證既有縮圖或產生寬 300px 的 JPEG; 成功後才取代檔案並清除舊縮圖

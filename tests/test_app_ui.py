@@ -207,7 +207,7 @@ class ImportMenuTests(QtTestCase):
         return self.destination
 
 
-    def test_exit_delegates_cleanup_and_quits_even_if_shutdown_fails(self):
+    def test_exit_delegates_cleanup_and_quits_even_if_shutdown_fails(self) -> None:
         """
         驗證單一桌布清理失敗仍會清理其他桌布並退出, 重複退出不重複清理
         """
@@ -223,7 +223,7 @@ class ImportMenuTests(QtTestCase):
         self.tray.thumbnail_thread.stop.assert_called_once_with()
 
 
-    def test_language_save_failure_keeps_tray_running(self):
+    def test_language_save_failure_keeps_tray_running(self) -> None:
         """
         語言保存失敗時維持目前語言與背景工作, 不要求重新啟動
         """
@@ -242,7 +242,7 @@ class ImportMenuTests(QtTestCase):
         self.tray.thumbnail_thread.stop.assert_not_called()
 
 
-    def test_language_restart_ignores_queued_changes_during_shutdown(self):
+    def test_language_restart_ignores_queued_changes_during_shutdown(self) -> None:
         """
         清理期間處理延遲選單訊號時, 不覆寫語言或轉為還原預設
         """
@@ -272,7 +272,7 @@ class ImportMenuTests(QtTestCase):
         self.wallpaper.shutdown.assert_called_once_with()
 
 
-    def test_reset_request_defers_writes_and_ignores_queued_changes(self):
+    def test_reset_request_defers_writes_and_ignores_queued_changes(self) -> None:
         """
         還原要求只先清理, 延遲語言與還原訊號不寫入設定或重複退出
         """
@@ -300,7 +300,7 @@ class ImportMenuTests(QtTestCase):
         self.wallpaper.shutdown.assert_called_once_with()
 
 
-    def test_cancel_ignores_late_progress_and_allows_retry_on_main_thread(self):
+    def test_cancel_ignores_late_progress_and_allows_retry_on_main_thread(self) -> None:
         """
         驗證背景進度由主執行緒更新, 取消後忽略延遲進度且可重新匯入
         """
@@ -352,7 +352,7 @@ class ImportMenuTests(QtTestCase):
         self.tray.play_from_menu.assert_called_once_with(self.destination, "screen-a")
 
 
-    def test_completed_import_waits_for_reattach_and_plays_only_once(self):
+    def test_completed_import_waits_for_reattach_and_plays_only_once(self) -> None:
         """
         驗證匯入結果等待重掛結束, 重複完成訊號也只套用一次
         """
@@ -380,7 +380,7 @@ class ImportMenuTests(QtTestCase):
         self.tray.refresh_media_menu.assert_called_once_with()
 
 
-    def test_quitting_discards_import_deferred_during_reattach(self):
+    def test_quitting_discards_import_deferred_during_reattach(self) -> None:
         """
         驗證退出時捨棄等待重掛的匯入結果, 不播放或請求縮圖
         """
@@ -404,7 +404,7 @@ class ImportMenuTests(QtTestCase):
         self.tray.tray.showMessage.assert_not_called()
 
 
-    def test_quitting_requests_cancellation_before_waiting(self):
+    def test_quitting_requests_cancellation_before_waiting(self) -> None:
         """
         驗證退出等待匯入前先要求取消, 取消完成後不播放或顯示錯誤
         """
@@ -438,7 +438,7 @@ class ImportMenuTests(QtTestCase):
         self.namespace["logger"].exception.assert_not_called()
 
 
-    def test_screen_creation_failure_keeps_existing_wallpaper_available(self):
+    def test_screen_creation_failure_keeps_existing_wallpaper_available(self) -> None:
         """
         驗證新增螢幕的桌布建立失敗時保留既有桌布並記錄例外
         """
@@ -451,7 +451,7 @@ class ImportMenuTests(QtTestCase):
         self.namespace["logger"].exception.assert_called_once()
 
 
-    def test_follow_startup_waits_for_screens_and_checks_offline_followers_on_arrival(self):
+    def test_follow_startup_waits_for_screens_and_checks_offline_followers_on_arrival(self) -> None:
         """
         驗證啟動時保留離線跟隨者, 稍後加入時才還原或清除跟隨
         """
@@ -495,7 +495,7 @@ class ImportMenuTests(QtTestCase):
                     tray.menu.deleteLater()
 
 
-    def test_follow_reconnection_rechecks_source_without_clearing_other_offline_settings(self):
+    def test_follow_reconnection_rechecks_source_without_clearing_other_offline_settings(self) -> None:
         """
         驗證依序拔除跟隨者與來源後, 跟隨者接回才清除自身失效設定
         """
@@ -521,7 +521,7 @@ class ImportMenuTests(QtTestCase):
         replacement.apply_playback_state.assert_not_called()
 
 
-    def test_single_screen_import_does_not_apply_to_screen_added_during_copy(self):
+    def test_single_screen_import_does_not_apply_to_screen_added_during_copy(self) -> None:
         """
         驗證單螢幕匯入只套用原目標, 不套用到複製期間新增的螢幕
         """
@@ -538,7 +538,7 @@ class ImportMenuTests(QtTestCase):
         self.tray.play_from_menu.assert_called_once_with(self.destination, "screen-a")
 
 
-    def test_multiple_screen_import_does_not_autoplay_after_one_screen_is_removed(self):
+    def test_multiple_screen_import_does_not_autoplay_after_one_screen_is_removed(self) -> None:
         """
         驗證多螢幕匯入期間移除螢幕後仍只更新紀錄, 不改為自動播放
         """
@@ -558,7 +558,7 @@ class ImportMenuTests(QtTestCase):
         self.namespace["config_store"].remember_recent.assert_called_once_with(self.destination)
 
 
-    def test_single_screen_import_does_not_apply_to_replacement_screen(self):
+    def test_single_screen_import_does_not_apply_to_replacement_screen(self) -> None:
         """
         驗證原匯入目標移除後不套用到替代螢幕, 仍保存最近紀錄
         """
@@ -578,7 +578,7 @@ class ImportMenuTests(QtTestCase):
         self.namespace["config_store"].remember_recent.assert_called_once_with(self.destination)
 
 
-    def test_removing_screen_waited_on_by_import_finishes_remaining_targets_once(self):
+    def test_removing_screen_waited_on_by_import_finishes_remaining_targets_once(self) -> None:
         """
         驗證移除正在重掛的匯入目標後, 其餘目標只套用一次匯入結果
         """
@@ -600,7 +600,7 @@ class ImportMenuTests(QtTestCase):
         self.tray.play_from_menu.assert_called_once_with(self.destination, "screen-b")
 
 
-    def test_old_import_callbacks_cannot_complete_a_new_import(self):
+    def test_old_import_callbacks_cannot_complete_a_new_import(self) -> None:
         """
         驗證舊匯入留下的重掛回呼不會完成或清除新匯入工作
         """
@@ -653,7 +653,7 @@ class MediaPreviewTests(QtTestCase):
         self.enterContext(mock.patch.object(media_preview, "ThumbnailThread", return_value=self.worker))
         self.menu = media_preview.MediaPreviewMenu(
             "Media", media_dir=self.media_dir, thumbnail_dir=self.thumbnail_dir,
-            loading_image_path=self.loading_path,
+            loading_image_path=self.loading_path
         )
         self.menu.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
         self.menu.preview.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
@@ -699,7 +699,7 @@ class MediaPreviewTests(QtTestCase):
         return image
 
 
-    def test_stale_null_and_inactive_results_do_not_replace_preview(self):
+    def test_stale_null_and_inactive_results_do_not_replace_preview(self) -> None:
         """
         過期, 空白與預覽結束後的結果不更新畫面
         """
@@ -719,7 +719,7 @@ class MediaPreviewTests(QtTestCase):
         self.assertTrue(self.menu.preview.isHidden())
 
 
-    def test_background_result_updates_preview_on_qt_main_thread(self):
+    def test_background_result_updates_preview_on_qt_main_thread(self) -> None:
         """
         背景縮圖結果由 Qt 主執行緒更新預覽
         """
@@ -753,7 +753,7 @@ class MediaPreviewTests(QtTestCase):
 
 class StartupTests(unittest.TestCase):
 
-    def test_restart_cleans_up_before_launch_and_preserves_startup_mode(self):
+    def test_restart_cleans_up_before_launch_and_preserves_startup_mode(self) -> None:
         """
         重啟前完成清理與還原並釋放單例鎖, 保留啟動參數且處理保存與啟動失敗
         """
@@ -833,7 +833,7 @@ class StartupTests(unittest.TestCase):
                 self.assertEqual(module.logger.exception.call_count, int(failure == "launch"))
 
 
-    def test_import_does_not_initialize_runtime(self):
+    def test_import_does_not_initialize_runtime(self) -> None:
         """
         驗證缺少使用者資料位置與 VLC 時仍可匯入主程式, 且不初始化執行環境
         """

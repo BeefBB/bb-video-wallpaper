@@ -36,7 +36,7 @@ class WindowsIntegrationTests(unittest.TestCase):
     使用模擬 API 驗證 Windows 整合行為
     """
 
-    def test_monitor_identity_uses_device_interface_and_survives_display_renumbering(self):
+    def test_monitor_identity_uses_device_interface_and_survives_display_renumbering(self) -> None:
         """
         驗證螢幕識別使用裝置介面, Windows 顯示編號改變後仍保持一致
         """
@@ -53,7 +53,7 @@ class WindowsIntegrationTests(unittest.TestCase):
             self.assertEqual(windows.get_monitor_id(200), r"device:\\?\display#monitor-a")
 
 
-    def test_monitor_identity_skips_inactive_or_unidentified_devices(self):
+    def test_monitor_identity_skips_inactive_or_unidentified_devices(self) -> None:
         """
         驗證查找螢幕識別時略過未啟用或沒有裝置識別的項目
         """
@@ -72,7 +72,7 @@ class WindowsIntegrationTests(unittest.TestCase):
             self.assertEqual(windows.get_monitor_id(100), "device:active")
 
 
-    def test_monitor_identity_falls_back_to_distinct_display_names(self):
+    def test_monitor_identity_falls_back_to_distinct_display_names(self) -> None:
         """
         驗證無法列舉裝置介面時以顯示裝置名稱區分螢幕
         """
@@ -87,7 +87,7 @@ class WindowsIntegrationTests(unittest.TestCase):
             self.assertEqual(windows.get_monitor_id(200), "display:display2")
 
 
-    def test_vlc_wakeup_only_posts_null_to_own_video_windows(self):
+    def test_vlc_wakeup_only_posts_null_to_own_video_windows(self) -> None:
         """
         驗證喚醒操作只向目前程序持有的 VLC 影片視窗傳送 WM_NULL
         """
@@ -122,7 +122,7 @@ class WindowsIntegrationTests(unittest.TestCase):
             ])
 
 
-    def test_taskbar_notification_preserves_handle_and_rejects_unregistered_message(self):
+    def test_taskbar_notification_preserves_handle_and_rejects_unregistered_message(self) -> None:
         """
         工作列通知保留完整 HWND, 註冊失敗時不放行編號為零的訊息
         """
@@ -145,7 +145,7 @@ class WindowsIntegrationTests(unittest.TestCase):
             change.assert_not_called()
 
 
-    def test_wallpaper_attaches_to_existing_fallback_and_legacy_containers(self):
+    def test_wallpaper_attaches_to_existing_fallback_and_legacy_containers(self) -> None:
         """
         驗證既有與備援容器的掛載目標, 舊版桌面另將桌布排在圖示後方
         """
@@ -178,7 +178,7 @@ class WindowsIntegrationTests(unittest.TestCase):
                     self.assertEqual(gui.SetWindowPos.call_args.args[:2], (100, behind))
 
 
-    def test_workerw_alpha_failure_cleans_up_and_preserves_original_error(self):
+    def test_workerw_alpha_failure_cleans_up_and_preserves_original_error(self) -> None:
         """
         驗證 WorkerW 透明度設定失敗時銷毀容器, 清理再失敗也保留原始例外
         """
@@ -202,7 +202,7 @@ class WindowsIntegrationTests(unittest.TestCase):
                 gui.DestroyWindow.assert_called_once_with(20)
 
 
-    def test_fullscreen_detection_skips_unavailable_wallpaper_monitor(self):
+    def test_fullscreen_detection_skips_unavailable_wallpaper_monitor(self) -> None:
         """
         驗證桌布視窗失效或沒有對應螢幕時, 不列舉其他視窗
         """
@@ -224,7 +224,7 @@ class WindowsIntegrationTests(unittest.TestCase):
                 gui.EnumWindows.assert_not_called()
 
 
-    def test_battery_detection_preserves_unknown_and_failed_status(self):
+    def test_battery_detection_preserves_unknown_and_failed_status(self) -> None:
         """
         驗證電池供電, 插電, 未知與查詢失敗時的供電判斷
         """
@@ -246,7 +246,7 @@ class WindowsIntegrationTests(unittest.TestCase):
                     self.assertEqual(windows.is_on_battery(), expected)
 
 
-    def test_display_notification_ignores_unrelated_messages_and_decodes_all_states(self):
+    def test_display_notification_ignores_unrelated_messages_and_decodes_all_states(self) -> None:
         """
         驗證略過無關訊息與電源設定, 正確解析螢幕關閉, 開啟與變暗狀態
         """
@@ -268,7 +268,7 @@ class WindowsIntegrationTests(unittest.TestCase):
                 self.assertEqual(windows.get_display_state(message), display_state)
 
 
-    def test_power_notifications_preserve_64_bit_handles(self):
+    def test_power_notifications_preserve_64_bit_handles(self) -> None:
         """
         驗證電源通知註冊與取消保留完整的 64 位元 handle, 並使用正確的電源 GUID
         """
@@ -318,7 +318,7 @@ class DesktopEventTests(QtTestCase):
         self.listener.deleteLater()
 
 
-    def test_hidden_top_level_window_receives_only_taskbar_notification(self):
+    def test_hidden_top_level_window_receives_only_taskbar_notification(self) -> None:
         """
         驗證監聽視窗維持隱藏且沒有父層, 只在收到工作列重建訊息時發出通知
         """
@@ -337,14 +337,14 @@ class DesktopEventTests(QtTestCase):
         self.assertFalse(windows.win32gui.IsWindowVisible(hwnd))
 
 
-    def test_listener_survives_destruction_of_separate_wallpaper_container(self):
+    def test_listener_survives_destruction_of_separate_wallpaper_container(self) -> None:
         """
         驗證獨立桌布容器銷毀後, 監聽視窗仍存在且可接收工作列通知
         """
 
         container = windows.win32gui.CreateWindowEx(
             0, "Static", "", windows.win32con.WS_OVERLAPPED,
-            0, 0, 320, 240, 0, 0, windows.win32api.GetModuleHandle(None), None,
+            0, 0, 320, 240, 0, 0, windows.win32api.GetModuleHandle(None), None
         )
         target = QWidget()
 
@@ -373,7 +373,7 @@ class WorkerWNativeTests(QtTestCase):
     使用隱藏父視窗驗證真正的 WorkerW 與桌布掛載
     """
 
-    def test_wallpaper_keeps_screen_geometry_with_offset_parent(self):
+    def test_wallpaper_keeps_screen_geometry_with_offset_parent(self) -> None:
         """
         驗證正負原點與非客戶區偏移下, 掛載及重複掛載保留桌布的位置與尺寸
         """
@@ -383,14 +383,14 @@ class WorkerWNativeTests(QtTestCase):
                 with self.subTest(origin=origin, legacy=legacy):
                     parent = win32gui.CreateWindowEx(
                         0, "Static", "", win32con.WS_OVERLAPPEDWINDOW,
-                        *origin, 640, 480, 0, 0, windows.win32api.GetModuleHandle(None), None,
+                        *origin, 640, 480, 0, 0, windows.win32api.GetModuleHandle(None), None
                     )
                     wallpaper = QWidget()
 
                     try:
                         icon_layer = win32gui.CreateWindowEx(
                             0, "Static", "", win32con.WS_CHILD,
-                            0, 0, 640, 480, parent, 0, windows.win32api.GetModuleHandle(None), None,
+                            0, 0, 640, 480, parent, 0, windows.win32api.GetModuleHandle(None), None
                         )
                         wallpaper.setWindowFlags(
                             Qt.WindowType.FramelessWindowHint |
@@ -425,7 +425,7 @@ class WorkerWNativeTests(QtTestCase):
                             win32gui.DestroyWindow(parent)
 
 
-    def test_created_workerw_is_opaque_and_class_can_be_reused(self):
+    def test_created_workerw_is_opaque_and_class_can_be_reused(self) -> None:
         """
         驗證連續建立的 WorkerW 保持隱藏且完全不透明, 並可重用視窗類別
         """
@@ -433,7 +433,7 @@ class WorkerWNativeTests(QtTestCase):
         # 父視窗保持隱藏, 不接觸 Explorer 或使用者桌面
         parent = windows.win32gui.CreateWindowEx(
             0, "Static", "", windows.win32con.WS_OVERLAPPED,
-            0, 0, 320, 240, 0, 0, windows.win32api.GetModuleHandle(None), None,
+            0, 0, 320, 240, 0, 0, windows.win32api.GetModuleHandle(None), None
         )
 
         try:
@@ -506,7 +506,7 @@ class ImageDisplayTests(QtTestCase):
 
 
 
-    def test_native_host_lifecycle_preserves_image_and_external_targets(self):
+    def test_native_host_lifecycle_preserves_image_and_external_targets(self) -> None:
         """
         驗證圖片原生容器的顯示, 重綁與釋放, 保留圖片與外部目標視窗
         """

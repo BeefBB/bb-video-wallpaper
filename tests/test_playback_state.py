@@ -394,7 +394,7 @@ class PlaybackStateTests(QtTestCase):
         for signal in (wallpaper.playback_started, wallpaper.reattach_finished):
             signal.connect(
                 lambda s=wallpaper.screen_id, w=wallpaper: self.tray.follow_controller.on_ready(s, w),
-                Qt.ConnectionType.QueuedConnection,
+                Qt.ConnectionType.QueuedConnection
             )
 
 
@@ -498,7 +498,7 @@ class PlaybackStateTests(QtTestCase):
         return callback
 
 
-    def test_sync_finishes_before_queued_middle_screen_removal(self):
+    def test_sync_finishes_before_queued_middle_screen_removal(self) -> None:
         """
         同步期間排入中間螢幕移除, 解除跟隨後不再被舊流程更換媒體
         """
@@ -532,7 +532,7 @@ class PlaybackStateTests(QtTestCase):
         self.assertNotIn(middle.screen_id, self.tray.wallpapers)
 
 
-    def test_queued_all_play_runs_after_all_stop_finishes(self):
+    def test_queued_all_play_runs_after_all_stop_finishes(self) -> None:
         """
         全部停止期間排入全部播放, 每台螢幕最後都採用較新的播放要求
         """
@@ -553,7 +553,7 @@ class PlaybackStateTests(QtTestCase):
         self.assertEqual([w.play_state for w in self.tray.wallpapers.values()], ["play", "play"])
 
 
-    def test_queued_image_selection_runs_after_all_stop_finishes(self):
+    def test_queued_image_selection_runs_after_all_stop_finishes(self) -> None:
         """
         全部停止期間替另一螢幕選片, 新圖片不被尚未完成的舊停止要求隱藏
         """
@@ -575,7 +575,7 @@ class PlaybackStateTests(QtTestCase):
         self.assertTrue(other.instance_image.visible)
 
 
-    def test_queued_selection_then_stop_does_not_replay_later(self):
+    def test_queued_selection_then_stop_does_not_replay_later(self) -> None:
         """
         停止期間排入選片與後續停止, 選片不額外延後至較新的停止之後播放
         """
@@ -600,7 +600,7 @@ class PlaybackStateTests(QtTestCase):
         self.assertFalse(self.image_output.visible)
 
 
-    def test_normal_stop_joins_native_wakeup_thread_even_on_failure(self):
+    def test_normal_stop_joins_native_wakeup_thread_even_on_failure(self) -> None:
         """
         停止或喚醒失敗時仍回收執行緒, 並保留停止的原始例外
         """
@@ -642,7 +642,7 @@ class PlaybackStateTests(QtTestCase):
                 self.assertEqual(self.namespace["logger"].exception.call_count, int(failure == "wake"))
 
 
-    def test_follow_join_waits_for_playing_before_seeking_and_preserves_manual_pause(self):
+    def test_follow_join_waits_for_playing_before_seeking_and_preserves_manual_pause(self) -> None:
         """
         驗證跟隨者等待 Playing 事件後才對齊來源進度, 並保留手動暫停
         """
@@ -663,7 +663,7 @@ class PlaybackStateTests(QtTestCase):
         self.assertEqual(follower.playback_state, PlaybackState("pause"))
 
 
-    def test_follow_recovery_preserves_pending_position_then_realigns_followers(self):
+    def test_follow_recovery_preserves_pending_position_then_realigns_followers(self) -> None:
         """
         驗證來源重掛期間保留待恢復進度, 就緒後才重新對齊跟隨者
         """
@@ -687,7 +687,7 @@ class PlaybackStateTests(QtTestCase):
         self.assertEqual(follower.instance_vlc_player.position, 7500)
 
 
-    def test_follow_new_local_media_ignores_queued_source_ready_events(self):
+    def test_follow_new_local_media_ignores_queued_source_ready_events(self) -> None:
         """
         驗證跟隨者改選本機圖片後解除跟隨, 並忽略已排入佇列的來源就緒訊號
         """
@@ -704,7 +704,7 @@ class PlaybackStateTests(QtTestCase):
         self.assertTrue(follower.instance_image.visible)
 
 
-    def test_follow_ignores_vlc_progress_until_ready_and_when_not_seekable(self):
+    def test_follow_ignores_vlc_progress_until_ready_and_when_not_seekable(self) -> None:
         """
         驗證載入中或等待恢復進度時不提供同步位置, 無法調整進度時拒絕定位
         """
@@ -723,7 +723,7 @@ class PlaybackStateTests(QtTestCase):
         self.assertEqual(self.wallpaper.pending_reattach_time, 6000)
 
 
-    def test_playing_callback_from_worker_pauses_on_qt_thread(self):
+    def test_playing_callback_from_worker_pauses_on_qt_thread(self) -> None:
         """
         驗證背景執行緒送出的 Playing 事件由 Qt 主執行緒套用先前的暫停要求
         """
@@ -751,7 +751,7 @@ class PlaybackStateTests(QtTestCase):
         ))
 
 
-    def test_latest_play_or_stop_wins_over_delayed_playing_event(self):
+    def test_latest_play_or_stop_wins_over_delayed_playing_event(self) -> None:
         """
         驗證較新的播放或停止命令優先於延遲的 Playing 事件
         """
@@ -789,7 +789,7 @@ class PlaybackStateTests(QtTestCase):
                     self.assertEqual(self.player.pause_calls, pause_calls)
 
 
-    def test_video_reattach_stops_old_output_before_destroying_and_rebinding(self):
+    def test_video_reattach_stops_old_output_before_destroying_and_rebinding(self) -> None:
         """
         重掛在背景停止舊輸出後才銷毀與綁定視窗
         """
@@ -821,7 +821,7 @@ class PlaybackStateTests(QtTestCase):
         ])
 
 
-    def test_reattach_stop_keeps_qt_events_running_and_ignores_pending_pause(self):
+    def test_reattach_stop_keeps_qt_events_running_and_ignores_pending_pause(self) -> None:
         """
         驗證重掛停止輸出時仍處理 Qt 事件與 VLC 喚醒, 並忽略延遲暫停
         """
@@ -856,7 +856,7 @@ class PlaybackStateTests(QtTestCase):
         self.assertFalse(any(timer.isActive() for timer in self.wallpaper.findChildren(QTimer)))
 
 
-    def test_delayed_seek_preserves_position_after_initial_or_repeated_reattach(self):
+    def test_delayed_seek_preserves_position_after_initial_or_repeated_reattach(self) -> None:
         """
         驗證重掛進度在 Playing 事件後補套, 重複重掛失敗與重試仍保留原位置與播放狀態
         """
@@ -893,7 +893,7 @@ class PlaybackStateTests(QtTestCase):
                 self.assertIsNone(self.wallpaper.pending_reattach_time)
 
 
-    def test_stop_or_media_selection_cancels_pending_seek_during_load_or_retry(self):
+    def test_stop_or_media_selection_cancels_pending_seek_during_load_or_retry(self) -> None:
         """
         驗證載入中或掛載失敗等待重試時, 停止或切換媒體會捨棄舊進度
         """
@@ -937,7 +937,7 @@ class PlaybackStateTests(QtTestCase):
                 self.assertEqual(self.wallpaper.play_state, "stop" if action == "stop" else "play")
 
 
-    def test_failed_reattach_retries_preserve_video_position(self):
+    def test_failed_reattach_retries_preserve_video_position(self) -> None:
         """
         驗證一次或兩次掛載失敗後重試仍保留進度與原播放狀態
         """
@@ -971,7 +971,7 @@ class PlaybackStateTests(QtTestCase):
                     self.assertEqual(self.wallpaper.reattach_retry_count, 0)
 
 
-    def test_failed_background_stop_retries_with_saved_position(self):
+    def test_failed_background_stop_retries_with_saved_position(self) -> None:
         """
         驗證背景停止清除進度後失敗時保留視窗, 重試仍恢復停止前的位置
         """
@@ -1009,7 +1009,7 @@ class PlaybackStateTests(QtTestCase):
         self.assertEqual(self.player.state, "playing")
 
 
-    def test_auto_pause_during_loading_applies_and_resumes(self):
+    def test_auto_pause_during_loading_applies_and_resumes(self) -> None:
         """
         驗證載入期間的螢幕關閉, 電池或全螢幕條件會暫停影片, 條件解除後恢復
         """
@@ -1045,7 +1045,7 @@ class PlaybackStateTests(QtTestCase):
                 self.assertEqual(self.wallpaper.playback_state, PlaybackState("play"))
 
 
-    def test_auto_paused_recovery_keeps_play_intent_and_resumes_when_condition_clears(self):
+    def test_auto_paused_recovery_keeps_play_intent_and_resumes_when_condition_clears(self) -> None:
         """
         驗證自動暫停的影片重掛後保留播放意圖與進度, 條件解除才恢復播放
         """
@@ -1068,7 +1068,7 @@ class PlaybackStateTests(QtTestCase):
         self.assertEqual(self.player.state, "playing")
 
 
-    def test_paused_video_switches_to_visible_image_and_ignores_old_event(self):
+    def test_paused_video_switches_to_visible_image_and_ignores_old_event(self) -> None:
         """
         驗證暫停影片切換成圖片後立即顯示, 舊 Playing 事件不再套用暫停
         """
@@ -1092,7 +1092,7 @@ class PlaybackStateTests(QtTestCase):
         self.assertEqual(self.player.pause_calls, pause_calls)
 
 
-    def test_failed_reattach_retries_twice_and_merges_new_events(self):
+    def test_failed_reattach_retries_twice_and_merges_new_events(self) -> None:
         """
         掛載失敗最多重試兩次, 等待期間的新通知不另排重掛
         """
@@ -1123,7 +1123,7 @@ class PlaybackStateTests(QtTestCase):
         self.assertFalse(timer.isActive())
 
 
-    def test_taskbar_notification_recovers_without_destroy_event(self):
+    def test_taskbar_notification_recovers_without_destroy_event(self) -> None:
         """
         驗證工作列重建通知可重設重試次數並排定一次重掛, 不需視窗銷毀事件
         """
@@ -1144,7 +1144,7 @@ class PlaybackStateTests(QtTestCase):
         self.assertFalse(timer.isActive())
 
 
-    def test_unready_desktop_preserves_output_until_ready(self):
+    def test_unready_desktop_preserves_output_until_ready(self) -> None:
         """
         驗證等待工作列與桌面視窗恢復時保留輸出與重試次數, 就緒後恢復暫停與進度
         """
@@ -1160,7 +1160,7 @@ class PlaybackStateTests(QtTestCase):
 
         with mock.patch.object(
             windows.win32gui, "FindWindow",
-            side_effect=lambda class_name, _: desktop_windows.get(class_name, 0),
+            side_effect=lambda class_name, _: desktop_windows.get(class_name, 0)
         ):
             for desktop_windows in ({}, {"Shell_TrayWnd": 1}, {"Progman": 2}):
                 self.wallpaper.schedule_reattach(0)
@@ -1186,7 +1186,7 @@ class PlaybackStateTests(QtTestCase):
         self.assertEqual((self.player.state, self.player.position), ("paused", 4321))
 
 
-    def test_unregister_failure_logs_native_error_and_releases_handle_once(self):
+    def test_unregister_failure_logs_native_error_and_releases_handle_once(self) -> None:
         """
         驗證原生取消通知回傳失敗時記錄錯誤, 清除 handle 且不重複取消
         """
@@ -1212,7 +1212,7 @@ class PlaybackStateTests(QtTestCase):
         self.namespace["logger"].exception.assert_not_called()
 
 
-    def test_image_reattach_rebinds_without_reload_or_vlc_seek(self):
+    def test_image_reattach_rebinds_without_reload_or_vlc_seek(self) -> None:
         """
         驗證圖片重掛只解除與重新綁定視窗, 保留顯示狀態且不重讀圖片或操作影片
         """
@@ -1254,7 +1254,7 @@ class PlaybackStateTests(QtTestCase):
                 self.namespace["logger"].exception.assert_not_called()
 
 
-    def test_initialization_failure_releases_partial_resources_and_preserves_error(self):
+    def test_initialization_failure_releases_partial_resources_and_preserves_error(self) -> None:
         """
         初始化各階段失敗時釋放已建立的資源, 清理失敗也不覆蓋原始錯誤
         """
@@ -1304,7 +1304,7 @@ class PlaybackStateTests(QtTestCase):
                     self.assertFalse(isValid(wallpaper))
 
 
-    def test_shutdown_is_idempotent_and_blocks_late_operations_without_quitting(self):
+    def test_shutdown_is_idempotent_and_blocks_late_operations_without_quitting(self) -> None:
         """
         桌面等待期間關閉只釋放一次, 已排入與後續抵達的事件不再操作輸出
         """
@@ -1357,7 +1357,7 @@ class PlaybackStateTests(QtTestCase):
         self.tray.app.quit.assert_not_called()
 
 
-    def test_shutdown_continues_after_listener_stop_image_and_player_release_failures(self):
+    def test_shutdown_continues_after_listener_stop_image_and_player_release_failures(self) -> None:
         """
         驗證監聽視窗, 停止輸出, 圖片或播放器釋放失敗時仍清理其餘資源
         """
@@ -1383,7 +1383,7 @@ class PlaybackStateTests(QtTestCase):
         self.namespace["logger"].exception.assert_called()
 
 
-    def test_screen_removal_during_reattach_defers_qobject_deletion_until_reattach_returns(self):
+    def test_screen_removal_during_reattach_defers_qobject_deletion_until_reattach_returns(self) -> None:
         """
         驗證重掛途中移除螢幕時先清理輸出, 等重掛返回後才刪除 Qt 桌布物件
         """

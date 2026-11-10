@@ -406,7 +406,7 @@ def _log_wallpaper_window(role: str, hwnd: int) -> None:
             win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE) & 0xFFFFFFFF,
             win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE) & 0xFFFFFFFF,
             win32gui.GetWindowRect(hwnd),
-            bool(win32gui.IsWindowVisible(hwnd)),
+            bool(win32gui.IsWindowVisible(hwnd))
         )
 
     except Exception:
@@ -524,7 +524,7 @@ def set_windows_as_wallpaper(hwnd: int) -> None:
         except Exception:
             logger.warning(
                 "無法確認桌布父視窗, 繼續既有流程 - hwnd=%#x expected=%#x mode=%s",
-                hwnd, workerw, mode, exc_info=True,
+                hwnd, workerw, mode, exc_info=True
             )
 
         else:
@@ -532,7 +532,7 @@ def set_windows_as_wallpaper(hwnd: int) -> None:
             if not workerw or actual_parent != workerw:
                 logger.warning(
                     "桌布掛載父視窗不符, 繼續既有流程 - hwnd=%#x expected=%#x actual=%#x mode=%s",
-                    hwnd, workerw, actual_parent, mode,
+                    hwnd, workerw, actual_parent, mode
                 )
 
             else:
@@ -544,7 +544,7 @@ def set_windows_as_wallpaper(hwnd: int) -> None:
 
         logger.exception(
             "桌布掛載失敗 - stage=%s mode=%s hwnd=%#x progman=%#x workerw=%#x",
-            stage, mode, hwnd, progman, workerw,
+            stage, mode, hwnd, progman, workerw
         )
         _log_wallpaper_window("wallpaper-failed", hwnd)
         raise

@@ -1338,7 +1338,7 @@ class Tray:
         for signal in (wallpaper.playback_started, wallpaper.reattach_finished):
             signal.connect(
                 lambda s=wallpaper.screen_id, w=wallpaper: self.follow_controller.on_ready(s, w),
-                Qt.ConnectionType.QueuedConnection,
+                Qt.ConnectionType.QueuedConnection
             )
         wallpaper.show()
 
@@ -1376,7 +1376,7 @@ class Tray:
                         wallpaper.deleteLater,
                         Qt.ConnectionType(
                             Qt.ConnectionType.QueuedConnection.value | Qt.ConnectionType.SingleShotConnection.value
-                        ),
+                        )
                     )
                 else:
                     wallpaper.deleteLater()
@@ -1428,7 +1428,7 @@ class Tray:
     def refresh_playback_actions(
         self,
         actions: Sequence[tuple[QAction, str]] | None = None,
-        screen_id: str | None = None,
+        screen_id: str | None = None
     ) -> None:
 
         wallpapers = self.get_wallpapers(screen_id)
@@ -1797,7 +1797,7 @@ class Tray:
                         lambda w=worker: self.finish_import(w),
                         Qt.ConnectionType(
                             Qt.ConnectionType.QueuedConnection.value | Qt.ConnectionType.SingleShotConnection.value
-                        ),
+                        )
                     )
                     return
 

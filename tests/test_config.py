@@ -45,7 +45,7 @@ class ConfigTests(unittest.TestCase):
         self.enterContext(mock.patch.object(locale, "getdefaultlocale", return_value=("en_US", "UTF-8")))
 
 
-    def test_initialization_write_failure_keeps_defaults_available(self):
+    def test_initialization_write_failure_keeps_defaults_available(self) -> None:
         """
         初始化寫入失敗後仍可讀取預設設定與語言
         """
@@ -76,7 +76,7 @@ class ConfigTests(unittest.TestCase):
                 self.assertEqual(self.store.load_language(), language)
 
 
-    def test_paths_reject_outside_locations_and_keep_missing_media(self):
+    def test_paths_reject_outside_locations_and_keep_missing_media(self) -> None:
         """
         歷史與各螢幕選擇共用路徑邊界, 不因檔案暫時遺失而移除紀錄
         """
@@ -93,7 +93,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(result["screenWallpapers"], {"0": valid[0], "1": valid[1]})
 
 
-    def test_invalid_selection_keeps_file(self):
+    def test_invalid_selection_keeps_file(self) -> None:
         """
         無效螢幕識別或越界路徑不改寫已保存的設定
         """
@@ -111,7 +111,7 @@ class ConfigTests(unittest.TestCase):
                 self.assertEqual(self.config_path.read_bytes(), original)
 
 
-    def test_loading_and_initialization_validate_config(self):
+    def test_loading_and_initialization_validate_config(self) -> None:
         """
         讀取不改寫原檔, 初始化只對物件設定寫回補齊與修復的欄位
         """
@@ -140,14 +140,14 @@ class ConfigTests(unittest.TestCase):
                 if write_back:
                     self.assertEqual(
                         json.loads(self.config_path.read_text(encoding="utf-8")),
-                        expected,
+                        expected
                     )
 
                 else:
                     self.assertEqual(self.config_path.read_bytes(), contents)
 
 
-    def test_save_failure_preserves_previous_file(self):
+    def test_save_failure_preserves_previous_file(self) -> None:
         """
         寫入或替換失敗時保留原檔並清除暫存檔
         """
@@ -162,7 +162,7 @@ class ConfigTests(unittest.TestCase):
                 self.assertFalse(self.config_path.with_suffix(".tmp").exists())
 
 
-    def test_punctuation_repairs_preserve_settings(self):
+    def test_punctuation_repairs_preserve_settings(self) -> None:
         """
         缺少逗號或多餘起始括號可修復, 讀取不寫回, 初始化才保存
         """
@@ -187,7 +187,7 @@ class ConfigTests(unittest.TestCase):
                 self.assertEqual(json.loads(self.config_path.read_text(encoding="utf-8")), config)
 
 
-    def test_validation_scores_repair_candidates(self):
+    def test_validation_scores_repair_candidates(self) -> None:
         """
         缺少欄位不計異常, 修復優先選擇驗證異常較少的候選
         """
@@ -205,7 +205,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config["fontSize"], 18)
 
 
-    def test_uncertain_repairs_keep_original_file(self):
+    def test_uncertain_repairs_keep_original_file(self) -> None:
         """
         同分歧義, 改變數值或超過兩次修改的內容不自動寫回
         """

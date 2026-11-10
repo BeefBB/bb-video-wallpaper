@@ -182,7 +182,7 @@ class ThumbnailTests(unittest.TestCase):
         )
 
 
-    def test_long_names_with_same_content_have_independent_caches(self):
+    def test_long_names_with_same_content_have_independent_caches(self) -> None:
         """
         驗證相同內容的長檔名使用獨立快取, 清理過期快取時保留無關檔案與目錄
         """
@@ -222,7 +222,7 @@ class ThumbnailTests(unittest.TestCase):
         self.assertTrue(directory.is_dir())
 
 
-    def test_write_failure_preserves_cache_and_removes_temp(self):
+    def test_write_failure_preserves_cache_and_removes_temp(self) -> None:
         """
         寫入暫存檔後失敗時保留舊快取並關閉及清除暫存檔
         """
@@ -246,7 +246,7 @@ class ThumbnailTests(unittest.TestCase):
         self.assertEqual(list(self.thumbnail_dir.iterdir()), [previous])
 
 
-    def test_replace_failure_preserves_cache_and_removes_temp(self):
+    def test_replace_failure_preserves_cache_and_removes_temp(self) -> None:
         """
         替換快取失敗時保留舊檔並清除暫存檔
         """
@@ -264,7 +264,7 @@ class ThumbnailTests(unittest.TestCase):
         self.assertFalse(list(self.thumbnail_dir.glob(".thumbnail-*.tmp")))
 
 
-    def test_cancellation_stops_media_parsing(self):
+    def test_cancellation_stops_media_parsing(self) -> None:
         """
         取消時停止進行中的媒體解析
         """
@@ -381,7 +381,7 @@ class VideoThumbnailTests(unittest.TestCase):
             process.close()
 
 
-    def test_av1_thumbnails_finish_without_hanging(self):
+    def test_av1_thumbnails_finish_without_hanging(self) -> None:
         """
         AV1 的 MP4 與 MKV 縮圖皆可正常完成
         """
@@ -400,7 +400,7 @@ class VideoThumbnailTests(unittest.TestCase):
                 self.assertEqual(result["size"], (300, 169))
 
 
-    def test_default_video_track_determines_size_and_pixels(self):
+    def test_default_video_track_determines_size_and_pixels(self) -> None:
         """
         依預設影像軌決定縮圖尺寸與內容
         """
@@ -442,7 +442,7 @@ class VideoThumbnailTests(unittest.TestCase):
                             self.assertLessEqual(abs(actual - expected), 30)
 
 
-    def test_av1_cancellation_and_setup_failure_finish(self):
+    def test_av1_cancellation_and_setup_failure_finish(self) -> None:
         """
         AV1 取消或設定失敗後可正常結束
         """
@@ -465,7 +465,7 @@ class VideoThumbnailTests(unittest.TestCase):
                 self.assertEqual(result["cancelled"], mode == "cancel")
 
 
-    def test_non_square_pixels_use_display_aspect_ratio(self):
+    def test_non_square_pixels_use_display_aspect_ratio(self) -> None:
         """
         非正方形像素依實際顯示比例產生縮圖
         """
@@ -476,7 +476,7 @@ class VideoThumbnailTests(unittest.TestCase):
         self.assertEqual((image.width(), image.height()), (300, 84))
 
 
-    def test_rotated_videos_preserve_size_and_pixel_orientation(self):
+    def test_rotated_videos_preserve_size_and_pixel_orientation(self) -> None:
         """
         旋轉影片的縮圖尺寸與像素方向正確
         """

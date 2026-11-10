@@ -190,7 +190,7 @@ class ConfigStore:
                 score, config = best[0]
                 logger.warning(
                     "設定檔已在記憶體修復 %s 個標點, 驗證異常 %s 處",
-                    score[1], score[0],
+                    score[1], score[0]
                 )
                 return config
 
