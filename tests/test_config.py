@@ -88,7 +88,7 @@ class ConfigTests(unittest.TestCase):
             paths += ["C:relative.mp4", "\\rooted.mp4", "\\\\server\\share\\file.mp4"]
 
         selections = {str(index): path for index, path in enumerate(paths)}
-        result = self.store.validate({"recentVideo": paths, "screenWallpapers": selections})
+        result, _ = self.store.validate({"recentVideo": paths, "screenWallpapers": selections})
         self.assertEqual(result["recentVideo"], valid)
         self.assertEqual(result["screenWallpapers"], {"0": valid[0], "1": valid[1]})
 
@@ -116,7 +116,7 @@ class ConfigTests(unittest.TestCase):
         讀取不改寫原檔, 初始化只對物件設定寫回補齊與修復的欄位
         """
 
-        defaults = self.store.validate({})
+        defaults, _ = self.store.validate({})
         repaired = {**defaults, "autoPauseIfOnBattery": True, "language": "ja-JP", "futureOption": 9}
         invalid_values = json.dumps({
             "autoPauseIfFullscreen": "false",
@@ -160,6 +160,69 @@ class ConfigTests(unittest.TestCase):
                     self.assertFalse(self.store.save({"language": "ja-JP"}))
                 self.assertEqual(self.config_path.read_bytes(), original)
                 self.assertFalse(self.config_path.with_suffix(".tmp").exists())
+
+
+    def test_punctuation_repairs_preserve_settings(self):
+        """
+        缺少逗號或多餘起始括號可修復, 讀取不寫回, 初始化才保存
+        """
+
+        cases = [
+            ('{"fontSize":18"language":"ja-JP"}', {"fontSize": 18, "language": "ja-JP"}),
+            (
+                '{"recentVideo":[["folder/[1],{2}.mp4"],"language":"ja-JP"}',
+                {"recentVideo": ["folder/[1],{2}.mp4"], "language": "ja-JP"},
+            ),
+        ]
+
+        for text, expected in cases:
+            with self.subTest(text=text):
+                self.config_path.write_text(text, encoding="utf-8")
+                config = self.store.load()
+                for key, value in expected.items():
+                    self.assertEqual(config[key], value)
+                self.assertEqual(self.config_path.read_text(encoding="utf-8"), text)
+
+                self.store.initialize_if_missing()
+                self.assertEqual(json.loads(self.config_path.read_text(encoding="utf-8")), config)
+
+
+    def test_validation_scores_repair_candidates(self):
+        """
+        缺少欄位不計異常, 修復優先選擇驗證異常較少的候選
+        """
+
+        _, issues = self.store.validate({})
+        self.assertEqual(issues, [])
+        _, issues = self.store.validate({"fontSize": "large", "language": "invalid"})
+        self.assertEqual(len(issues), 2)
+
+        text = '{"screenWallpapers":{"0":"a.mp4","language":"ja-JP"],"fontSize":18}'
+        self.config_path.write_text(text, encoding="utf-8")
+        config = self.store.load()
+        self.assertEqual(config["language"], "ja-JP")
+        self.assertEqual(config["screenWallpapers"], {"0": "a.mp4"})
+        self.assertEqual(config["fontSize"], 18)
+
+
+    def test_uncertain_repairs_keep_original_file(self):
+        """
+        同分歧義, 改變數值或超過兩次修改的內容不自動寫回
+        """
+
+        cases = [
+            '{"futureOption": [1}',
+            '{"futureOption": 1,2}',
+            '{"fontSize" 18 "language" "ja-JP"}',
+        ]
+        defaults, _ = self.store.validate({})
+
+        for text in cases:
+            with self.subTest(text=text):
+                self.config_path.write_text(text, encoding="utf-8")
+                self.assertEqual(self.store.load(), defaults)
+                self.store.initialize_if_missing()
+                self.assertEqual(self.config_path.read_text(encoding="utf-8"), text)
 
 
 if __name__ == "__main__":

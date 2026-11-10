@@ -7,6 +7,7 @@ import json
 import locale
 import logging
 import os
+import re
 from configparser import ConfigParser, Error as ConfigParserError
 from pathlib import Path
 
@@ -22,6 +23,11 @@ CONFIG_DEFAULTS = {
     "autoPauseIfOnBattery": False,
 }
 
+CONFIG_KEYS = set(CONFIG_DEFAULTS) | {
+    "fontSize", "recentDisplayCount", "language", "recentVideo",
+    "screenWallpapers", "screenFollows",
+}
+
 SUPPORTED_LANGUAGES = {
     "繁體中文": "zh-TW",
     "简体中文": "zh-CN",
@@ -29,6 +35,76 @@ SUPPORTED_LANGUAGES = {
     "한국어": "ko-KR",
     "English": "en-US",
 }
+
+
+def _punctuation_candidates(text: str, position: int) -> set[str]:
+    """
+    在錯誤, 未閉合括號與巢狀設定欄位附近嘗試修改, 不更動字串內的內容
+    """
+
+    punctuation = ",:{}[]"
+    positions = {position}
+    previous = position - 1
+
+    while previous >= 0 and text[previous] in " \t\r\n":
+        previous -= 1
+
+    if previous >= 0 and text[previous] in punctuation:
+        positions.add(previous)
+
+    edit_positions = set()
+    in_string = False
+    escaped = False
+    openings: list[int] = []
+    field_pattern = re.compile(r'\s*"([^"\\]*)"\s*:')
+
+    # 多掃描一個位置, 讓檔尾也能補入括號
+    for index, char in enumerate(text + " "):
+
+        # 解析錯誤可能出現在多餘起始括號之後, 也嘗試修改當時尚未閉合的括號
+        if index == position and not in_string:
+            edit_positions.update(openings)
+
+        # 已知設定欄位出現在巢狀物件時, 也嘗試在它前面補上結尾括號
+        if not in_string and char == "," and len(openings) > 1:
+            field = field_pattern.match(text, index + 1)
+            if field and field[1] in CONFIG_KEYS:
+                edit_positions.add(index)
+
+        if index in positions and not in_string:
+            edit_positions.add(index)
+
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+
+        elif char == '"':
+            in_string = True
+
+        elif char in "{[":
+            openings.append(index)
+
+        elif char in "}]" and openings:
+            openings.pop()
+
+    candidates = set()
+
+    for index in edit_positions:
+        prefix, suffix = text[:index], text[index:]
+
+        for mark in punctuation:
+            candidates.add(prefix + mark + suffix)
+
+        if suffix and suffix[0] in punctuation:
+            candidates.add(prefix + suffix[1:])
+            for mark in punctuation:
+                candidates.add(prefix + mark + suffix[1:])
+
+    return candidates
 
 
 class ConfigStore:
@@ -41,6 +117,84 @@ class ConfigStore:
         self.config_path = config_path
         self.media_dir = media_dir
         self.lang_dir = lang_dir
+
+
+    def _read_config(self):
+        """
+        最多修復兩個標點, 依驗證異常數與修改數選擇唯一結果
+        """
+
+        with open(self.config_path, "r", encoding="utf-8") as f:
+            text = f.read()
+
+        try:
+            return json.loads(text)
+
+        except json.JSONDecodeError as error:
+            original_error = error
+
+        if not text.strip():
+            raise original_error
+
+        def unique_object(pairs):
+            config = dict(pairs)
+            if len(config) != len(pairs):
+                raise ValueError("修復結果包含重複欄位")
+            return config
+
+        pending = [(text, original_error)]
+        seen = {text}
+        repaired = {}
+        tokens = r'"(?:\\.|[^"\\])*"|[^"\s,:{}\[\]]+'
+        original_tokens = re.findall(tokens, text)
+
+        # 搜尋完兩層候選再評分, 讓異常較少的兩次修改也能被選中
+        for count in range(1, 3):
+            next_pending = []
+
+            for source, error in pending:
+                for candidate in _punctuation_candidates(source, error.pos):
+                    if candidate in seen:
+                        continue
+                    seen.add(candidate)
+
+                    try:
+                        config = json.loads(candidate, object_pairs_hook=unique_object)
+
+                    except json.JSONDecodeError as candidate_error:
+                        next_pending.append((candidate, candidate_error))
+                        continue
+
+                    except ValueError:
+                        continue
+
+                    if not isinstance(config, dict):
+                        continue
+
+                    # 保留字串與原始值的邊界, 避免刪除標點後將 1,2 合併為 12
+                    if re.findall(tokens, candidate) != original_tokens:
+                        continue
+
+                    key = json.dumps(config, ensure_ascii=False, sort_keys=True)
+                    if key not in repaired:
+                        _, issues = self.validate(config, log_issues=False)
+                        repaired[key] = ((len(issues), count), config)
+
+            pending = next_pending
+
+        if repaired:
+            best_score = min(result[0] for result in repaired.values())
+            best = [result for result in repaired.values() if result[0] == best_score]
+
+            if len(best) == 1:
+                score, config = best[0]
+                logger.warning(
+                    "設定檔已在記憶體修復 %s 個標點, 驗證異常 %s 處",
+                    score[1], score[0],
+                )
+                return config
+
+        raise original_error
 
 
     def _normalize_media_path(self, value) -> str | None:
@@ -82,13 +236,20 @@ class ConfigStore:
         return media_path
 
 
-    def validate(self, raw) -> dict:
+    def validate(self, raw, *, log_issues: bool = True) -> tuple[dict, list[str]]:
         """
-        逐欄檢查設定, 異常欄位使用預設值
+        回傳修正後設定與異常清單, 缺少欄位與相容性轉換不計異常
         """
 
+        issues: list[str] = []
+
+        def report(message: str, *args) -> None:
+            issues.append(message % args if args else message)
+            if log_issues:
+                logger.warning(message, *args)
+
         if not isinstance(raw, dict):
-            logger.warning("設定檔最外層必須是物件, 使用預設設定")
+            report("設定檔最外層必須是物件, 使用預設設定")
             raw = {}
 
         config = raw.copy()
@@ -101,23 +262,27 @@ class ConfigStore:
                 config[key] = default
 
             elif not isinstance(config[key], bool):
-                logger.warning("設定欄位 %s 型別錯誤, 使用預設值", key)
+                report("設定欄位 %s 型別錯誤, 使用預設值", key)
                 config[key] = default
 
 
         # 字體大小使用整數 pt, 超出範圍時限制在 6 到 48
         font_size = config.get("fontSize", 11)
         if type(font_size) is not int:
-            logger.warning("設定欄位 fontSize 無效, 使用預設值")
+            report("設定欄位 fontSize 無效, 使用預設值")
             font_size = 11
+        elif not 6 <= font_size <= 48:
+            report("設定欄位 fontSize 超出 6 到 48, 已限制範圍")
         config["fontSize"] = max(6, min(48, font_size))
 
 
         # 最近紀錄顯示筆數使用整數, 0 表示隱藏, 最多顯示 20 筆
         recent_display_count = config.get("recentDisplayCount", 6)
         if type(recent_display_count) is not int:
-            logger.warning("設定欄位 recentDisplayCount 無效, 使用預設值")
+            report("設定欄位 recentDisplayCount 無效, 使用預設值")
             recent_display_count = 6
+        elif not 0 <= recent_display_count <= 20:
+            report("設定欄位 recentDisplayCount 超出 0 到 20, 已限制範圍")
         config["recentDisplayCount"] = max(0, min(20, recent_display_count))
 
 
@@ -155,7 +320,7 @@ class ConfigStore:
             not isinstance(language, str) or
             language not in SUPPORTED_LANGUAGES.values()
         ):
-            logger.warning("設定欄位 language 無效, 使用繁體中文")
+            report("設定欄位 language 無效, 使用繁體中文")
             config["language"] = "zh-TW"
 
 
@@ -170,24 +335,28 @@ class ConfigStore:
 
         if isinstance(recent, list):
 
-            for media_path in recent:
+            for index, media_path in enumerate(recent):
 
                 normalized = self._normalize_media_path(media_path)
 
                 if normalized is None:
+                    report("設定欄位 recentVideo[%s] 無效, 已移除", index)
                     continue
 
                 path = Path(normalized)
 
-                if path not in seen:
+                if path in seen:
+                    report("設定欄位 recentVideo[%s] 重複, 已移除", index)
+
+                elif len(normalized_recent) >= 20:
+                    report("設定欄位 recentVideo[%s] 超過 20 筆上限, 已移除", index)
+
+                else:
                     seen.add(path)
                     normalized_recent.append(path.as_posix())
 
-                    if len(normalized_recent) == 20:
-                        break
-
-        if normalized_recent != recent:
-            logger.warning("設定欄位 recentVideo 已移除無效或重複項目, 最多保留 20 筆")
+        else:
+            report("設定欄位 recentVideo 必須是清單, 使用空清單")
 
         config["recentVideo"] = normalized_recent
 
@@ -199,6 +368,11 @@ class ConfigStore:
         if isinstance(screen_wallpapers, dict):
             for screen_id, media_path in screen_wallpapers.items():
                 if not valid_screen_id(screen_id):
+                    report("設定欄位 screenWallpapers.%s 螢幕識別無效, 已移除", screen_id)
+                    continue
+
+                if screen_id in CONFIG_KEYS:
+                    report("設定欄位 screenWallpapers.%s 應位於最外層, 已移除", screen_id)
                     continue
 
                 normalized = self._normalize_media_path(media_path)
@@ -206,19 +380,35 @@ class ConfigStore:
                 if normalized is not None:
                     normalized_wallpapers[screen_id] = normalized
 
-        if normalized_wallpapers != screen_wallpapers:
-            logger.warning("設定欄位 screenWallpapers 已移除無效項目")
+                else:
+                    report("設定欄位 screenWallpapers.%s 媒體路徑無效, 已移除", screen_id)
+
+        else:
+            report("設定欄位 screenWallpapers 必須是物件, 使用空物件")
 
         config["screenWallpapers"] = normalized_wallpapers
 
 
         screen_follows = config.get("screenFollows", {})
-        config["screenFollows"] = FollowGraph.normalize(screen_follows)
-        if config["screenFollows"] != screen_follows:
-            logger.warning("設定欄位 screenFollows 已移除無效或循環關係")
+        follows = {}
+
+        if isinstance(screen_follows, dict):
+            for follower, source in screen_follows.items():
+                if isinstance(follower, str) and follower in CONFIG_KEYS:
+                    report("設定欄位 screenFollows.%s 應位於最外層, 已移除", follower)
+                else:
+                    follows[follower] = source
+
+        else:
+            report("設定欄位 screenFollows 必須是物件, 使用空物件")
+
+        config["screenFollows"] = FollowGraph.normalize(follows)
+        for follower in follows:
+            if follower not in config["screenFollows"]:
+                report("設定欄位 screenFollows.%s 無效或形成循環, 已移除", follower)
 
 
-        return config
+        return config, issues
 
 
     def remember_recent(self, path: Path) -> None:
@@ -256,8 +446,7 @@ class ConfigStore:
         """
 
         try:
-            with open(self.config_path, "r", encoding="utf-8") as f:
-                config = json.load(f)
+            config = self._read_config()
 
         except FileNotFoundError:
             config = {}
@@ -272,7 +461,8 @@ class ConfigStore:
             return
 
 
-        self.save(self.validate(config))
+        config, _ = self.validate(config)
+        self.save(config)
 
 
     def load(self) -> dict:
@@ -281,8 +471,7 @@ class ConfigStore:
         """
 
         try:
-            with open(self.config_path, "r", encoding="utf-8") as f:
-                config = json.load(f)
+            config = self._read_config()
 
         except FileNotFoundError:
             config = {}
@@ -293,7 +482,8 @@ class ConfigStore:
 
             config = {}
 
-        return self.validate(config)
+        config, _ = self.validate(config)
+        return config
 
 
     def save(self, config) -> bool:
