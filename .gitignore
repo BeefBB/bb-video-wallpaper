@@ -20,3 +20,5 @@ frozen.txt
 
 *.spec
 *.exe
+
+*.blend1
