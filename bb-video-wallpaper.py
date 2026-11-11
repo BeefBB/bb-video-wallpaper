@@ -2048,7 +2048,13 @@ def main() -> int:
     if not initialize_vlc():
         return 1
 
-    config_store.initialize_if_missing()
+    try:
+        if not config_store.save(config_store.load()):
+            return 1
+
+    except OSError:
+        return 1
+
     LANG = config_store.load_language()
 
 

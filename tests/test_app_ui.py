@@ -839,7 +839,9 @@ class StartupTests(unittest.TestCase):
                     "screenWallpapers": {"screen-a": "old.mp4"},
                     "screenFollows": {"screen-b": "screen-a"}, "futureOption": 9,
                 }
-                store.save.return_value = failure != "save"
+                store.save.return_value = True
+                if failure == "save":
+                    store.save.side_effect = [True, False]
                 lifecycle = mock.Mock()
                 for name, callback in (
                     ("event_loop", application.exec), ("cleanup", tray.shutdown),
@@ -870,7 +872,7 @@ class StartupTests(unittest.TestCase):
 
                 self.assertEqual(module.main(), int(failure is not None))
 
-                expected = [mock.call.event_loop()]
+                expected = [mock.call.save_config(store.load.return_value), mock.call.event_loop()]
                 if restart:
                     expected.append(mock.call.cleanup())
                     if reset:
@@ -891,6 +893,44 @@ class StartupTests(unittest.TestCase):
                 self.assertEqual(module.logger.exception.call_count, int(failure == "launch"))
 
 
+    def test_config_access_or_save_failure_aborts_startup_before_ui(self) -> None:
+        """
+        設定存取或保存失敗時中止啟動, 不繼續建立桌布或介面
+        """
+
+        for failure in ("read", "save"):
+            with self.subTest(failure=failure):
+                module = load_app_module()
+                store = mock.Mock()
+                store.load.return_value = {"language": "ja-JP"}
+                if failure == "read":
+                    store.load.side_effect = PermissionError("設定檔無法存取")
+                store.save.return_value = False
+                application = mock.Mock()
+                tray = mock.Mock()
+                desktop_ready = mock.Mock()
+                module.__dict__.update({
+                    "ROOT_DIR": ROOT, "CONFIG_PATH": ROOT / "unused-config.json",
+                    "APPDATA_DIR": mock.Mock(), "MEDIA_DIR": mock.Mock(),
+                    "initialize_paths": mock.Mock(), "initialize_logging": mock.Mock(),
+                    "initialize_vlc": mock.Mock(return_value=True),
+                    "is_already_running": mock.Mock(return_value=(False, mock.Mock())),
+                    "ConfigStore": mock.Mock(return_value=store),
+                    "QApplication": application, "Tray": tray,
+                    "check_desktop_ready": desktop_ready,
+                })
+
+                self.assertEqual(module.main(), 1)
+                store.load_language.assert_not_called()
+                application.assert_not_called()
+                tray.assert_not_called()
+                desktop_ready.assert_not_called()
+                if failure == "read":
+                    store.save.assert_not_called()
+                else:
+                    store.save.assert_called_once_with(store.load.return_value)
+
+
     def test_import_does_not_initialize_runtime(self) -> None:
         """
         驗證缺少使用者資料位置與 VLC 時仍可匯入主程式, 且不初始化執行環境
@@ -906,7 +946,7 @@ class StartupTests(unittest.TestCase):
             mock.patch("os.add_dll_directory", blocked),
             mock.patch.object(ConfigStore, "load", blocked),
             mock.patch.object(ConfigStore, "load_language", blocked),
-            mock.patch.object(ConfigStore, "initialize_if_missing", blocked),
+            mock.patch.object(ConfigStore, "save", blocked),
             mock.patch("windows_integration.is_already_running", blocked),
             mock.patch("windows_integration.check_desktop_ready", blocked),
             mock.patch("PySide6.QtWidgets.QApplication", blocked),

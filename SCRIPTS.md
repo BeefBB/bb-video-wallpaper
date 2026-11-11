@@ -113,7 +113,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 測試腳本                                                           | 檢查重點
 ---                                                                | ---
 [test_app_ui.py](./tests/test_app_ui.py)                           | 匯入取消與過期回呼, 螢幕變動, 主執行緒更新, 預覽過期結果, 匯入主程式不初始化
-[test_config.py](./tests/test_config.py)                           | 初始化與讀寫失敗不破壞原檔, 損壞設定與路徑邊界
+[test_config.py](./tests/test_config.py)                           | 存取與保存失敗不破壞原檔, 損壞內容重建與修復, 路徑邊界
 [test_screen_follow.py](./tests/test_screen_follow.py)             | 循環與群組拆分, 群組暫停, 進度誤差與循環邊界, 過期同步訊號
 [test_media_import.py](./tests/test_media_import.py)               | 命名衝突, 磁碟空間邊界, 複製中寫滿與各階段取消後清理
 [test_playback_state.py](./tests/test_playback_state.py)           | 延遲播放事件, 重掛順序與重試, 舊進度失效, 關閉與螢幕移除競態

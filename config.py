@@ -1,5 +1,5 @@
 """
-設定檔初始化, 驗證, 讀寫與語言載入
+設定檔驗證, 讀寫與語言載入
 路徑由主程式提供
 """
 
@@ -450,34 +450,10 @@ class ConfigStore:
         self.save(config)
 
 
-    def initialize_if_missing(self) -> None:
-        """
-        設定檔或欄位缺少時補齊預設值
-        """
-
-        try:
-            config = self._read_config()
-
-        except FileNotFoundError:
-            config = {}
-
-        except Exception:
-            logger.exception("初始化 config 時讀取設定發生錯誤")
-            return
-
-
-        if not isinstance(config, dict):
-            logger.warning("設定檔最外層必須是物件, 不寫回預設設定")
-            return
-
-
-        config, _ = self.validate(config)
-        self.save(config)
-
-
     def load(self) -> dict:
         """
-        讀取並驗證設定, 不自動寫回修正內容
+        讀取並驗證設定, 內容損壞時使用預設值
+        存取錯誤向外傳遞
         """
 
         try:
@@ -486,11 +462,15 @@ class ConfigStore:
         except FileNotFoundError:
             config = {}
 
-        except Exception:
+        except ValueError:
 
-            logger.exception("讀取config時發生錯誤")
+            logger.exception("設定檔內容無法修復, 使用預設設定")
 
             config = {}
+
+        except OSError:
+            logger.exception("讀取 config 時發生錯誤")
+            raise
 
         config, _ = self.validate(config)
         return config
