@@ -31,6 +31,12 @@
   "auto_pause_fullscreen": "Pause when a window is maximized",
   "auto_pause_screen_off": "Pause when the screen is off",
   "auto_pause_battery": "Pause when on battery",
+  "preview_size": "Preview Size",
+  "preview_size_largest": "Extra Large",
+  "preview_size_large": "Large",
+  "preview_size_normal": "Normal",
+  "preview_size_small": "Small",
+  "preview_size_smallest": "Extra Small",
   "startup": "Start on boot",
   "already_running_message": "The program is already running in the background!!\nCheck the system tray"
 }

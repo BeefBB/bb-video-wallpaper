@@ -170,7 +170,7 @@ class ThumbnailTests(unittest.TestCase):
         self.assertTrue(image.save(str(path)))
 
 
-    def thumbnail(self, path: Path) -> Path:
+    def thumbnail(self, path: Path, preview_size: int = 3) -> Path:
         """
         使用測試路徑取得或產生縮圖
         """
@@ -179,7 +179,8 @@ class ThumbnailTests(unittest.TestCase):
             path,
             lambda: False,
             media_dir=self.media_dir,
-            thumbnail_dir=self.thumbnail_dir
+            thumbnail_dir=self.thumbnail_dir,
+            preview_size=preview_size
         )
 
 
@@ -199,12 +200,18 @@ class ThumbnailTests(unittest.TestCase):
 
         for thumbnail in (first_thumbnail, second_thumbnail):
             self.assertEqual(QImage(str(thumbnail)).width(), 300)
+            self.assertEqual(len(thumbnail.name), 31)
+
+        other_sizes = [self.thumbnail(first, size) for size in (1, 5)]
+        for thumbnail, width in zip(other_sizes, (100, 500)):
+            self.assertEqual(QImage(str(thumbnail)).width(), width)
+        self.assertTrue(first_thumbnail.exists())
 
         # 混入無關檔案與目錄, 確認快取清理不會誤刪
-        prefix = first_thumbnail.name.rsplit("-", 1)[0] + "-"
+        prefix = first_thumbnail.name.split("-", 1)[0] + "-"
         unrelated = self.thumbnail_dir / "unrelated.jpg"
-        malformed = self.thumbnail_dir / f"{prefix}deadbeeg.jpg"
-        directory = self.thumbnail_dir / f"{prefix}deadbeef.jpg"
+        malformed = self.thumbnail_dir / f"{prefix}deadbeeg-3.jpg"
+        directory = self.thumbnail_dir / f"{prefix}deadbeef-3.jpg"
         directory.mkdir()
         for path in (unrelated, malformed):
             path.write_bytes(b"keep")
@@ -214,9 +221,11 @@ class ThumbnailTests(unittest.TestCase):
         self.assertEqual(first_thumbnail.stat().st_mtime_ns, saved_mtime)
 
         self.save_image(first, Qt.GlobalColor.blue)
-        updated_thumbnail = self.thumbnail(first)
+        updated_thumbnail = self.thumbnail(first, 4)
         self.assertNotEqual(updated_thumbnail, first_thumbnail)
         self.assertFalse(first_thumbnail.exists())
+        for thumbnail in other_sizes:
+            self.assertFalse(thumbnail.exists())
         self.assertTrue(second_thumbnail.exists())
         self.assertEqual(unrelated.read_bytes(), b"keep")
         self.assertEqual(malformed.read_bytes(), b"keep")
@@ -305,10 +314,10 @@ class ThumbnailThreadTests(QtTestCase):
         started = threading.Event()
         release = threading.Event()
         completed = threading.Event()
-        processed: list[Path] = []
+        processed: list[tuple[Path, int]] = []
 
         def blocked_thumbnail(path, cancelled, **kwargs):
-            processed.append(path)
+            processed.append((path, kwargs["preview_size"]))
 
             if path == first:
 
@@ -325,7 +334,7 @@ class ThumbnailThreadTests(QtTestCase):
         self.addCleanup(worker.stop)
         self.addCleanup(release.set)
         worker.thumbnail_ready.connect(
-            lambda path, image: completed.set() if Path(path) == last else None,
+            lambda path, size, image: completed.set() if Path(path) == last else None,
             Qt.ConnectionType.DirectConnection
         )
         worker.request(first)
@@ -335,6 +344,8 @@ class ThumbnailThreadTests(QtTestCase):
         worker.request(last)
         worker.request(first)
         worker.request(first, priority=True)
+        worker.request(first, preview_size=4, priority=True)
+        worker.request(first, preview_size=4)
         worker.request(queued, priority=True)
         worker.request(newest, priority=True)
         worker.request(queued, priority=True)
@@ -342,7 +353,9 @@ class ThumbnailThreadTests(QtTestCase):
         release.set()
         self.assertTrue(completed.wait(5), "縮圖佇列未處理完成")
         worker.stop()
-        self.assertEqual(processed, [first, queued, newest, ordinary, last])
+        self.assertEqual(processed, [
+            (first, 3), (queued, 3), (newest, 3), (first, 4), (ordinary, 3), (last, 3)
+        ])
 
 
 
@@ -534,10 +547,12 @@ class VideoThumbnailTests(unittest.TestCase):
         非正方形像素依實際顯示比例產生縮圖
         """
 
-        image = create_video_thumbnail(self.anamorphic_media, lambda: False)
+        for width, height in ((100, 28), (200, 56), (300, 84), (400, 112), (500, 141)):
 
-        self.assertFalse(image.isNull())
-        self.assertEqual((image.width(), image.height()), (300, 84))
+            with self.subTest(width=width):
+                image = create_video_thumbnail(self.anamorphic_media, lambda: False, width)
+                self.assertFalse(image.isNull())
+                self.assertEqual((image.width(), image.height()), (width, height))
 
 
     def test_rotated_videos_preserve_size_and_pixel_orientation(self) -> None:

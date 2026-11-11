@@ -53,7 +53,9 @@ def fast_hash(path: Path) -> str:
     return digest.hexdigest()[:8]
 
 
-def get_video_thumbnail_sizes(media, cancelled: Callable[[], bool]) -> dict[int, tuple[int, int]]:
+def get_video_thumbnail_sizes(
+    media, cancelled: Callable[[], bool], thumbnail_width: int = 300
+) -> dict[int, tuple[int, int]]:
     """
     依影像軌 ID 記錄縮圖大小, 使用可見尺寸, 像素比例與方向
     """
@@ -128,7 +130,7 @@ def get_video_thumbnail_sizes(media, cancelled: Callable[[], bool]) -> dict[int,
             ):
                 width, height = height, width
 
-            sizes[track.id] = (300, max(1, round(300 * height / width)))
+            sizes[track.id] = (thumbnail_width, max(1, round(thumbnail_width * height / width)))
 
     finally:
         vlc.libvlc_media_tracks_release(track_array, count)
@@ -139,7 +141,9 @@ def get_video_thumbnail_sizes(media, cancelled: Callable[[], bool]) -> dict[int,
     return sizes
 
 
-def create_video_thumbnail(path: Path, cancelled: Callable[[], bool]) -> QImage:
+def create_video_thumbnail(
+    path: Path, cancelled: Callable[[], bool], thumbnail_width: int = 300
+) -> QImage:
     """
     使用獨立的靜音 VLC 播放器, 將第一個解碼畫面複製到記憶體, 不建立視窗
     """
@@ -177,10 +181,10 @@ def create_video_thumbnail(path: Path, cancelled: Callable[[], bool]) -> QImage:
                 if not width[0] or not height[0]:
                     raise RuntimeError("影片沒有可用的緩衝區尺寸")
 
-                scaled_height = max(1, round(300 * height[0] / width[0]))
+                scaled_height = max(1, round(thumbnail_width * height[0] / width[0]))
 
-            width[0], height[0] = 300, scaled_height
-            pitches[0] = (300 * 4 + 31) & ~31
+            width[0], height[0] = thumbnail_width, scaled_height
+            pitches[0] = (thumbnail_width * 4 + 31) & ~31
             lines[0] = (scaled_height + 31) & ~31
             ctypes.memmove(chroma, b"RV32", 4)
 
@@ -216,7 +220,7 @@ def create_video_thumbnail(path: Path, cancelled: Callable[[], bool]) -> QImage:
                 pixels = ctypes.string_at(frame["address"], frame["pitch"] * frame["height"])
                 frame["image"] = QImage(
                     pixels,
-                    300,
+                    thumbnail_width,
                     frame["height"],
                     frame["pitch"],
                     QImage.Format.Format_RGB32
@@ -252,7 +256,7 @@ def create_video_thumbnail(path: Path, cancelled: Callable[[], bool]) -> QImage:
             raise RuntimeError("無法建立縮圖播放器")
 
         media = instance.media_new(str(path))
-        thumbnail_sizes = get_video_thumbnail_sizes(media, cancelled)
+        thumbnail_sizes = get_video_thumbnail_sizes(media, cancelled, thumbnail_width)
 
         if len(thumbnail_sizes) == 1:
             thumbnail_size = next(iter(thumbnail_sizes.values()))
@@ -333,10 +337,11 @@ def ensure_thumbnail(
     cancelled: Callable[[], bool],
     *,
     media_dir: Path,
-    thumbnail_dir: Path
+    thumbnail_dir: Path,
+    preview_size: int = 3
 ) -> Path:
     """
-    驗證既有縮圖或產生寬 300px 的 JPEG; 成功後才取代檔案並清除舊縮圖
+    驗證指定尺寸的縮圖或產生 JPEG; 成功後才清除同來源舊內容的各尺寸縮圖
     """
 
     path = path.resolve(strict=True)
@@ -354,7 +359,8 @@ def ensure_thumbnail(
     source_id = hashlib.sha256(path.name.encode("utf-8")).hexdigest()[:16]
     prefix = f"{source_id}-"
     directory = thumbnail_dir / relative_path.parent
-    destination = directory / f"{prefix}{digest}.jpg"
+    destination = directory / f"{prefix}{digest}-{preview_size}.jpg"
+    thumbnail_width = preview_size * 100
 
     if cancelled():
         raise InterruptedError("縮圖工作已取消")
@@ -371,19 +377,19 @@ def ensure_thumbnail(
 
         if size.isValid() and size.width() > 0:
 
-            size.setHeight(max(1, round(300 * size.height() / size.width())))
-            size.setWidth(300)
+            size.setHeight(max(1, round(thumbnail_width * size.height() / size.width())))
+            size.setWidth(thumbnail_width)
             reader.setScaledSize(size)
 
         image = reader.read()
 
     else:
-        image = create_video_thumbnail(path, cancelled)
+        image = create_video_thumbnail(path, cancelled, thumbnail_width)
 
     if image.isNull():
         raise RuntimeError("無法讀取縮圖來源")
 
-    image = image.scaledToWidth(300, Qt.TransformationMode.SmoothTransformation)
+    image = image.scaledToWidth(thumbnail_width, Qt.TransformationMode.SmoothTransformation)
     current_stat = path.stat()
 
     if (
@@ -425,7 +431,7 @@ def ensure_thumbnail(
         temp_path.unlink(missing_ok=True)
 
 
-    # 成功後只清除同一來源識別碼的舊縮圖
+    # 相同內容的其他尺寸保留, 只清除同一來源識別碼的舊內容
     try:
 
         for old_path in directory.iterdir():
@@ -433,11 +439,12 @@ def ensure_thumbnail(
             suffix = old_path.name.removeprefix(prefix)
 
             if (
-                old_path != destination and
                 old_path.name.startswith(prefix) and
-                len(suffix) == 12 and
+                len(suffix) == 14 and
+                suffix[8] == "-" and suffix[9] in "12345" and
                 suffix.endswith(".jpg") and
                 all(char in "0123456789abcdef" for char in suffix[:8]) and
+                suffix[:8] != digest and
                 old_path.is_file()
             ):
                 old_path.unlink()
@@ -452,10 +459,10 @@ def ensure_thumbnail(
 
 class ThumbnailThread(QThread):
     """
-    依序處理縮圖要求, 預覽項目可插隊, 排隊或處理中的同一路徑不重複加入
+    依序處理縮圖要求, 預覽項目可插隊, 同一路徑與尺寸不重複加入
     """
 
-    thumbnail_ready = Signal(str, QImage)
+    thumbnail_ready = Signal(str, int, QImage)
 
 
     def __init__(self, media_dir: Path, thumbnail_dir: Path, parent=None) -> None:
@@ -465,39 +472,40 @@ class ThumbnailThread(QThread):
 
         self.media_dir = media_dir
         self.thumbnail_dir = thumbnail_dir
-        self.queue: deque[Path] = deque()
-        self.pending: set[Path] = set()
+        self.queue: deque[tuple[Path, int]] = deque()
+        self.pending: set[tuple[Path, int]] = set()
         self.pending_lock = threading.Condition()
         self.stopping = False
 
 
-    def request(self, path: Path, *, priority: bool = False) -> None:
+    def request(self, path: Path, *, preview_size: int = 3, priority: bool = False) -> None:
 
+        request = (path, preview_size)
         with self.pending_lock:
 
             if self.stopping:
                 return
 
-            if path in self.pending:
+            if request in self.pending:
 
                 if not priority:
                     return
 
                 try:
-                    self.queue.remove(path)
+                    self.queue.remove(request)
 
                 except ValueError:
                     # 已取出的工作正在處理, 不重複排入
                     return
 
             else:
-                self.pending.add(path)
+                self.pending.add(request)
 
             if priority:
-                self.queue.appendleft(path)
+                self.queue.appendleft(request)
 
             else:
-                self.queue.append(path)
+                self.queue.append(request)
 
             self.pending_lock.notify()
 
@@ -516,7 +524,7 @@ class ThumbnailThread(QThread):
                 if self.stopping or self.isInterruptionRequested():
                     break
 
-                path = self.queue.popleft()
+                path, preview_size = self.queue.popleft()
 
             image = QImage()
 
@@ -526,7 +534,8 @@ class ThumbnailThread(QThread):
                     path,
                     self.isInterruptionRequested,
                     media_dir=self.media_dir,
-                    thumbnail_dir=self.thumbnail_dir
+                    thumbnail_dir=self.thumbnail_dir,
+                    preview_size=preview_size
                 )
                 image = QImage(str(thumbnail_path))
 
@@ -541,10 +550,10 @@ class ThumbnailThread(QThread):
 
             finally:
                 with self.pending_lock:
-                    self.pending.discard(path)
+                    self.pending.discard((path, preview_size))
 
             if not image.isNull() and not self.isInterruptionRequested():
-                self.thumbnail_ready.emit(str(path), image)
+                self.thumbnail_ready.emit(str(path), preview_size, image)
 
 
     def stop(self) -> None:

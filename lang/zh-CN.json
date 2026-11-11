@@ -31,6 +31,12 @@
   "auto_pause_fullscreen": "窗口最大化时自动暂停",
   "auto_pause_screen_off": "屏幕关闭时自动暂停",
   "auto_pause_battery": "未接通电源时自动暂停",
+  "preview_size": "预览大小",
+  "preview_size_largest": "极大",
+  "preview_size_large": "大",
+  "preview_size_normal": "普通",
+  "preview_size_small": "小",
+  "preview_size_smallest": "极小",
   "startup": "开机自动启动",
   "already_running_message": "程序已经在后台运行中!!\n请从系统托盘查看"
 }

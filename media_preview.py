@@ -25,6 +25,7 @@ class MediaPreviewMenu(QMenu):
         media_dir: Path,
         thumbnail_dir: Path,
         loading_image_path: Path,
+        preview_size: int = 3,
         thumbnail_thread: ThumbnailThread | None = None
     ) -> None:
 
@@ -40,18 +41,7 @@ class MediaPreviewMenu(QMenu):
         self.preview.setStyleSheet("background: #202020; padding: 4px;")
 
 
-        self.loading_pixmap = QPixmap(loading_image_path)
-
-        if self.loading_pixmap.isNull():
-
-            self.loading_pixmap = QPixmap(300, 169)
-            self.loading_pixmap.fill(Qt.GlobalColor.darkGray)
-
-        self.loading_pixmap = self.loading_pixmap.scaledToWidth(
-            300, Qt.TransformationMode.SmoothTransformation
-        )
-
-        self.preview_pixmap = self.loading_pixmap
+        self.loading_image_path = loading_image_path
         self.preview_mode = False
         self.preview_action: QAction | None = None
 
@@ -75,6 +65,31 @@ class MediaPreviewMenu(QMenu):
         self.reset_timer.setSingleShot(True)
         self.reset_timer.setInterval(1000)
         self.reset_timer.timeout.connect(self.reset_preview)
+
+        self.set_preview_size(preview_size)
+
+
+    def set_preview_size(self, preview_size: int) -> None:
+        """
+        套用尺寸與對應載入圖片, 清除先前的預覽狀態
+        """
+
+        self.reset_preview()
+        self.preview_size = preview_size
+        width = preview_size * 100
+        self.loading_pixmap = QPixmap(
+            self.loading_image_path.with_name(f"loading{width}.jpg")
+        )
+
+        if self.loading_pixmap.isNull():
+
+            self.loading_pixmap = QPixmap(width, max(1, round(width * 9 / 16)))
+            self.loading_pixmap.fill(Qt.GlobalColor.darkGray)
+
+        self.loading_pixmap = self.loading_pixmap.scaledToWidth(
+            width, Qt.TransformationMode.SmoothTransformation
+        )
+        self.preview_pixmap = self.loading_pixmap
 
 
     def mouseMoveEvent(self, event) -> None:
@@ -153,11 +168,13 @@ class MediaPreviewMenu(QMenu):
         self.preview_pixmap = self.loading_pixmap
         self.display_preview()
 
-        self.thumbnail_thread.request(Path(action.data()), priority=True)
+        self.thumbnail_thread.request(
+            Path(action.data()), preview_size=self.preview_size, priority=True
+        )
 
 
-    @Slot(str, QImage)
-    def update_preview(self, media_path: str, image: QImage) -> None:
+    @Slot(str, int, QImage)
+    def update_preview(self, media_path: str, preview_size: int, image: QImage) -> None:
 
         action = self.preview_action
 
@@ -165,6 +182,7 @@ class MediaPreviewMenu(QMenu):
             not self.preview_mode or
             action is None or
             Path(action.data()) != Path(media_path) or
+            preview_size != self.preview_size or
             image.isNull()
         ):
             return
@@ -191,10 +209,11 @@ class MediaPreviewMenu(QMenu):
         # 比例依目標螢幕, 尺寸與位置限制依選單所在螢幕
         screen = QApplication.screenAt(cursor) or self.screen()
         available = screen.availableGeometry()
+        preview_width = self.preview_size * 100
 
         size = (self.target_screen or screen).geometry().size().scaled(
-            min(300, max(1, available.width() - 8)),
-            min(300, max(1, available.height() - 8)),
+            min(preview_width, max(1, available.width() - 8)),
+            min(preview_width, max(1, available.height() - 8)),
             Qt.AspectRatioMode.KeepAspectRatio
         )
         size = QSize(max(1, size.width()), max(1, size.height()))

@@ -31,6 +31,12 @@
   "auto_pause_fullscreen": "ウィンドウを最大化したときに自動的に一時停止",
   "auto_pause_screen_off": "画面がオフのときに自動的に一時停止",
   "auto_pause_battery": "バッテリー駆動時に自動的に一時停止",
+  "preview_size": "プレビューサイズ",
+  "preview_size_largest": "特大",
+  "preview_size_large": "大",
+  "preview_size_normal": "標準",
+  "preview_size_small": "小",
+  "preview_size_smallest": "特小",
   "startup": "起動時に自動的に起動",
   "already_running_message": "プログラムはすでにバックグラウンドで実行されています!!\nシステムトレイを確認してください"
 }

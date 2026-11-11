@@ -54,6 +54,7 @@ class ConfigTests(unittest.TestCase):
             **CONFIG_DEFAULTS,
             "fontSize": 11,
             "recentDisplayCount": 6,
+            "previewSize": 3,
             "language": "en-US",
             "recentVideo": [],
             "screenWallpapers": {},
@@ -121,6 +122,7 @@ class ConfigTests(unittest.TestCase):
         invalid_values = json.dumps({
             "autoPauseIfFullscreen": "false",
             "autoPauseIfOnBattery": True,
+            "previewSize": True,
             "language": "ja-JP",
             "futureOption": 9,
         }).encode("utf-8")

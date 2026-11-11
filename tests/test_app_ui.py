@@ -35,7 +35,10 @@ class PreviewMenu(QMenu):
     使用模擬縮圖工作的 Qt 選單
     """
 
-    def __init__(self, title, parent, *, media_dir, thumbnail_dir, loading_image_path, thumbnail_thread=None):
+    def __init__(
+        self, title, parent, *, media_dir, thumbnail_dir, loading_image_path,
+        preview_size=3, thumbnail_thread=None
+    ):
         """
         建立 Qt 選單, 保存共用縮圖工作物件並替換預覽重設操作
         """
@@ -43,6 +46,8 @@ class PreviewMenu(QMenu):
         super().__init__(title, parent)
         self.thumbnail_thread = thumbnail_thread if thumbnail_thread is not None else mock.Mock()
         self.reset_preview = mock.Mock()
+        self.preview_size = preview_size
+        self.set_preview_size = mock.Mock(side_effect=lambda size: setattr(self, "preview_size", size))
 
 
 class ScreenNotifications(QObject):
@@ -87,7 +92,7 @@ class ImportMenuTests(QtTestCase):
             "ICON_PATH": ROOT / "icon" / "bb-video-wallpaper.ico",
             "MEDIA_DIR": ROOT / "test-media",
             "THUMBNAIL_DIR": ROOT / "test-thumbnails",
-            "LOADING_IMAGE_PATH": ROOT / "icon" / "loading.jpg",
+            "LOADING_IMAGE_PATH": ROOT / "icon" / "loading300.jpg",
             "SINGLE_IMPORT_DIR": ROOT / "video" / "_imports",
             "LANG": {"importing_media": "{percent}%"},
             "SUPPORTED_MEDIA_EXTENSIONS": {".mp4", ".png"},
@@ -240,6 +245,34 @@ class ImportMenuTests(QtTestCase):
         self.assertFalse(self.tray.is_exiting)
         self.tray.app.quit.assert_not_called()
         self.tray.thumbnail_thread.stop.assert_not_called()
+
+
+    def test_preview_size_save_failure_keeps_menus_and_selection(self) -> None:
+        """
+        保存失敗時還原勾選且不變更各選單, 重試成功後共用新尺寸
+        """
+
+        self.add_screen("screen-b")
+        menus = (self.tray.media_menu, *self.tray.screen_menus.values())
+        store = self.namespace["config_store"]
+        store.load.return_value = {"previewSize": 3, "futureOption": 9}
+        store.save.return_value = False
+
+        self.tray.preview_size_actions[4].trigger()
+
+        store.save.assert_called_once_with({"previewSize": 4, "futureOption": 9})
+        self.assertEqual(self.tray.preview_size, 3)
+        self.assertTrue(self.tray.preview_size_actions[3].isChecked())
+        self.assertFalse(self.tray.preview_size_actions[4].isChecked())
+        for menu in menus:
+            menu.set_preview_size.assert_not_called()
+
+        store.save.return_value = True
+        self.tray.preview_size_actions[4].trigger()
+
+        self.assertEqual(self.tray.preview_size, 4)
+        for menu in menus:
+            menu.set_preview_size.assert_called_once_with(4)
 
 
     def test_language_restart_ignores_queued_changes_during_shutdown(self) -> None:
@@ -630,7 +663,7 @@ class ThumbnailWorker(QObject):
     由測試控制縮圖結果訊號
     """
 
-    thumbnail_ready = Signal(str, QImage)
+    thumbnail_ready = Signal(str, int, QImage)
 
 
 class MediaPreviewTests(QtTestCase):
@@ -707,16 +740,41 @@ class MediaPreviewTests(QtTestCase):
         self.menu.preview_action = self.second
         loading_key = self.menu.preview_pixmap.cacheKey()
 
-        self.worker.thumbnail_ready.emit(self.first.data(), self.thumbnail())
+        self.worker.thumbnail_ready.emit(self.first.data(), 3, self.thumbnail())
         self.assertEqual(self.menu.preview_pixmap.cacheKey(), loading_key)
 
-        self.worker.thumbnail_ready.emit(self.second.data(), QImage())
+        self.worker.thumbnail_ready.emit(self.second.data(), 3, QImage())
         self.assertEqual(self.menu.preview_pixmap.cacheKey(), loading_key)
 
         self.menu.reset_preview()
-        self.worker.thumbnail_ready.emit(self.second.data(), self.thumbnail())
+        self.worker.thumbnail_ready.emit(self.second.data(), 3, self.thumbnail())
         self.assertEqual(self.menu.preview_pixmap.cacheKey(), loading_key)
         self.assertTrue(self.menu.preview.isHidden())
+
+
+    def test_size_change_ignores_queued_result_for_same_media(self) -> None:
+        """
+        同媒體的舊尺寸結果已排入 Qt 佇列時, 切換尺寸後不覆蓋新結果
+        """
+
+        old_image = self.thumbnail()
+        old_image.fill(Qt.GlobalColor.red)
+        thread = threading.Thread(
+            target=lambda: self.worker.thumbnail_ready.emit(self.first.data(), 3, old_image)
+        )
+        thread.start()
+        thread.join(timeout=5)
+        self.assertFalse(thread.is_alive())
+
+        self.menu.set_preview_size(4)
+        self.assertEqual(self.menu.loading_pixmap.width(), 400)
+        self.menu.preview_action = self.first
+        self.menu.preview_mode = True
+        self.worker.thumbnail_ready.emit(self.first.data(), 4, self.thumbnail())
+        self.app.processEvents()
+
+        self.display_preview_mock.assert_called_once_with()
+        self.assertEqual(self.menu.preview_pixmap.toImage().pixelColor(0, 0), QColor("blue"))
 
 
     def test_background_result_updates_preview_on_qt_main_thread(self) -> None:
@@ -738,7 +796,7 @@ class MediaPreviewTests(QtTestCase):
         self.menu.display_preview = record_display
         image = self.thumbnail()
         media_path = self.first.data()
-        thread = threading.Thread(target=lambda: self.worker.thumbnail_ready.emit(media_path, image))
+        thread = threading.Thread(target=lambda: self.worker.thumbnail_ready.emit(media_path, 3, image))
         thread.start()
         thread.join(timeout=5)
         self.assertFalse(thread.is_alive())

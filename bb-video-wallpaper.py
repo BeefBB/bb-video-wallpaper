@@ -18,7 +18,7 @@ from win32con import WM_DESTROY
 
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog
 from PySide6.QtCore import QByteArray, QEventLoop, Qt, QTimer, QThread, Slot, Signal
-from PySide6.QtGui import QAction, QIcon, QFont, QScreen, QCursor
+from PySide6.QtGui import QAction, QActionGroup, QIcon, QFont, QScreen, QCursor
 
 import bb_image_display
 from config import CONFIG_DEFAULTS, ConfigStore, SUPPORTED_LANGUAGES
@@ -91,7 +91,7 @@ def initialize_paths() -> None:
         icon_dir = ROOT_DIR / "icon"
 
     ICON_PATH = icon_dir / "bb-video-wallpaper.ico"
-    LOADING_IMAGE_PATH = icon_dir / "loading.jpg"
+    LOADING_IMAGE_PATH = icon_dir / "loading300.jpg"
 
     APPDATA_DIR = Path(os.environ["LOCALAPPDATA"]) / "BB" / "BB Video Wallpaper"
     MEDIA_DIR = APPDATA_DIR / "video"
@@ -1143,6 +1143,7 @@ class Tray:
         # 設定檔
         config = config_store.load()
 
+        self.preview_size = config.get("previewSize", 3)
         self.follow_controller = FollowController(self.wallpapers, config_store)
         self.saved_follows: dict[str, str] = config.get("screenFollows", {})
         self.waiting_for_screens = bool(self.saved_follows)
@@ -1172,6 +1173,7 @@ class Tray:
             media_dir=MEDIA_DIR,
             thumbnail_dir=THUMBNAIL_DIR,
             loading_image_path=LOADING_IMAGE_PATH,
+            preview_size=self.preview_size,
             thumbnail_thread=self.thumbnail_thread
         )
         self.media_menu.aboutToShow.connect(self.refresh_media_menu)
@@ -1236,6 +1238,24 @@ class Tray:
                 lambda checked, key=config_key, attr=attribute: self.set_auto_pause_option(key, attr, checked)
             )
             self.options_menu.addAction(action)
+
+        self.options_menu.addSeparator()
+
+        preview_size_menu = self.options_menu.addMenu(tr("preview_size"))
+        preview_size_group = QActionGroup(preview_size_menu)
+        self.preview_size_actions: dict[int, QAction] = {}
+
+        for size, text_key in (
+            (5, "preview_size_largest"), (4, "preview_size_large"),
+            (3, "preview_size_normal"), (2, "preview_size_small"), (1, "preview_size_smallest"),
+        ):
+            action = QAction(tr(text_key), preview_size_menu)
+            action.setCheckable(True)
+            action.setChecked(size == self.preview_size)
+            preview_size_group.addAction(action)
+            action.triggered.connect(lambda checked, value=size: self.set_preview_size(value))
+            preview_size_menu.addAction(action)
+            self.preview_size_actions[size] = action
 
         self.options_menu.addSeparator()
 
@@ -1414,6 +1434,7 @@ class Tray:
                     media_dir=MEDIA_DIR,
                     thumbnail_dir=THUMBNAIL_DIR,
                     loading_image_path=LOADING_IMAGE_PATH,
+                    preview_size=self.preview_size,
                     thumbnail_thread=self.thumbnail_thread
                 )
                 menu.aboutToShow.connect(
@@ -1813,7 +1834,7 @@ class Tray:
 
         if worker.destination is not None:
 
-            self.thumbnail_thread.request(worker.destination)
+            self.thumbnail_thread.request(worker.destination, preview_size=self.preview_size)
             config_store.remember_recent(worker.destination)
 
             for screen_id in screen_ids:
@@ -1875,6 +1896,27 @@ class Tray:
 
         for wallpaper in self.get_wallpapers():
             setattr(wallpaper, attribute, checked)
+
+
+    def set_preview_size(self, preview_size: int) -> None:
+        """
+        保存預覽大小並套用到所有螢幕選單
+        """
+
+        if self.is_exiting or preview_size == self.preview_size:
+            self.preview_size_actions[self.preview_size].setChecked(True)
+            return
+
+        config = config_store.load()
+        config["previewSize"] = preview_size
+
+        if not config_store.save(config):
+            self.preview_size_actions[self.preview_size].setChecked(True)
+            return
+
+        self.preview_size = preview_size
+        for menu in (self.media_menu, *self.screen_menus.values()):
+            menu.set_preview_size(preview_size)
 
 
     def toggle_startup(self, checked: bool) -> None:
