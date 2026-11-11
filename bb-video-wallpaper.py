@@ -1778,6 +1778,9 @@ class Tray:
             f'{tr("media_files")} ({patterns})'
         )
 
+        if self.is_exiting:
+            return
+
         if not filename:
             self.add_media_action.setEnabled(True)
             return
