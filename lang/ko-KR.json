@@ -32,11 +32,11 @@
   "auto_pause_screen_off": "화면이 꺼지면 자동 일시 중지",
   "auto_pause_battery": "배터리 사용 시 자동 일시 중지",
   "preview_size": "미리보기 크기",
-  "preview_size_largest": "아주 크게",
-  "preview_size_large": "크게",
-  "preview_size_normal": "보통",
-  "preview_size_small": "작게",
-  "preview_size_smallest": "아주 작게",
+  "size_largest": "아주 크게",
+  "size_large": "크게",
+  "size_normal": "보통",
+  "size_small": "작게",
+  "size_smallest": "아주 작게",
   "startup": "Windows 시작 시 자동 실행",
   "already_running_message": "프로그램이 이미 백그라운드에서 실행 중입니다!\n시스템 트레이를 확인하세요"
 }

@@ -32,11 +32,11 @@
   "auto_pause_screen_off": "螢幕關閉時自動暫停",
   "auto_pause_battery": "沒插電時自動暫停",
   "preview_size": "預覽大小",
-  "preview_size_largest": "極大",
-  "preview_size_large": "大",
-  "preview_size_normal": "普通",
-  "preview_size_small": "小",
-  "preview_size_smallest": "極小",
+  "size_largest": "極大",
+  "size_large": "大",
+  "size_normal": "普通",
+  "size_small": "小",
+  "size_smallest": "極小",
   "startup": "開機自動啟動",
   "already_running_message": "程式已經在背景執行中!!\n從系統匣查看它"
 }

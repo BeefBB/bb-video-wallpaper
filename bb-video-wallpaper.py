@@ -1246,8 +1246,8 @@ class Tray:
         self.preview_size_actions: dict[int, QAction] = {}
 
         for size, text_key in (
-            (5, "preview_size_largest"), (4, "preview_size_large"),
-            (3, "preview_size_normal"), (2, "preview_size_small"), (1, "preview_size_smallest"),
+            (5, "size_largest"), (4, "size_large"),
+            (3, "size_normal"), (2, "size_small"), (1, "size_smallest"),
         ):
             action = QAction(tr(text_key), preview_size_menu)
             action.setCheckable(True)
