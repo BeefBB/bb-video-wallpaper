@@ -28,17 +28,18 @@ SUPPORTED_MEDIA_EXTENSIONS = (SUPPORTED_VIDEO_EXTENSIONS | SUPPORTED_IMAGE_EXTEN
 
 def fast_hash(path: Path) -> str:
     """
-    以大小與頭尾各 16KB 計算縮圖識別碼
+    以大小, 修改時間與頭尾各 16KB 計算縮圖識別碼
     """
 
     digest = hashlib.sha256()
     # 將縮圖演算法版本納入識別碼計算
-    digest.update(b"thumbnail-v3\0")
+    digest.update(b"thumbnail-v4\0")
 
     with path.open("rb") as file:
 
-        size = os.fstat(file.fileno()).st_size
-        digest.update(str(size).encode("ascii"))
+        file_stat = os.fstat(file.fileno())
+        size = file_stat.st_size
+        digest.update(f"{size}:{file_stat.st_mtime_ns}\0".encode("ascii"))
 
         if size <= 32 * 1024:
             digest.update(file.read())
@@ -341,7 +342,7 @@ def ensure_thumbnail(
     preview_size: int = 3
 ) -> Path:
     """
-    驗證指定尺寸的縮圖或產生 JPEG; 成功後才清除同來源舊內容的各尺寸縮圖
+    驗證指定尺寸的縮圖或產生 JPEG; 成功後才清除同來源舊版本的各尺寸縮圖
     """
 
     path = path.resolve(strict=True)
@@ -431,7 +432,7 @@ def ensure_thumbnail(
         temp_path.unlink(missing_ok=True)
 
 
-    # 相同內容的其他尺寸保留, 只清除同一來源識別碼的舊內容
+    # 同一版本來源的其他尺寸保留, 只清除同一來源識別碼的舊快取
     try:
 
         for old_path in directory.iterdir():
