@@ -62,7 +62,7 @@ def cleanup_orphaned_thumbnails(media_dir: Path, thumbnail_dir: Path) -> None:
         for name in filenames:
 
             if (
-                re.fullmatch(r"[0-9a-f]{16}-[0-9a-f]{8}-[1-5]\.jpg", name) is None or
+                re.fullmatch(r"[0-9a-f]{16}-[0-9a-f]{8}(?:-[1-5])?\.jpg", name) is None or
                 name[:16] in source_ids
             ):
                 continue
@@ -491,11 +491,8 @@ def ensure_thumbnail(
 
             if (
                 old_path.name.startswith(prefix) and
-                len(suffix) == 14 and
-                suffix[8] == "-" and suffix[9] in "12345" and
-                suffix.endswith(".jpg") and
-                all(char in "0123456789abcdef" for char in suffix[:8]) and
-                suffix[:8] != digest and
+                re.fullmatch(r"[0-9a-f]{8}(?:-[1-5])?\.jpg", suffix) is not None and
+                (len(suffix) == 12 or suffix[:8] != digest) and
                 old_path.is_file()
             ):
                 old_path.unlink()
