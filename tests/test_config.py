@@ -132,6 +132,17 @@ class ConfigTests(unittest.TestCase):
             (invalid_values, repaired),
             (json.dumps(repaired).encode("utf-8"), repaired),
         ])
+        preserved = {
+            **repaired,
+            "fontSize": 24,
+            "recentVideo": ["folder/桌布.mp4"],
+            "screenWallpapers": {"screen-a": "folder/桌布.mp4"},
+            "screenFollows": {"screen-b": "screen-a"},
+        }
+        cases.extend(
+            (json.dumps(preserved, ensure_ascii=False).encode(encoding), preserved)
+            for encoding in ("utf-8", "utf-8-sig")
+        )
         for contents, expected in cases:
             with self.subTest(contents=contents):
                 self.config_path.write_bytes(contents)

@@ -124,7 +124,7 @@ class ConfigStore:
         最多修復兩個標點, 依驗證異常數與修改數選擇唯一結果
         """
 
-        with open(self.config_path, "r", encoding="utf-8") as f:
+        with open(self.config_path, "r", encoding="utf-8-sig") as f:
             text = f.read()
 
         try:
