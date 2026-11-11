@@ -108,7 +108,7 @@ Folder/
 視窗最大化時自動暫停     | "autoPauseIfFullscreen" | true
 螢幕關閉時自動暫停       | "autoPauseIfScreenOff"  | true
 沒插電時自動暫停         | "autoPauseIfOnBattery"  | false
-字體大小                 | "fontSize"              | 11 pt, 6-48
+文字大小                 | "fontSize"              | 11 pt, 6-48
 最近紀錄顯示筆數         | "recentDisplayCount"    | 6 筆, 0-20
 預覽大小                 | "previewSize"           | 3 (普通), 1-5 對應 100-500 px
 最近使用紀錄             | "recentVideo"           | [], 0-20

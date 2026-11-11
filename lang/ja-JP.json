@@ -38,6 +38,6 @@
   "size_normal": "標準",
   "size_small": "小",
   "size_smallest": "特小",
-  "startup": "起動時に自動的に起動",
+  "startup": "Windows 起動時に自動起動",
   "already_running_message": "プログラムはすでにバックグラウンドで実行されています!!\nシステムトレイを確認してください"
 }

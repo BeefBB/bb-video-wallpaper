@@ -38,6 +38,6 @@
   "size_normal": "Normal",
   "size_small": "Small",
   "size_smallest": "Extra Small",
-  "startup": "Start on boot",
+  "startup": "Start with Windows",
   "already_running_message": "The program is already running in the background!!\nCheck the system tray"
 }

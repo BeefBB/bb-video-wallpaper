@@ -125,7 +125,7 @@ Folder/
 单文件导入文件夹 | SINGLE_IMPORT_DIR | 媒体文件夹下的 `_imports/`
 缩略图文件夹 | THUMBNAIL_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\thumbnails\`
 日志文件 |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\log\log.log`
-VLC 壁纸播放参数 |  | 关闭音频, 不显示视频标题, 重播参数 `--input-repeat=65535`
+VLC 壁纸播放参数 |  | 关闭音频, 不显示视频标题, 循环播放参数 `--input-repeat=65535`
 壁纸缩放方式 |  | 图片和视频均保持比例居中裁剪填满
 启动时选择壁纸的顺序 |  | 该屏幕保存的壁纸 > 最近记录第一条 > 媒体列表第一项, 前两者要求文件存在
 启动时延后最大化检测 | fullscreen_detection_timer | 10 s
