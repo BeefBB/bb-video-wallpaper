@@ -673,14 +673,20 @@ def is_any_fullscreen(wallpaper_hwnd: int) -> bool:
             return True
 
 
-        # Windows Shell / 桌面相關視窗不算
-        class_name = win32gui.GetClassName(hwnd)
-        if class_name in SHELL_CLASSES:
+        try:
+
+            # Windows Shell / 桌面相關視窗不算
+            class_name = win32gui.GetClassName(hwnd)
+            if class_name in SHELL_CLASSES:
+                return True
+
+
+            # 黑名單不算
+            window_title = win32gui.GetWindowText(hwnd).casefold().strip()
+
+        except win32gui.error:
+            # 列舉期間視窗可能已關閉
             return True
-
-
-        # 黑名單不算
-        window_title = win32gui.GetWindowText(hwnd).casefold().strip()
 
         if window_title in WINDOW_TITLE_BLACKLIST:
             return True
