@@ -857,6 +857,7 @@ class StartupTests(unittest.TestCase):
                     "sys": SimpleNamespace(executable=executable, argv=[str(entry), "--task"], frozen=frozen),
                     "FILE": entry, "ROOT_DIR": ROOT,
                     "APPDATA_DIR": mock.Mock(), "MEDIA_DIR": mock.Mock(),
+                    "THUMBNAIL_DIR": mock.Mock(), "cleanup_orphaned_thumbnails": mock.Mock(),
                     "CONFIG_PATH": ROOT / "unused-config.json",
                     "initialize_paths": mock.Mock(), "initialize_logging": mock.Mock(),
                     "initialize_vlc": mock.Mock(return_value=True),

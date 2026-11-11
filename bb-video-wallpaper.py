@@ -31,6 +31,7 @@ from thumbnails import (
     SUPPORTED_IMAGE_EXTENSIONS,
     SUPPORTED_MEDIA_EXTENSIONS,
     ThumbnailThread,
+    cleanup_orphaned_thumbnails,
 )
 from windows_integration import (
     check_desktop_ready,
@@ -2059,6 +2060,8 @@ def main() -> int:
         return 1
 
     LANG = config_store.load_language()
+
+    cleanup_orphaned_thumbnails(MEDIA_DIR, THUMBNAIL_DIR)
 
 
     while True:

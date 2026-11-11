@@ -10,6 +10,7 @@ import hashlib
 import logging
 import os
 from pathlib import Path
+import re
 import tempfile
 import threading
 import time
@@ -24,6 +25,55 @@ logger = logging.getLogger(__name__)
 SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".mov", ".avi",}
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp",}
 SUPPORTED_MEDIA_EXTENSIONS = (SUPPORTED_VIDEO_EXTENSIONS | SUPPORTED_IMAGE_EXTENSIONS)
+
+
+def cleanup_orphaned_thumbnails(media_dir: Path, thumbnail_dir: Path) -> None:
+    """
+    依媒體檔名清除失去來源的縮圖
+    """
+
+    for root, subdirectories, filenames in os.walk(thumbnail_dir):
+
+        directory = Path(root)
+        source_directory = media_dir / directory.relative_to(thumbnail_dir)
+
+        try:
+
+            # 略過連結目錄, 避免清理其指向的其他位置
+            if directory.resolve() != directory.absolute():
+                subdirectories.clear()
+                continue
+
+            with os.scandir(source_directory) as entries:
+                source_ids = {
+                    hashlib.sha256(entry.name.encode("utf-8")).hexdigest()[:16]
+                    for entry in entries
+                    if Path(entry.name).suffix.lower() in SUPPORTED_MEDIA_EXTENSIONS and entry.is_file()
+                }
+
+        except (FileNotFoundError, NotADirectoryError):
+            source_ids = set()
+
+        except OSError:
+            logger.warning("讀取縮圖來源目錄失敗 - %s", source_directory, exc_info=True)
+            continue
+
+
+        for name in filenames:
+
+            if (
+                re.fullmatch(r"[0-9a-f]{16}-[0-9a-f]{8}-[1-5]\.jpg", name) is None or
+                name[:16] in source_ids
+            ):
+                continue
+
+            path = directory / name
+
+            try:
+                path.unlink(missing_ok=True)
+
+            except OSError:
+                logger.warning("清除失效縮圖失敗 - %s", path, exc_info=True)
 
 
 def fast_hash(path: Path) -> str:

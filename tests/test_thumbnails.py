@@ -27,7 +27,10 @@ if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
 from app_loader import QtTestCase
-from thumbnails import ThumbnailThread, create_video_thumbnail, ensure_thumbnail, get_video_thumbnail_sizes
+from thumbnails import (
+    ThumbnailThread, cleanup_orphaned_thumbnails, create_video_thumbnail,
+    ensure_thumbnail, get_video_thumbnail_sizes,
+)
 
 
 VLC_DIR = ROOT / "VLC-lite"
@@ -272,6 +275,35 @@ class ThumbnailTests(unittest.TestCase):
 
         self.assertTrue(previous.is_file())
         self.assertFalse(list(self.thumbnail_dir.glob(".thumbnail-*.tmp")))
+
+
+    def test_cleanup_preserves_directory_after_partial_scan_failure(self) -> None:
+        """
+        來源清單讀取途中失敗時, 不以不完整清單刪除縮圖
+        """
+
+        source = self.media_dir / "sample.bmp"
+        self.save_image(source, Qt.GlobalColor.red)
+        kept = self.thumbnail(source)
+        orphan = self.thumbnail_dir / ("a" * 16 + "-deadbeef-3.jpg")
+        orphan.write_bytes(b"keep")
+        original_scandir = os.scandir
+
+        def interrupted_entries(entries):
+            yield next(entries)
+            raise PermissionError("模擬來源清單讀取途中失敗")
+
+        @contextmanager
+        def scan_directory(path):
+            with original_scandir(path) as entries:
+                yield interrupted_entries(entries) if Path(path) == self.media_dir else entries
+
+        with mock.patch("thumbnails.os.scandir", scan_directory), mock.patch("thumbnails.logger") as log:
+            cleanup_orphaned_thumbnails(self.media_dir, self.thumbnail_dir)
+
+        self.assertTrue(kept.is_file())
+        self.assertEqual(orphan.read_bytes(), b"keep")
+        log.warning.assert_called_once()
 
 
     def test_cancellation_stops_media_parsing(self) -> None:
