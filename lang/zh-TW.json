@@ -31,6 +31,7 @@
   "auto_pause_fullscreen": "視窗最大化時自動暫停",
   "auto_pause_screen_off": "螢幕關閉時自動暫停",
   "auto_pause_battery": "沒插電時自動暫停",
+  "font_size": "文字大小",
   "preview_size": "預覽大小",
   "size_largest": "極大",
   "size_large": "大",

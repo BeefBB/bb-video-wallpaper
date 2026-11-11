@@ -31,6 +31,7 @@
   "auto_pause_fullscreen": "窗口最大化时自动暂停",
   "auto_pause_screen_off": "屏幕关闭时自动暂停",
   "auto_pause_battery": "未接通电源时自动暂停",
+  "font_size": "文字大小",
   "preview_size": "预览大小",
   "size_largest": "极大",
   "size_large": "大",

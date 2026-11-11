@@ -31,6 +31,7 @@
   "auto_pause_fullscreen": "Pause when a window is maximized",
   "auto_pause_screen_off": "Pause when the screen is off",
   "auto_pause_battery": "Pause when on battery",
+  "font_size": "Text Size",
   "preview_size": "Preview Size",
   "size_largest": "Extra Large",
   "size_large": "Large",

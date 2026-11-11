@@ -31,6 +31,7 @@
   "auto_pause_fullscreen": "창이 최대화되면 자동 일시 중지",
   "auto_pause_screen_off": "화면이 꺼지면 자동 일시 중지",
   "auto_pause_battery": "배터리 사용 시 자동 일시 중지",
+  "font_size": "글자 크기",
   "preview_size": "미리보기 크기",
   "size_largest": "아주 크게",
   "size_large": "크게",

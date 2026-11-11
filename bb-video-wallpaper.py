@@ -1143,6 +1143,7 @@ class Tray:
         # 設定檔
         config = config_store.load()
 
+        self.font_size = config.get("fontSize", 11)
         self.preview_size = config.get("previewSize", 3)
         self.follow_controller = FollowController(self.wallpapers, config_store)
         self.saved_follows: dict[str, str] = config.get("screenFollows", {})
@@ -1240,6 +1241,22 @@ class Tray:
             self.options_menu.addAction(action)
 
         self.options_menu.addSeparator()
+
+        font_size_menu = self.options_menu.addMenu(tr("font_size"))
+        font_size_group = QActionGroup(font_size_menu)
+        self.font_size_actions: dict[int, QAction] = {}
+
+        for size, text_key in (
+            (24, "size_largest"), (19, "size_large"),
+            (15, "size_normal"), (11, "size_small"), (9, "size_smallest"),
+        ):
+            action = QAction(tr(text_key), font_size_menu)
+            action.setCheckable(True)
+            action.setChecked(size == self.font_size)
+            font_size_group.addAction(action)
+            action.triggered.connect(lambda checked, value=size: self.set_font_size(value))
+            font_size_menu.addAction(action)
+            self.font_size_actions[size] = action
 
         preview_size_menu = self.options_menu.addMenu(tr("preview_size"))
         preview_size_group = QActionGroup(preview_size_menu)
@@ -1896,6 +1913,25 @@ class Tray:
 
         for wallpaper in self.get_wallpapers():
             setattr(wallpaper, attribute, checked)
+
+
+    def set_font_size(self, font_size: int) -> None:
+        """
+        保存文字大小並即時套用到應用程式
+        """
+
+        if not self.is_exiting and font_size != self.font_size:
+            config = config_store.load()
+            config["fontSize"] = font_size
+
+            if config_store.save(config):
+                self.font_size = font_size
+                font = self.app.font()
+                font.setPointSize(font_size)
+                self.app.setFont(font)
+
+        for size, action in self.font_size_actions.items():
+            action.setChecked(size == self.font_size)
 
 
     def set_preview_size(self, preview_size: int) -> None:

@@ -31,6 +31,7 @@
   "auto_pause_fullscreen": "ウィンドウを最大化したときに自動的に一時停止",
   "auto_pause_screen_off": "画面がオフのときに自動的に一時停止",
   "auto_pause_battery": "バッテリー駆動時に自動的に一時停止",
+  "font_size": "文字サイズ",
   "preview_size": "プレビューサイズ",
   "size_largest": "特大",
   "size_large": "大",
