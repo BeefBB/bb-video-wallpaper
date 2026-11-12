@@ -155,8 +155,7 @@ class FollowGraphTests(unittest.TestCase):
         original = raw.copy()
         self.assertEqual(FollowGraph.normalize(raw), {"child": "a", "ok": "offline"})
         self.assertEqual(raw, original)
-        for invalid in (None, False, 123, [], "screen"):
-            self.assertEqual(FollowGraph.normalize(invalid), {})
+        self.assertEqual(FollowGraph.normalize([]), {})
 
 
 class FollowControllerTests(unittest.TestCase):

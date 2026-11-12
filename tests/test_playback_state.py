@@ -1186,32 +1186,6 @@ class PlaybackStateTests(QtTestCase):
         self.assertEqual((self.player.state, self.player.position), ("paused", 4321))
 
 
-    def test_unregister_failure_logs_native_error_and_releases_handle_once(self) -> None:
-        """
-        驗證原生取消通知回傳失敗時記錄錯誤, 清除 handle 且不重複取消
-        """
-
-        handle = 2**40 + 1
-        self.wallpaper.power_notify = handle
-        self.namespace["unregister_power_notification"].side_effect = windows.unregister_power_notification
-
-        with (
-            mock.patch.object(windows.ctypes.windll.user32, "UnregisterPowerSettingNotification", return_value=0) as unregister,
-            mock.patch.object(windows.ctypes, "GetLastError", return_value=6) as last_error,
-            mock.patch.object(windows, "logger") as logger,
-        ):
-            self.unregister_power_notification(self.wallpaper)
-            self.unregister_power_notification(self.wallpaper)
-
-        unregister.assert_called_once_with(handle)
-        last_error.assert_called_once_with()
-        logger.warning.assert_called_once()
-
-        self.namespace["unregister_power_notification"].assert_called_once_with(handle)
-        self.assertIsNone(self.wallpaper.power_notify)
-        self.namespace["logger"].exception.assert_not_called()
-
-
     def test_image_reattach_rebinds_without_reload_or_vlc_seek(self) -> None:
         """
         驗證圖片重掛只解除與重新綁定視窗, 保留顯示狀態且不重讀圖片或操作影片
@@ -1322,6 +1296,9 @@ class PlaybackStateTests(QtTestCase):
         listener = self.wallpaper.desktop_events
         listener.taskbar_created.emit()
         instance = self.wallpaper.instance_vlc
+        handle = 2**40 + 1
+        self.wallpaper.power_notify = handle
+        self.wallpaper.unregister_power_notification.side_effect = lambda: self.unregister_power_notification(self.wallpaper)
 
         with (
             mock.patch.object(self.player, "stop", wraps=self.player.stop) as stop,
@@ -1335,6 +1312,7 @@ class PlaybackStateTests(QtTestCase):
 
             self.wallpaper.shutdown()
             self.wallpaper.shutdown()
+            self.wallpaper.unregister_power_notification()
             # 模擬解除事件註冊後仍抵達的原生回呼
             playing_callback(None)
             self.wallpaper.on_taskbar_created()
@@ -1355,6 +1333,9 @@ class PlaybackStateTests(QtTestCase):
         listener.close.assert_called_once_with()
         self.wallpaper.attach_to_desktop.assert_not_called()
         self.tray.app.quit.assert_not_called()
+        self.namespace["unregister_power_notification"].assert_called_once_with(handle)
+        self.assertIsNone(self.wallpaper.power_notify)
+        self.namespace["logger"].exception.assert_not_called()
 
 
     def test_shutdown_continues_after_listener_stop_image_and_player_release_failures(self) -> None:

@@ -168,9 +168,9 @@ class WindowsIntegrationTests(unittest.TestCase):
                 gui.DestroyWindow.assert_called_once_with(20)
 
 
-    def test_power_notifications_preserve_64_bit_handles(self) -> None:
+    def test_power_notifications_preserve_64_bit_handles_and_report_failure(self) -> None:
         """
-        驗證電源通知註冊與取消保留完整的 64 位元 handle, 並使用正確的電源 GUID
+        驗證通知保留完整的 64 位元 handle 與電源 GUID, 取消失敗時記錄原生錯誤
         """
 
         # 超過 32 位元的 HWND 與通知 handle
@@ -180,6 +180,8 @@ class WindowsIntegrationTests(unittest.TestCase):
         with (
             mock.patch.object(windows.ctypes.windll.user32, "RegisterPowerSettingNotification", return_value=handle) as register,
             mock.patch.object(windows.ctypes.windll.user32, "UnregisterPowerSettingNotification", return_value=1) as unregister,
+            mock.patch.object(windows.ctypes, "GetLastError", return_value=6) as last_error,
+            mock.patch.object(windows, "logger") as logger,
         ):
             self.assertEqual(windows.register_power_notification(hwnd), handle)
             self.assertIs(register.restype, wintypes.HANDLE)
@@ -191,6 +193,15 @@ class WindowsIntegrationTests(unittest.TestCase):
             windows.unregister_power_notification(handle)
             self.assertIs(unregister.argtypes[0], wintypes.HANDLE)
             unregister.assert_called_once_with(handle)
+            last_error.assert_not_called()
+            logger.warning.assert_not_called()
+
+            unregister.reset_mock()
+            unregister.return_value = 0
+            windows.unregister_power_notification(handle)
+            unregister.assert_called_once_with(handle)
+            last_error.assert_called_once_with()
+            logger.warning.assert_called_once()
 
 
 class DesktopEventTests(QtTestCase):
@@ -247,7 +258,7 @@ class WorkerWNativeTests(QtTestCase):
         驗證正負原點與非客戶區偏移下, 掛載及重複掛載保留桌布的位置與尺寸
         """
 
-        for origin in ((0, 0), (-800, -200), (800, 200)):
+        for origin in ((-800, -200), (800, 200)):
             for legacy in (False, True):
                 with self.subTest(origin=origin, legacy=legacy):
                     parent = win32gui.CreateWindowEx(

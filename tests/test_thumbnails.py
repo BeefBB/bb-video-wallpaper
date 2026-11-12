@@ -1,5 +1,5 @@
 """
-測試快取檔案保護, 排程時序, 特殊影片解碼與取消
+測試快取檔案保護, 排程時序, 預覽回傳, 特殊影片解碼與取消
 影片案例需要 Windows, VLC-lite 與 ffmpeg; 缺少時顯示跳過
 只在暫存資料夾操作, 不啟動桌布或修改使用者設定
 """
@@ -17,8 +17,8 @@ import threading
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QImage, QImageWriter
+from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtGui import QAction, QColor, QImage, QImageWriter
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +27,7 @@ if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
 from app_loader import QtTestCase
+import media_preview
 from thumbnails import (
     ThumbnailThread, cleanup_orphaned_thumbnails, create_video_thumbnail,
     ensure_thumbnail, get_video_thumbnail_sizes,
@@ -234,9 +235,9 @@ class ThumbnailTests(unittest.TestCase):
         self.assertTrue(directory.is_dir())
 
 
-    def test_write_failure_preserves_cache_and_removes_temp(self) -> None:
+    def test_save_failure_preserves_cache_and_removes_temp(self) -> None:
         """
-        寫入暫存檔後失敗時保留舊快取並關閉及清除暫存檔
+        寫入或替換失敗時保留舊快取內容並關閉及清除暫存檔
         """
 
         source = self.media_dir / "sample.bmp"
@@ -250,30 +251,17 @@ class ThumbnailTests(unittest.TestCase):
             self.assertTrue(original_write(writer, image))
             return False
 
-        with mock.patch.object(QImageWriter, "write", fail_after_write):
-            with self.assertRaisesRegex(OSError, "無法儲存縮圖"):
-                self.thumbnail(source)
-
-        self.assertEqual(previous.read_bytes(), previous_content)
-        self.assertEqual(list(self.thumbnail_dir.iterdir()), [previous])
-
-
-    def test_replace_failure_preserves_cache_and_removes_temp(self) -> None:
-        """
-        替換快取失敗時保留舊檔並清除暫存檔
-        """
-
-        source = self.media_dir / "sample.bmp"
-        self.save_image(source, Qt.GlobalColor.red)
-        previous = self.thumbnail(source)
-        self.save_image(source, Qt.GlobalColor.blue)
-
-        with mock.patch.object(os, "replace", side_effect=PermissionError):
-            with self.assertRaises(PermissionError):
-                self.thumbnail(source)
-
-        self.assertTrue(previous.is_file())
-        self.assertFalse(list(self.thumbnail_dir.glob(".thumbnail-*.tmp")))
+        for stage, patcher, expected_error in (
+            ("write", mock.patch.object(QImageWriter, "write", fail_after_write),
+             self.assertRaisesRegex(OSError, "無法儲存縮圖")),
+            ("replace", mock.patch.object(os, "replace", side_effect=PermissionError),
+             self.assertRaises(PermissionError)),
+        ):
+            with self.subTest(stage=stage):
+                with patcher, expected_error:
+                    self.thumbnail(source)
+                self.assertEqual(previous.read_bytes(), previous_content)
+                self.assertEqual(list(self.thumbnail_dir.iterdir()), [previous])
 
 
     def test_cleanup_preserves_directory_after_partial_scan_failure(self) -> None:
@@ -388,6 +376,157 @@ class ThumbnailThreadTests(QtTestCase):
             (first, 3), (queued, 3), (newest, 3), (first, 4), (ordinary, 3), (last, 3)
         ])
 
+
+
+class ThumbnailWorker(QObject):
+    """
+    由測試控制縮圖結果訊號
+    """
+
+    thumbnail_ready = Signal(str, int, QImage)
+
+
+class MediaPreviewTests(QtTestCase):
+    """
+    縮圖回傳的有效性與 Qt 執行緒邊界
+    """
+
+    def setUp(self) -> None:
+        """
+        建立隱藏預覽選單與縮圖訊號替身, 預設第一個媒體項目正在預覽
+        """
+
+        super().setUp()
+
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.media_dir = directory / "media"
+        self.thumbnail_dir = directory / "thumbnails"
+        self.loading_path = directory / "loading.png"
+        self.worker = ThumbnailWorker()
+        self.enterContext(mock.patch.object(media_preview, "ThumbnailThread", return_value=self.worker))
+        self.menu = media_preview.MediaPreviewMenu(
+            "Media", media_dir=self.media_dir, thumbnail_dir=self.thumbnail_dir,
+            loading_image_path=self.loading_path
+        )
+        self.menu.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
+        self.menu.preview.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
+        self.addCleanup(self.dispose_menu)
+        self.first = self.add_media_action("first.mp4")
+        self.second = self.add_media_action("second.mp4")
+        self.menu.preview_action = self.first
+        self.menu.preview_mode = True
+        self.menu.preview_pixmap = self.menu.loading_pixmap
+        self.display_preview_mock = mock.Mock()
+        self.menu.display_preview = self.display_preview_mock
+
+
+    def dispose_menu(self) -> None:
+        """
+        停止預覽並釋放選單與縮圖工作物件
+        """
+
+        self.menu.reset_preview()
+        self.menu.close()
+        self.menu.deleteLater()
+        self.worker.deleteLater()
+
+
+    def add_media_action(self, name):
+        """
+        建立帶有媒體路徑的選單項目
+        """
+
+        action = QAction(name, self.menu)
+        action.setData(str(self.media_dir / name))
+        self.menu.addAction(action)
+        return action
+
+
+    def thumbnail(self):
+        """
+        建立背景回傳的測試縮圖
+        """
+
+        image = QImage(120, 60, QImage.Format.Format_RGB32)
+        image.fill(Qt.GlobalColor.blue)
+        return image
+
+
+    def test_stale_null_and_inactive_results_do_not_replace_preview(self) -> None:
+        """
+        過期, 空白與預覽結束後的結果不更新畫面
+        """
+
+        self.menu.preview_action = self.second
+        loading_key = self.menu.preview_pixmap.cacheKey()
+
+        self.worker.thumbnail_ready.emit(self.first.data(), 3, self.thumbnail())
+        self.assertEqual(self.menu.preview_pixmap.cacheKey(), loading_key)
+
+        self.worker.thumbnail_ready.emit(self.second.data(), 3, QImage())
+        self.assertEqual(self.menu.preview_pixmap.cacheKey(), loading_key)
+
+        self.menu.reset_preview()
+        self.worker.thumbnail_ready.emit(self.second.data(), 3, self.thumbnail())
+        self.assertEqual(self.menu.preview_pixmap.cacheKey(), loading_key)
+        self.assertTrue(self.menu.preview.isHidden())
+
+
+    def test_size_change_ignores_queued_result_for_same_media(self) -> None:
+        """
+        同媒體的舊尺寸結果已排入 Qt 佇列時, 切換尺寸後不覆蓋新結果
+        """
+
+        old_image = self.thumbnail()
+        old_image.fill(Qt.GlobalColor.red)
+        thread = threading.Thread(
+            target=lambda: self.worker.thumbnail_ready.emit(self.first.data(), 3, old_image)
+        )
+        thread.start()
+        thread.join(timeout=5)
+        self.assertFalse(thread.is_alive())
+
+        self.menu.set_preview_size(4)
+        self.assertEqual(self.menu.loading_pixmap.width(), 400)
+        self.menu.preview_action = self.first
+        self.menu.preview_mode = True
+        self.worker.thumbnail_ready.emit(self.first.data(), 4, self.thumbnail())
+        self.app.processEvents()
+
+        self.display_preview_mock.assert_called_once_with()
+        self.assertEqual(self.menu.preview_pixmap.toImage().pixelColor(0, 0), QColor("blue"))
+
+
+    def test_background_result_updates_preview_on_qt_main_thread(self) -> None:
+        """
+        背景縮圖結果由 Qt 主執行緒更新預覽
+        """
+
+        displayed_on = []
+        display = self.menu.display_preview
+
+        def record_display():
+            """
+            記錄預覽顯示回呼的執行緒, 再呼叫顯示替身
+            """
+
+            displayed_on.append(threading.get_ident())
+            display()
+
+        self.menu.display_preview = record_display
+        image = self.thumbnail()
+        media_path = self.first.data()
+        thread = threading.Thread(target=lambda: self.worker.thumbnail_ready.emit(media_path, 3, image))
+        thread.start()
+        thread.join(timeout=5)
+        self.assertFalse(thread.is_alive())
+        # 尚未處理 Qt 事件佇列
+        self.assertEqual(displayed_on, [])
+
+        self.app.processEvents()
+
+        self.assertEqual(displayed_on, [threading.get_ident()])
+        self.assertEqual(self.menu.preview_pixmap.toImage().pixelColor(0, 0), QColor("blue"))
 
 
 @unittest.skipUnless(
