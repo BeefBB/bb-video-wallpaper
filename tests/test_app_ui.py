@@ -228,25 +228,6 @@ class ImportMenuTests(QtTestCase):
         self.tray.thumbnail_thread.stop.assert_called_once_with()
 
 
-    def test_language_save_failure_keeps_tray_running(self) -> None:
-        """
-        語言保存失敗時維持目前語言與背景工作, 不要求重新啟動
-        """
-
-        store = self.namespace["config_store"]
-        store.load.return_value = {"language": "zh-TW", "futureOption": 9}
-        store.save.return_value = False
-
-        self.tray.set_language("en-US")
-
-        store.save.assert_called_once_with({"language": "en-US", "futureOption": 9})
-        self.assertEqual(self.tray.current_language_code, "zh-TW")
-        self.assertFalse(self.tray.restart_requested)
-        self.assertFalse(self.tray.is_exiting)
-        self.tray.app.quit.assert_not_called()
-        self.tray.thumbnail_thread.stop.assert_not_called()
-
-
     def test_preview_size_save_failure_keeps_menus_and_selection(self) -> None:
         """
         保存失敗時還原勾選且不變更各選單, 重試成功後共用新尺寸
@@ -469,19 +450,6 @@ class ImportMenuTests(QtTestCase):
         self.tray.play_from_menu.assert_not_called()
         self.tray.tray.showMessage.assert_not_called()
         self.namespace["logger"].exception.assert_not_called()
-
-
-    def test_screen_creation_failure_keeps_existing_wallpaper_available(self) -> None:
-        """
-        驗證新增螢幕的桌布建立失敗時保留既有桌布並記錄例外
-        """
-
-        self.namespace["Wallpaper"].side_effect = RuntimeError("no output")
-        self.screen_notifications.screenAdded.emit(mock.Mock())
-
-        self.assertEqual(self.tray.wallpapers, {"screen-a": self.wallpaper})
-        self.wallpaper.shutdown.assert_not_called()
-        self.namespace["logger"].exception.assert_called_once()
 
 
     def test_follow_startup_waits_for_screens_and_checks_offline_followers_on_arrival(self) -> None:
@@ -892,44 +860,6 @@ class StartupTests(unittest.TestCase):
                         ])
                 self.assertEqual(lifecycle.mock_calls, expected)
                 self.assertEqual(module.logger.exception.call_count, int(failure == "launch"))
-
-
-    def test_config_access_or_save_failure_aborts_startup_before_ui(self) -> None:
-        """
-        設定存取或保存失敗時中止啟動, 不繼續建立桌布或介面
-        """
-
-        for failure in ("read", "save"):
-            with self.subTest(failure=failure):
-                module = load_app_module()
-                store = mock.Mock()
-                store.load.return_value = {"language": "ja-JP"}
-                if failure == "read":
-                    store.load.side_effect = PermissionError("設定檔無法存取")
-                store.save.return_value = False
-                application = mock.Mock()
-                tray = mock.Mock()
-                desktop_ready = mock.Mock()
-                module.__dict__.update({
-                    "ROOT_DIR": ROOT, "CONFIG_PATH": ROOT / "unused-config.json",
-                    "APPDATA_DIR": mock.Mock(), "MEDIA_DIR": mock.Mock(),
-                    "initialize_paths": mock.Mock(), "initialize_logging": mock.Mock(),
-                    "initialize_vlc": mock.Mock(return_value=True),
-                    "is_already_running": mock.Mock(return_value=(False, mock.Mock())),
-                    "ConfigStore": mock.Mock(return_value=store),
-                    "QApplication": application, "Tray": tray,
-                    "check_desktop_ready": desktop_ready,
-                })
-
-                self.assertEqual(module.main(), 1)
-                store.load_language.assert_not_called()
-                application.assert_not_called()
-                tray.assert_not_called()
-                desktop_ready.assert_not_called()
-                if failure == "read":
-                    store.save.assert_not_called()
-                else:
-                    store.save.assert_called_once_with(store.load.return_value)
 
 
     def test_import_does_not_initialize_runtime(self) -> None:

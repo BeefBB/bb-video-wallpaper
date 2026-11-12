@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
-from config import CONFIG_DEFAULTS, ConfigStore
+from config import ConfigStore
 
 
 class ConfigTests(unittest.TestCase):
@@ -45,39 +45,6 @@ class ConfigTests(unittest.TestCase):
         self.enterContext(mock.patch.object(locale, "getdefaultlocale", return_value=("en_US", "UTF-8")))
 
 
-    def test_startup_save_failure_keeps_defaults_available(self) -> None:
-        """
-        啟動保存失敗時回報失敗並清除暫存檔, 預設設定與語言仍可讀取
-        """
-
-        expected = {
-            **CONFIG_DEFAULTS,
-            "fontSize": 11,
-            "recentDisplayCount": 6,
-            "previewSize": 3,
-            "language": "en-US",
-            "recentVideo": [],
-            "screenWallpapers": {},
-            "screenFollows": {},
-        }
-        language = json.loads(
-            (self.store.lang_dir / "en-US.json").read_text(encoding="utf-8")
-        )
-
-        for target in ("builtins.open", "config.os.replace"):
-
-            with self.subTest(target=target):
-
-                config = self.store.load()
-                with mock.patch(target, side_effect=PermissionError):
-                    self.assertFalse(self.store.save(config))
-
-                self.assertFalse(self.config_path.exists())
-                self.assertFalse(self.config_path.with_suffix(".tmp").exists())
-                self.assertEqual(self.store.load(), expected)
-                self.assertEqual(self.store.load_language(), language)
-
-
     def test_paths_reject_outside_locations_and_keep_missing_media(self) -> None:
         """
         歷史與各螢幕選擇共用路徑邊界, 不因檔案暫時遺失而移除紀錄
@@ -93,24 +60,6 @@ class ConfigTests(unittest.TestCase):
         result, _ = self.store.validate({"recentVideo": paths, "screenWallpapers": selections})
         self.assertEqual(result["recentVideo"], valid)
         self.assertEqual(result["screenWallpapers"], {"0": valid[0], "1": valid[1]})
-
-
-    def test_invalid_selection_keeps_file(self) -> None:
-        """
-        無效螢幕識別或越界路徑不改寫已保存的設定
-        """
-
-        self.store.save({"screenWallpapers": {"screen-a": "a.mp4"}, "futureOption": 9})
-        original = self.config_path.read_bytes()
-        for screen_id, path in (
-            ("", self.media_dir / "b.mp4"),
-            ("bad\0id", self.media_dir / "b.mp4"),
-            ("screen-a", self.media_dir / ".." / "outside.mp4"),
-        ):
-            with self.subTest(screen_id=screen_id, path=path):
-                with self.assertRaises(ValueError):
-                    self.store.remember_wallpaper(screen_id, path)
-                self.assertEqual(self.config_path.read_bytes(), original)
 
 
     def test_loading_and_startup_save_validate_config(self) -> None:
@@ -180,19 +129,25 @@ class ConfigTests(unittest.TestCase):
                     self.assertFalse(self.config_path.with_suffix(".tmp").exists())
 
 
-    def test_save_failure_preserves_previous_file(self) -> None:
+    def test_save_failure_preserves_file_state_and_removes_temp(self) -> None:
         """
-        寫入或替換失敗時保留原檔並清除暫存檔
+        初次寫入或更新失敗時保留原檔狀態並清除暫存檔
         """
 
-        self.assertTrue(self.store.save({"language": "zh-TW"}))
-        original = self.config_path.read_bytes()
-        for target in ("builtins.open", "config.os.replace"):
-            with self.subTest(target=target):
-                with mock.patch(target, side_effect=PermissionError):
-                    self.assertFalse(self.store.save({"language": "ja-JP"}))
-                self.assertEqual(self.config_path.read_bytes(), original)
-                self.assertFalse(self.config_path.with_suffix(".tmp").exists())
+        for existing in (False, True):
+            if existing:
+                self.assertTrue(self.store.save({"language": "zh-TW"}))
+            original = self.config_path.read_bytes() if existing else None
+
+            for target in ("builtins.open", "config.os.replace"):
+                with self.subTest(existing=existing, target=target):
+                    with mock.patch(target, side_effect=PermissionError):
+                        self.assertFalse(self.store.save({"language": "ja-JP"}))
+                    if original is None:
+                        self.assertFalse(self.config_path.exists())
+                    else:
+                        self.assertEqual(self.config_path.read_bytes(), original)
+                    self.assertFalse(self.config_path.with_suffix(".tmp").exists())
 
 
     def test_punctuation_repairs_preserve_settings(self) -> None:

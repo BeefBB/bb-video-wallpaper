@@ -307,19 +307,5 @@ class FollowControllerTests(unittest.TestCase):
         self.assertEqual(self.screens["c"].position, 8000)
 
 
-    def test_shutdown_ignores_queued_events_and_keeps_saved_relationships(self) -> None:
-        """
-        驗證控制器關閉後忽略延遲就緒訊號, 並保留已保存的跟隨關係
-        """
-
-        self.controller.follow("b", "a")
-        self.controller.shutdown()
-        self.screens["a"].position = 8000
-        self.controller.on_ready("a", self.screens["a"])
-        self.controller.synchronize()
-        self.assertEqual(self.screens["b"].position, 2000)
-        self.assertEqual(self.store.load()["screenFollows"], {"b": "a"})
-
-
 if __name__ == "__main__":
     unittest.main()

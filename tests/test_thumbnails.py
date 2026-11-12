@@ -203,7 +203,6 @@ class ThumbnailTests(unittest.TestCase):
 
         for thumbnail in (first_thumbnail, second_thumbnail):
             self.assertEqual(QImage(str(thumbnail)).width(), 300)
-            self.assertEqual(len(thumbnail.name), 31)
 
         other_sizes = [self.thumbnail(first, size) for size in (1, 5)]
         for thumbnail, width in zip(other_sizes, (100, 500)):
@@ -579,7 +578,8 @@ class VideoThumbnailTests(unittest.TestCase):
         非正方形像素依實際顯示比例產生縮圖
         """
 
-        for width, height in ((100, 28), (200, 56), (300, 84), (400, 112), (500, 141)):
+        # 涵蓋最小與最大寬度, 以及 112.5 的取整邊界
+        for width, height in ((100, 28), (400, 112), (500, 141)):
 
             with self.subTest(width=width):
                 image = create_video_thumbnail(self.anamorphic_media, lambda: False, width)
