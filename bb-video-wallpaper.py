@@ -1723,8 +1723,13 @@ class Tray:
         """
 
         menu = self.media_menu if menu is None else menu
+        menu.setToolTipsVisible(True)
+
         wallpaper = self.wallpapers.get(screen_id) if screen_id is not None else None
-        action = QAction(media_path.name, menu)
+
+        name = media_path.name
+        action = QAction(name if len(name) <= 40 else name[:32] + "..", menu)
+        action.setToolTip(name)
         action.setData(str(media_path))
 
         action.triggered.connect(

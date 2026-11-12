@@ -5,8 +5,8 @@
 
 from pathlib import Path
 
-from PySide6.QtWidgets import QApplication, QLabel, QMenu, QWidget
-from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Slot
+from PySide6.QtWidgets import QApplication, QLabel, QMenu, QToolTip, QWidget
+from PySide6.QtCore import QEvent, QRectF, QSize, Qt, QTimer, Slot
 from PySide6.QtGui import QAction, QCursor, QImage, QPainter, QPixmap, QScreen
 
 from thumbnails import ThumbnailThread
@@ -90,6 +90,19 @@ class MediaPreviewMenu(QMenu):
             width, Qt.TransformationMode.SmoothTransformation
         )
         self.preview_pixmap = self.loading_pixmap
+
+
+    def event(self, event) -> bool:
+
+        if event.type() == QEvent.Type.ToolTip:
+            action = self.actionAt(event.pos())
+
+            # 空提示會回退到項目文字, 因此直接略過未截斷項目的提示事件
+            if action is None or action.data() is None or action.text() == action.toolTip():
+                QToolTip.hideText()
+                return True
+
+        return super().event(event)
 
 
     def mouseMoveEvent(self, event) -> None:
