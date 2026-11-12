@@ -1,11 +1,12 @@
 """
-測試匯入與預覽的非同步競態, 以及主程式匯入邊界
+測試匯入與預覽的非同步競態, 重啟與主程式匯入邊界
 使用真正的 Qt 選單, 訊號佇列與工作執行緒, 不顯示系統匣或啟動桌布
 """
 
 from pathlib import Path
 import os
 import sys
+from types import SimpleNamespace
 import tempfile
 import threading
 import time
@@ -34,7 +35,10 @@ class PreviewMenu(QMenu):
     使用模擬縮圖工作的 Qt 選單
     """
 
-    def __init__(self, title, parent, *, media_dir, thumbnail_dir, loading_image_path, thumbnail_thread=None):
+    def __init__(
+        self, title, parent, *, media_dir, thumbnail_dir, loading_image_path,
+        preview_size=3, thumbnail_thread=None
+    ):
         """
         建立 Qt 選單, 保存共用縮圖工作物件並替換預覽重設操作
         """
@@ -42,6 +46,8 @@ class PreviewMenu(QMenu):
         super().__init__(title, parent)
         self.thumbnail_thread = thumbnail_thread if thumbnail_thread is not None else mock.Mock()
         self.reset_preview = mock.Mock()
+        self.preview_size = preview_size
+        self.set_preview_size = mock.Mock(side_effect=lambda size: setattr(self, "preview_size", size))
 
 
 class ScreenNotifications(QObject):
@@ -86,7 +92,7 @@ class ImportMenuTests(QtTestCase):
             "ICON_PATH": ROOT / "icon" / "bb-video-wallpaper.ico",
             "MEDIA_DIR": ROOT / "test-media",
             "THUMBNAIL_DIR": ROOT / "test-thumbnails",
-            "LOADING_IMAGE_PATH": ROOT / "icon" / "loading.jpg",
+            "LOADING_IMAGE_PATH": ROOT / "icon" / "loading300.jpg",
             "SINGLE_IMPORT_DIR": ROOT / "video" / "_imports",
             "LANG": {"importing_media": "{percent}%"},
             "SUPPORTED_MEDIA_EXTENSIONS": {".mp4", ".png"},
@@ -206,7 +212,7 @@ class ImportMenuTests(QtTestCase):
         return self.destination
 
 
-    def test_exit_delegates_cleanup_and_quits_even_if_shutdown_fails(self):
+    def test_exit_delegates_cleanup_and_quits_even_if_shutdown_fails(self) -> None:
         """
         驗證單一桌布清理失敗仍會清理其他桌布並退出, 重複退出不重複清理
         """
@@ -222,7 +228,112 @@ class ImportMenuTests(QtTestCase):
         self.tray.thumbnail_thread.stop.assert_called_once_with()
 
 
-    def test_cancel_ignores_late_progress_and_allows_retry_on_main_thread(self):
+    def test_language_save_failure_keeps_tray_running(self) -> None:
+        """
+        語言保存失敗時維持目前語言與背景工作, 不要求重新啟動
+        """
+
+        store = self.namespace["config_store"]
+        store.load.return_value = {"language": "zh-TW", "futureOption": 9}
+        store.save.return_value = False
+
+        self.tray.set_language("en-US")
+
+        store.save.assert_called_once_with({"language": "en-US", "futureOption": 9})
+        self.assertEqual(self.tray.current_language_code, "zh-TW")
+        self.assertFalse(self.tray.restart_requested)
+        self.assertFalse(self.tray.is_exiting)
+        self.tray.app.quit.assert_not_called()
+        self.tray.thumbnail_thread.stop.assert_not_called()
+
+
+    def test_preview_size_save_failure_keeps_menus_and_selection(self) -> None:
+        """
+        保存失敗時還原勾選且不變更各選單, 重試成功後共用新尺寸
+        """
+
+        self.add_screen("screen-b")
+        menus = (self.tray.media_menu, *self.tray.screen_menus.values())
+        store = self.namespace["config_store"]
+        store.load.return_value = {"previewSize": 3, "futureOption": 9}
+        store.save.return_value = False
+
+        self.tray.preview_size_actions[4].trigger()
+
+        store.save.assert_called_once_with({"previewSize": 4, "futureOption": 9})
+        self.assertEqual(self.tray.preview_size, 3)
+        self.assertTrue(self.tray.preview_size_actions[3].isChecked())
+        self.assertFalse(self.tray.preview_size_actions[4].isChecked())
+        for menu in menus:
+            menu.set_preview_size.assert_not_called()
+
+        store.save.return_value = True
+        self.tray.preview_size_actions[4].trigger()
+
+        self.assertEqual(self.tray.preview_size, 4)
+        for menu in menus:
+            menu.set_preview_size.assert_called_once_with(4)
+
+
+    def test_language_restart_ignores_queued_changes_during_shutdown(self) -> None:
+        """
+        清理期間處理延遲選單訊號時, 不覆寫語言或轉為還原預設
+        """
+
+        store = self.namespace["config_store"]
+        store.load.return_value = {"language": "zh-TW", "futureOption": 9}
+        store.save.return_value = True
+        action = QAction(self.menu)
+        action.triggered.connect(
+            lambda checked=False: self.tray.set_language("ko-KR"),
+            Qt.ConnectionType.QueuedConnection
+        )
+        action.triggered.connect(
+            lambda checked=False: self.tray.reset_defaults(),
+            Qt.ConnectionType.QueuedConnection
+        )
+        action.trigger()
+        self.wallpaper.shutdown.side_effect = self.app.processEvents
+
+        self.tray.set_language("en-US")
+
+        store.save.assert_called_once_with({"language": "en-US", "futureOption": 9})
+        self.assertEqual(self.tray.current_language_code, "en-US")
+        self.assertTrue(self.tray.restart_requested)
+        self.assertFalse(self.tray.reset_requested)
+        self.tray.app.quit.assert_called_once_with()
+        self.wallpaper.shutdown.assert_called_once_with()
+
+
+    def test_reset_request_defers_writes_and_ignores_queued_changes(self) -> None:
+        """
+        還原要求只先清理, 延遲語言與還原訊號不寫入設定或重複退出
+        """
+
+        action = QAction(self.menu)
+        action.triggered.connect(
+            lambda checked=False: self.tray.set_language("ko-KR"),
+            Qt.ConnectionType.QueuedConnection
+        )
+        action.triggered.connect(
+            lambda checked=False: self.tray.reset_defaults(),
+            Qt.ConnectionType.QueuedConnection
+        )
+        action.trigger()
+        self.wallpaper.shutdown.side_effect = self.app.processEvents
+
+        self.tray.reset_defaults()
+
+        self.assertTrue(self.tray.restart_requested)
+        self.assertTrue(self.tray.reset_requested)
+        self.assertEqual(self.tray.current_language_code, "zh-TW")
+        self.namespace["config_store"].save.assert_not_called()
+        self.namespace["delete_task"].assert_not_called()
+        self.tray.app.quit.assert_called_once_with()
+        self.wallpaper.shutdown.assert_called_once_with()
+
+
+    def test_cancel_ignores_late_progress_and_allows_retry_on_main_thread(self) -> None:
         """
         驗證背景進度由主執行緒更新, 取消後忽略延遲進度且可重新匯入
         """
@@ -274,7 +385,7 @@ class ImportMenuTests(QtTestCase):
         self.tray.play_from_menu.assert_called_once_with(self.destination, "screen-a")
 
 
-    def test_completed_import_waits_for_reattach_and_plays_only_once(self):
+    def test_completed_import_waits_for_reattach_and_plays_only_once(self) -> None:
         """
         驗證匯入結果等待重掛結束, 重複完成訊號也只套用一次
         """
@@ -302,7 +413,7 @@ class ImportMenuTests(QtTestCase):
         self.tray.refresh_media_menu.assert_called_once_with()
 
 
-    def test_quitting_discards_import_deferred_during_reattach(self):
+    def test_quitting_discards_import_deferred_during_reattach(self) -> None:
         """
         驗證退出時捨棄等待重掛的匯入結果, 不播放或請求縮圖
         """
@@ -326,7 +437,7 @@ class ImportMenuTests(QtTestCase):
         self.tray.tray.showMessage.assert_not_called()
 
 
-    def test_quitting_requests_cancellation_before_waiting(self):
+    def test_quitting_requests_cancellation_before_waiting(self) -> None:
         """
         驗證退出等待匯入前先要求取消, 取消完成後不播放或顯示錯誤
         """
@@ -360,7 +471,7 @@ class ImportMenuTests(QtTestCase):
         self.namespace["logger"].exception.assert_not_called()
 
 
-    def test_screen_creation_failure_keeps_existing_wallpaper_available(self):
+    def test_screen_creation_failure_keeps_existing_wallpaper_available(self) -> None:
         """
         驗證新增螢幕的桌布建立失敗時保留既有桌布並記錄例外
         """
@@ -373,7 +484,7 @@ class ImportMenuTests(QtTestCase):
         self.namespace["logger"].exception.assert_called_once()
 
 
-    def test_follow_startup_waits_for_screens_and_checks_offline_followers_on_arrival(self):
+    def test_follow_startup_waits_for_screens_and_checks_offline_followers_on_arrival(self) -> None:
         """
         驗證啟動時保留離線跟隨者, 稍後加入時才還原或清除跟隨
         """
@@ -417,7 +528,7 @@ class ImportMenuTests(QtTestCase):
                     tray.menu.deleteLater()
 
 
-    def test_follow_reconnection_rechecks_source_without_clearing_other_offline_settings(self):
+    def test_follow_reconnection_rechecks_source_without_clearing_other_offline_settings(self) -> None:
         """
         驗證依序拔除跟隨者與來源後, 跟隨者接回才清除自身失效設定
         """
@@ -443,7 +554,7 @@ class ImportMenuTests(QtTestCase):
         replacement.apply_playback_state.assert_not_called()
 
 
-    def test_single_screen_import_does_not_apply_to_screen_added_during_copy(self):
+    def test_single_screen_import_does_not_apply_to_screen_added_during_copy(self) -> None:
         """
         驗證單螢幕匯入只套用原目標, 不套用到複製期間新增的螢幕
         """
@@ -460,7 +571,7 @@ class ImportMenuTests(QtTestCase):
         self.tray.play_from_menu.assert_called_once_with(self.destination, "screen-a")
 
 
-    def test_multiple_screen_import_does_not_autoplay_after_one_screen_is_removed(self):
+    def test_multiple_screen_import_does_not_autoplay_after_one_screen_is_removed(self) -> None:
         """
         驗證多螢幕匯入期間移除螢幕後仍只更新紀錄, 不改為自動播放
         """
@@ -480,7 +591,7 @@ class ImportMenuTests(QtTestCase):
         self.namespace["config_store"].remember_recent.assert_called_once_with(self.destination)
 
 
-    def test_single_screen_import_does_not_apply_to_replacement_screen(self):
+    def test_single_screen_import_does_not_apply_to_replacement_screen(self) -> None:
         """
         驗證原匯入目標移除後不套用到替代螢幕, 仍保存最近紀錄
         """
@@ -500,7 +611,7 @@ class ImportMenuTests(QtTestCase):
         self.namespace["config_store"].remember_recent.assert_called_once_with(self.destination)
 
 
-    def test_removing_screen_waited_on_by_import_finishes_remaining_targets_once(self):
+    def test_removing_screen_waited_on_by_import_finishes_remaining_targets_once(self) -> None:
         """
         驗證移除正在重掛的匯入目標後, 其餘目標只套用一次匯入結果
         """
@@ -522,7 +633,7 @@ class ImportMenuTests(QtTestCase):
         self.tray.play_from_menu.assert_called_once_with(self.destination, "screen-b")
 
 
-    def test_old_import_callbacks_cannot_complete_a_new_import(self):
+    def test_old_import_callbacks_cannot_complete_a_new_import(self) -> None:
         """
         驗證舊匯入留下的重掛回呼不會完成或清除新匯入工作
         """
@@ -552,7 +663,7 @@ class ThumbnailWorker(QObject):
     由測試控制縮圖結果訊號
     """
 
-    thumbnail_ready = Signal(str, QImage)
+    thumbnail_ready = Signal(str, int, QImage)
 
 
 class MediaPreviewTests(QtTestCase):
@@ -575,7 +686,7 @@ class MediaPreviewTests(QtTestCase):
         self.enterContext(mock.patch.object(media_preview, "ThumbnailThread", return_value=self.worker))
         self.menu = media_preview.MediaPreviewMenu(
             "Media", media_dir=self.media_dir, thumbnail_dir=self.thumbnail_dir,
-            loading_image_path=self.loading_path,
+            loading_image_path=self.loading_path
         )
         self.menu.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
         self.menu.preview.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
@@ -621,7 +732,7 @@ class MediaPreviewTests(QtTestCase):
         return image
 
 
-    def test_stale_null_and_inactive_results_do_not_replace_preview(self):
+    def test_stale_null_and_inactive_results_do_not_replace_preview(self) -> None:
         """
         過期, 空白與預覽結束後的結果不更新畫面
         """
@@ -629,19 +740,44 @@ class MediaPreviewTests(QtTestCase):
         self.menu.preview_action = self.second
         loading_key = self.menu.preview_pixmap.cacheKey()
 
-        self.worker.thumbnail_ready.emit(self.first.data(), self.thumbnail())
+        self.worker.thumbnail_ready.emit(self.first.data(), 3, self.thumbnail())
         self.assertEqual(self.menu.preview_pixmap.cacheKey(), loading_key)
 
-        self.worker.thumbnail_ready.emit(self.second.data(), QImage())
+        self.worker.thumbnail_ready.emit(self.second.data(), 3, QImage())
         self.assertEqual(self.menu.preview_pixmap.cacheKey(), loading_key)
 
         self.menu.reset_preview()
-        self.worker.thumbnail_ready.emit(self.second.data(), self.thumbnail())
+        self.worker.thumbnail_ready.emit(self.second.data(), 3, self.thumbnail())
         self.assertEqual(self.menu.preview_pixmap.cacheKey(), loading_key)
         self.assertTrue(self.menu.preview.isHidden())
 
 
-    def test_background_result_updates_preview_on_qt_main_thread(self):
+    def test_size_change_ignores_queued_result_for_same_media(self) -> None:
+        """
+        同媒體的舊尺寸結果已排入 Qt 佇列時, 切換尺寸後不覆蓋新結果
+        """
+
+        old_image = self.thumbnail()
+        old_image.fill(Qt.GlobalColor.red)
+        thread = threading.Thread(
+            target=lambda: self.worker.thumbnail_ready.emit(self.first.data(), 3, old_image)
+        )
+        thread.start()
+        thread.join(timeout=5)
+        self.assertFalse(thread.is_alive())
+
+        self.menu.set_preview_size(4)
+        self.assertEqual(self.menu.loading_pixmap.width(), 400)
+        self.menu.preview_action = self.first
+        self.menu.preview_mode = True
+        self.worker.thumbnail_ready.emit(self.first.data(), 4, self.thumbnail())
+        self.app.processEvents()
+
+        self.display_preview_mock.assert_called_once_with()
+        self.assertEqual(self.menu.preview_pixmap.toImage().pixelColor(0, 0), QColor("blue"))
+
+
+    def test_background_result_updates_preview_on_qt_main_thread(self) -> None:
         """
         背景縮圖結果由 Qt 主執行緒更新預覽
         """
@@ -660,7 +796,7 @@ class MediaPreviewTests(QtTestCase):
         self.menu.display_preview = record_display
         image = self.thumbnail()
         media_path = self.first.data()
-        thread = threading.Thread(target=lambda: self.worker.thumbnail_ready.emit(media_path, image))
+        thread = threading.Thread(target=lambda: self.worker.thumbnail_ready.emit(media_path, 3, image))
         thread.start()
         thread.join(timeout=5)
         self.assertFalse(thread.is_alive())
@@ -675,7 +811,128 @@ class MediaPreviewTests(QtTestCase):
 
 class StartupTests(unittest.TestCase):
 
-    def test_import_does_not_initialize_runtime(self):
+    def test_restart_cleans_up_before_launch_and_preserves_startup_mode(self) -> None:
+        """
+        重啟前完成清理與還原並釋放單例鎖, 保留啟動參數且處理保存與啟動失敗
+        """
+
+        for frozen, operation, failure in (
+            (False, "exit", None), (False, "restart", None),
+            (True, "restart", None), (True, "restart", "launch"),
+            (False, "reset", None), (True, "reset", None),
+            (False, "reset", "save"),
+        ):
+            with self.subTest(frozen=frozen, operation=operation, failure=failure):
+                restart = operation != "exit"
+                reset = operation == "reset"
+                module = load_app_module()
+                application = mock.Mock()
+                application.exec.return_value = 0
+                tray = mock.Mock(restart_requested=restart, reset_requested=reset)
+                mutex = mock.Mock()
+                log = mock.Mock()
+                launcher = mock.Mock(side_effect=OSError("無法啟動") if failure == "launch" else None)
+                delete_task = mock.Mock()
+                store = mock.Mock()
+                store.load.return_value = {
+                    "fontSize": 11, "language": "ja-JP", "recentVideo": ["old.mp4"],
+                    "screenWallpapers": {"screen-a": "old.mp4"},
+                    "screenFollows": {"screen-b": "screen-a"}, "futureOption": 9,
+                }
+                store.save.return_value = True
+                if failure == "save":
+                    store.save.side_effect = [True, False]
+                lifecycle = mock.Mock()
+                for name, callback in (
+                    ("event_loop", application.exec), ("cleanup", tray.shutdown),
+                    ("save_config", store.save), ("delete_task", delete_task),
+                    ("close_log", log.shutdown), ("close_mutex", mutex.Close),
+                    ("launch", launcher),
+                ):
+                    lifecycle.attach_mock(callback, name)
+
+                executable = str(ROOT / ("BB Video Wallpaper.exe" if frozen else ".venv/Scripts/python.exe"))
+                entry = Path(executable) if frozen else ROOT / "bb-video-wallpaper.py"
+                module.__dict__.update({
+                    "sys": SimpleNamespace(executable=executable, argv=[str(entry), "--task"], frozen=frozen),
+                    "FILE": entry, "ROOT_DIR": ROOT,
+                    "APPDATA_DIR": mock.Mock(), "MEDIA_DIR": mock.Mock(),
+                    "THUMBNAIL_DIR": mock.Mock(), "cleanup_orphaned_thumbnails": mock.Mock(),
+                    "CONFIG_PATH": ROOT / "unused-config.json",
+                    "initialize_paths": mock.Mock(), "initialize_logging": mock.Mock(),
+                    "initialize_vlc": mock.Mock(return_value=True),
+                    "is_already_running": mock.Mock(return_value=(False, mutex)),
+                    "ConfigStore": mock.Mock(return_value=store),
+                    "check_desktop_ready": mock.Mock(return_value=True),
+                    "time": mock.Mock(), "logging": log, "logger": mock.Mock(),
+                    "QApplication": mock.Mock(return_value=application), "QFont": mock.Mock(),
+                    "Tray": mock.Mock(return_value=tray),
+                    "delete_task": delete_task,
+                    "subprocess": SimpleNamespace(Popen=launcher, DETACHED_PROCESS=module.subprocess.DETACHED_PROCESS),
+                })
+
+                self.assertEqual(module.main(), int(failure is not None))
+
+                expected = [mock.call.save_config(store.load.return_value), mock.call.event_loop()]
+                if restart:
+                    expected.append(mock.call.cleanup())
+                    if reset:
+                        expected.append(mock.call.save_config({"language": "ja-JP"}))
+                        if failure != "save":
+                            expected.append(mock.call.delete_task())
+                    if failure != "save":
+                        command = [executable] + ([] if frozen else [str(entry)]) + ["--task"]
+                        expected.extend([
+                            mock.call.close_log(), mock.call.close_mutex(),
+                            mock.call.launch(
+                                command, cwd=ROOT,
+                                env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"},
+                                creationflags=module.subprocess.DETACHED_PROCESS
+                            ),
+                        ])
+                self.assertEqual(lifecycle.mock_calls, expected)
+                self.assertEqual(module.logger.exception.call_count, int(failure == "launch"))
+
+
+    def test_config_access_or_save_failure_aborts_startup_before_ui(self) -> None:
+        """
+        設定存取或保存失敗時中止啟動, 不繼續建立桌布或介面
+        """
+
+        for failure in ("read", "save"):
+            with self.subTest(failure=failure):
+                module = load_app_module()
+                store = mock.Mock()
+                store.load.return_value = {"language": "ja-JP"}
+                if failure == "read":
+                    store.load.side_effect = PermissionError("設定檔無法存取")
+                store.save.return_value = False
+                application = mock.Mock()
+                tray = mock.Mock()
+                desktop_ready = mock.Mock()
+                module.__dict__.update({
+                    "ROOT_DIR": ROOT, "CONFIG_PATH": ROOT / "unused-config.json",
+                    "APPDATA_DIR": mock.Mock(), "MEDIA_DIR": mock.Mock(),
+                    "initialize_paths": mock.Mock(), "initialize_logging": mock.Mock(),
+                    "initialize_vlc": mock.Mock(return_value=True),
+                    "is_already_running": mock.Mock(return_value=(False, mock.Mock())),
+                    "ConfigStore": mock.Mock(return_value=store),
+                    "QApplication": application, "Tray": tray,
+                    "check_desktop_ready": desktop_ready,
+                })
+
+                self.assertEqual(module.main(), 1)
+                store.load_language.assert_not_called()
+                application.assert_not_called()
+                tray.assert_not_called()
+                desktop_ready.assert_not_called()
+                if failure == "read":
+                    store.save.assert_not_called()
+                else:
+                    store.save.assert_called_once_with(store.load.return_value)
+
+
+    def test_import_does_not_initialize_runtime(self) -> None:
         """
         驗證缺少使用者資料位置與 VLC 時仍可匯入主程式, 且不初始化執行環境
         """
@@ -690,7 +947,7 @@ class StartupTests(unittest.TestCase):
             mock.patch("os.add_dll_directory", blocked),
             mock.patch.object(ConfigStore, "load", blocked),
             mock.patch.object(ConfigStore, "load_language", blocked),
-            mock.patch.object(ConfigStore, "initialize_if_missing", blocked),
+            mock.patch.object(ConfigStore, "save", blocked),
             mock.patch("windows_integration.is_already_running", blocked),
             mock.patch("windows_integration.check_desktop_ready", blocked),
             mock.patch("PySide6.QtWidgets.QApplication", blocked),

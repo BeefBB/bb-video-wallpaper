@@ -6,6 +6,7 @@ from ctypes import wintypes
 from pathlib import Path
 import threading
 import time
+import subprocess
 import logging
 from logging.handlers import RotatingFileHandler
 from typing import TYPE_CHECKING, cast
@@ -17,7 +18,7 @@ from win32con import WM_DESTROY
 
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog
 from PySide6.QtCore import QByteArray, QEventLoop, Qt, QTimer, QThread, Slot, Signal
-from PySide6.QtGui import QAction, QIcon, QFont, QScreen, QCursor
+from PySide6.QtGui import QAction, QActionGroup, QIcon, QFont, QScreen, QCursor
 
 import bb_image_display
 from config import CONFIG_DEFAULTS, ConfigStore, SUPPORTED_LANGUAGES
@@ -30,6 +31,7 @@ from thumbnails import (
     SUPPORTED_IMAGE_EXTENSIONS,
     SUPPORTED_MEDIA_EXTENSIONS,
     ThumbnailThread,
+    cleanup_orphaned_thumbnails,
 )
 from windows_integration import (
     check_desktop_ready,
@@ -90,7 +92,7 @@ def initialize_paths() -> None:
         icon_dir = ROOT_DIR / "icon"
 
     ICON_PATH = icon_dir / "bb-video-wallpaper.ico"
-    LOADING_IMAGE_PATH = icon_dir / "loading.jpg"
+    LOADING_IMAGE_PATH = icon_dir / "loading300.jpg"
 
     APPDATA_DIR = Path(os.environ["LOCALAPPDATA"]) / "BB" / "BB Video Wallpaper"
     MEDIA_DIR = APPDATA_DIR / "video"
@@ -1122,6 +1124,8 @@ class Tray:
         self.wallpapers: dict[str, Wallpaper] = {}
         self.screen_menus: dict[str, MediaPreviewMenu] = {}
         self.is_exiting = False
+        self.restart_requested = False
+        self.reset_requested = False
 
         # 系統匣圖示與選單
         self.tray = QSystemTrayIcon()
@@ -1140,6 +1144,8 @@ class Tray:
         # 設定檔
         config = config_store.load()
 
+        self.font_size = config.get("fontSize", 11)
+        self.preview_size = config.get("previewSize", 3)
         self.follow_controller = FollowController(self.wallpapers, config_store)
         self.saved_follows: dict[str, str] = config.get("screenFollows", {})
         self.waiting_for_screens = bool(self.saved_follows)
@@ -1169,6 +1175,7 @@ class Tray:
             media_dir=MEDIA_DIR,
             thumbnail_dir=THUMBNAIL_DIR,
             loading_image_path=LOADING_IMAGE_PATH,
+            preview_size=self.preview_size,
             thumbnail_thread=self.thumbnail_thread
         )
         self.media_menu.aboutToShow.connect(self.refresh_media_menu)
@@ -1211,6 +1218,10 @@ class Tray:
 
         menu.addSeparator()
 
+        self.advanced_menu = menu.addMenu(tr("advanced"))
+
+        menu.addSeparator()
+
         menu.addAction(exit_action)
         # ################
 
@@ -1232,11 +1243,62 @@ class Tray:
 
         self.options_menu.addSeparator()
 
+        font_size_menu = self.options_menu.addMenu(tr("font_size"))
+        font_size_group = QActionGroup(font_size_menu)
+        self.font_size_actions: dict[int, QAction] = {}
+
+        for size, text_key in (
+            (24, "size_largest"), (19, "size_large"),
+            (15, "size_normal"), (11, "size_small"), (9, "size_smallest"),
+        ):
+            action = QAction(tr(text_key), font_size_menu)
+            action.setCheckable(True)
+            action.setChecked(size == self.font_size)
+            font_size_group.addAction(action)
+            action.triggered.connect(lambda checked, value=size: self.set_font_size(value))
+            font_size_menu.addAction(action)
+            self.font_size_actions[size] = action
+
+        preview_size_menu = self.options_menu.addMenu(tr("preview_size"))
+        preview_size_group = QActionGroup(preview_size_menu)
+        self.preview_size_actions: dict[int, QAction] = {}
+
+        for size, text_key in (
+            (5, "size_largest"), (4, "size_large"),
+            (3, "size_normal"), (2, "size_small"), (1, "size_smallest"),
+        ):
+            action = QAction(tr(text_key), preview_size_menu)
+            action.setCheckable(True)
+            action.setChecked(size == self.preview_size)
+            preview_size_group.addAction(action)
+            action.triggered.connect(lambda checked, value=size: self.set_preview_size(value))
+            preview_size_menu.addAction(action)
+            self.preview_size_actions[size] = action
+
+        self.options_menu.addSeparator()
+
         self.options_language_menu = self.options_menu.addMenu(tr("language"))
 
         self.options_menu.addSeparator()
 
         self.options_menu.addAction(startup_action)
+        # ################
+
+
+        # 進階子選單
+        # ################
+        open_config_action = QAction(tr("open_config_file"), self.advanced_menu)
+        open_config_action.triggered.connect(self.open_config_file)
+        self.advanced_menu.addAction(open_config_action)
+
+        open_log_action = QAction(tr("open_log_folder"), self.advanced_menu)
+        open_log_action.triggered.connect(self.open_log_folder)
+        self.advanced_menu.addAction(open_log_action)
+
+        reset_menu = self.advanced_menu.addMenu(tr("reset_defaults"))
+        reset_action = QAction(tr("confirm_reset_defaults"), reset_menu)
+        reset_action.triggered.connect(self.reset_defaults)
+        reset_menu.addAction(reset_action)
         # ################
 
 
@@ -1314,7 +1376,7 @@ class Tray:
         for signal in (wallpaper.playback_started, wallpaper.reattach_finished):
             signal.connect(
                 lambda s=wallpaper.screen_id, w=wallpaper: self.follow_controller.on_ready(s, w),
-                Qt.ConnectionType.QueuedConnection,
+                Qt.ConnectionType.QueuedConnection
             )
         wallpaper.show()
 
@@ -1352,7 +1414,7 @@ class Tray:
                         wallpaper.deleteLater,
                         Qt.ConnectionType(
                             Qt.ConnectionType.QueuedConnection.value | Qt.ConnectionType.SingleShotConnection.value
-                        ),
+                        )
                     )
                 else:
                     wallpaper.deleteLater()
@@ -1390,6 +1452,7 @@ class Tray:
                     media_dir=MEDIA_DIR,
                     thumbnail_dir=THUMBNAIL_DIR,
                     loading_image_path=LOADING_IMAGE_PATH,
+                    preview_size=self.preview_size,
                     thumbnail_thread=self.thumbnail_thread
                 )
                 menu.aboutToShow.connect(
@@ -1404,7 +1467,7 @@ class Tray:
     def refresh_playback_actions(
         self,
         actions: Sequence[tuple[QAction, str]] | None = None,
-        screen_id: str | None = None,
+        screen_id: str | None = None
     ) -> None:
 
         wallpapers = self.get_wallpapers(screen_id)
@@ -1579,6 +1642,9 @@ class Tray:
         新增最近紀錄與媒體清單項目
         """
 
+        wallpaper = self.wallpapers.get(screen_id) if screen_id is not None else None
+        menu.target_screen = wallpaper.target_screen if wallpaper is not None else None
+
         config = config_store.load()
         recent = config["recentVideo"][:config["recentDisplayCount"]]
 
@@ -1646,13 +1712,19 @@ class Tray:
 
     def set_language(self, language_code: str) -> None:
 
-        if language_code == self.current_language_code:
+        if self.is_exiting or language_code == self.current_language_code:
+            return
+
+        config = config_store.load()
+        config["language"] = language_code
+
+        if not config_store.save(config):
             return
 
         self.current_language_code = language_code
-        config_store.load_language(language_code)
 
         logger.info("set_language - %s", language_code)
+        self.restart()
 
 
     def play_from_menu(self, path: Path, screen_id: str | None = None) -> None:
@@ -1706,6 +1778,9 @@ class Tray:
             "",
             f'{tr("media_files")} ({patterns})'
         )
+
+        if self.is_exiting:
+            return
 
         if not filename:
             self.add_media_action.setEnabled(True)
@@ -1764,7 +1839,7 @@ class Tray:
                         lambda w=worker: self.finish_import(w),
                         Qt.ConnectionType(
                             Qt.ConnectionType.QueuedConnection.value | Qt.ConnectionType.SingleShotConnection.value
-                        ),
+                        )
                     )
                     return
 
@@ -1780,7 +1855,7 @@ class Tray:
 
         if worker.destination is not None:
 
-            self.thumbnail_thread.request(worker.destination)
+            self.thumbnail_thread.request(worker.destination, preview_size=self.preview_size)
             config_store.remember_recent(worker.destination)
 
             for screen_id in screen_ids:
@@ -1812,6 +1887,28 @@ class Tray:
         os.startfile(str(MEDIA_DIR))
 
 
+    def open_config_file(self) -> None:
+
+        os.startfile(str(CONFIG_PATH))
+
+
+    def open_log_folder(self) -> None:
+
+        os.startfile(str(LOG_DIR))
+
+
+    def reset_defaults(self) -> None:
+        """
+        標記還原要求並執行重啟流程
+        """
+
+        if self.is_exiting:
+            return
+
+        self.reset_requested = True
+        self.restart()
+
+
     def set_auto_pause_option(self, config_key: str, attribute: str, checked: bool) -> None:
 
         config = config_store.load()
@@ -1820,6 +1917,46 @@ class Tray:
 
         for wallpaper in self.get_wallpapers():
             setattr(wallpaper, attribute, checked)
+
+
+    def set_font_size(self, font_size: int) -> None:
+        """
+        保存文字大小並即時套用到應用程式
+        """
+
+        if not self.is_exiting and font_size != self.font_size:
+            config = config_store.load()
+            config["fontSize"] = font_size
+
+            if config_store.save(config):
+                self.font_size = font_size
+                font = self.app.font()
+                font.setPointSize(font_size)
+                self.app.setFont(font)
+
+        for size, action in self.font_size_actions.items():
+            action.setChecked(size == self.font_size)
+
+
+    def set_preview_size(self, preview_size: int) -> None:
+        """
+        保存預覽大小並套用到所有螢幕選單
+        """
+
+        if self.is_exiting or preview_size == self.preview_size:
+            self.preview_size_actions[self.preview_size].setChecked(True)
+            return
+
+        config = config_store.load()
+        config["previewSize"] = preview_size
+
+        if not config_store.save(config):
+            self.preview_size_actions[self.preview_size].setChecked(True)
+            return
+
+        self.preview_size = preview_size
+        for menu in (self.media_menu, *self.screen_menus.values()):
+            menu.set_preview_size(preview_size)
 
 
     def toggle_startup(self, checked: bool) -> None:
@@ -1869,6 +2006,18 @@ class Tray:
                 logger.exception("退出時釋放桌布失敗 - %s", screen_id)
 
 
+    def restart(self) -> None:
+        """
+        標記重啟要求並執行退出流程
+        """
+
+        if self.is_exiting:
+            return
+
+        self.restart_requested = True
+        self.exit()
+
+
     def exit(self) -> None:
 
         self.shutdown()
@@ -1887,7 +2036,10 @@ def main() -> int:
 
     if already_running:
 
+        mutex.Close()  # type: ignore
+
         LANG = config_store.load_language()
+
         show_already_running_toast()
 
         return 0
@@ -1900,8 +2052,16 @@ def main() -> int:
     if not initialize_vlc():
         return 1
 
-    config_store.initialize_if_missing()
+    try:
+        if not config_store.save(config_store.load()):
+            return 1
+
+    except OSError:
+        return 1
+
     LANG = config_store.load_language()
+
+    cleanup_orphaned_thumbnails(MEDIA_DIR, THUMBNAIL_DIR)
 
 
     while True:
@@ -1932,7 +2092,47 @@ def main() -> int:
 
 
     # Qt 主迴圈
-    return app.exec()
+    exit_code = app.exec()
+
+
+    if tray.restart_requested:
+
+        tray.shutdown()
+
+        if tray.reset_requested:
+            # 背景工作結束後才清除設定, 避免舊回呼寫回
+            config = {"language": config_store.load()["language"]}
+            if not config_store.save(config):
+                return 1
+
+            delete_task()
+
+            logger.info("reset_defaults")
+
+
+        logging.shutdown()
+
+        # 新程序啟動前先釋放單例鎖
+        mutex.Close()  # type: ignore
+
+        command = [sys.executable]
+        if not getattr(sys, "frozen", False):
+            command.append(str(FILE))
+        command.extend(sys.argv[1:])
+
+        try:
+            subprocess.Popen(
+                command,
+                cwd=ROOT_DIR,
+                env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"},
+                creationflags=subprocess.DETACHED_PROCESS
+            )
+
+        except OSError:
+            logger.exception("重新啟動程式失敗")
+            return 1
+
+    return exit_code
 
 
 if __name__ == "__main__":

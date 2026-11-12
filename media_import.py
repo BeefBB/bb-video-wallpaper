@@ -3,6 +3,7 @@
 匯入目錄與翻譯函式由呼叫端提供, 匯入模組時不建立資料夾或載入 VLC
 """
 
+from collections.abc import Callable
 import hashlib
 from pathlib import Path
 import shutil
@@ -19,13 +20,13 @@ class MediaImportCancelled(Exception):
     """使用者取消媒體匯入"""
 
 
-def check_import_cancelled(cancelled) -> None:
+def check_import_cancelled(cancelled: Callable[[], bool]) -> None:
 
     if cancelled():
         raise MediaImportCancelled()
 
 
-def calculate_sha256(path: Path, cancelled=lambda: False) -> bytes:
+def calculate_sha256(path: Path, cancelled: Callable[[], bool] = lambda: False) -> bytes:
     """
     計算 SHA-256
     """
@@ -50,13 +51,13 @@ def calculate_sha256(path: Path, cancelled=lambda: False) -> bytes:
 
 
 def import_media(
-        source: Path,
-        import_dir: Path,
-        *,
-        translate,
-        progress=None,
-        cancelled=lambda: False
-    ) -> Path:
+    source: Path,
+    import_dir: Path,
+    *,
+    translate: Callable[[str], str],
+    progress: Callable[[int], None] | None = None,
+    cancelled: Callable[[], bool] = lambda: False
+) -> Path:
     """
     比對重複內容後分塊複製至指定目錄, 支援進度回報與取消
     """

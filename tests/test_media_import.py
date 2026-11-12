@@ -58,7 +58,7 @@ class MediaImportTests(unittest.TestCase):
         )
 
 
-    def test_space_boundary_rejects_before_copy_and_accepts_exact_reserve(self):
+    def test_space_boundary_rejects_before_copy_and_accepts_exact_reserve(self) -> None:
         """
         容量不足時在建立暫存檔前拒絕, 剛好保留 200 MB 時可完成匯入
         """
@@ -83,7 +83,7 @@ class MediaImportTests(unittest.TestCase):
         self.assertEqual(list(self.import_dir.iterdir()), [destination])
 
 
-    def test_existing_file_or_identical_content_is_reused_when_disk_is_full(self):
+    def test_existing_file_or_identical_content_is_reused_when_disk_is_full(self) -> None:
         """
         磁碟已滿時仍可重用匯入目錄內的來源檔或內容相同的既有檔案
         """
@@ -103,7 +103,7 @@ class MediaImportTests(unittest.TestCase):
         self.disk_usage.assert_not_called()
 
 
-    def test_disk_filling_during_copy_cleans_up_partial_file(self):
+    def test_disk_filling_during_copy_cleans_up_partial_file(self) -> None:
         """
         複製途中磁碟已滿時清除暫存檔並保留既有檔案
         """
@@ -154,7 +154,7 @@ class MediaImportTests(unittest.TestCase):
         self.assertEqual(source.read_bytes(), b"new contents")
 
 
-    def test_cancel_during_hashing_source_or_candidate(self):
+    def test_cancel_during_hashing_source_or_candidate(self) -> None:
         """
         計算來源或既有檔案的雜湊時可取消
         """
@@ -209,7 +209,7 @@ class MediaImportTests(unittest.TestCase):
                 self.assertEqual(source.read_bytes(), b"new contents")
 
 
-    def test_cancel_during_copy_or_before_rename_cleans_up_partial_file(self):
+    def test_cancel_during_copy_or_before_rename_cleans_up_partial_file(self) -> None:
         """
         複製中或更名前取消時清除暫存檔
         """
@@ -246,7 +246,7 @@ class MediaImportTests(unittest.TestCase):
                 self.assertEqual(source.read_bytes(), contents)
 
 
-    def test_collisions_preserve_files_and_reimport_reuses_truncated_names(self):
+    def test_collisions_preserve_files_and_reimport_reuses_truncated_names(self) -> None:
         """
         同名時保留既有檔案, 長檔名依 UTF-16 截短, 再次匯入重用相同內容
         """

@@ -6,7 +6,7 @@
 將桌布保存在一個資料夾中, 以便隨時切換  
 
 - 輕量 (~200MB)
-- 紀錄最近使用的桌布
+- 記錄最近使用的桌布
 - 可選各種自動暫停時機 (視窗最大化, 螢幕關閉, 沒插電)
 - 可選開機自動啟動
 
@@ -108,8 +108,9 @@ Folder/
 視窗最大化時自動暫停     | "autoPauseIfFullscreen" | true
 螢幕關閉時自動暫停       | "autoPauseIfScreenOff"  | true
 沒插電時自動暫停         | "autoPauseIfOnBattery"  | false
-字體大小                 | "fontSize"              | 11 pt, 6-48
+文字大小                 | "fontSize"              | 11 pt, 6-48
 最近紀錄顯示筆數         | "recentDisplayCount"    | 6 筆, 0-20
+預覽大小                 | "previewSize"           | 3 (普通), 1-5 對應 100-500 px
 最近使用紀錄             | "recentVideo"           | [], 0-20
 各螢幕桌布               | "screenWallpapers"      | {}
 螢幕跟隨關係             | "screenFollows"         | {}
@@ -144,12 +145,12 @@ VLC 桌布播放參數         |                            | 關閉音訊, 不�
 啟動時還原跟隨關係前等待 | RESTORE_DELAY_MS           | 3 s , 有已保存的跟隨關係時才等待
 首次顯示預覽的等待時間   | preview_timer              | 0.5 s
 離開選項後退出預覽模式   | reset_timer                | 1 s
-預覽圖片最大寬度         |                            | 300 px, 不含左右各 4 px 內距, 螢幕空間不足時縮小
+預覽圖片最長邊           |                            | `previewSize * 100` px, 不含左右各 4 px 內距, 螢幕空間不足時縮小
 預覽背景色               |                            | #202020
 預覽內距                 |                            | 4 px
 預覽與選單間距           |                            | 8 px, 優先放左側, 空間不足時改放右側
-載入圖片失敗時的替代圖   |                            | 300 x 169 px, 深灰色 (`Qt.GlobalColor.darkGray`)
-縮圖 寬度                |                            | 300 px, 高度依媒體比例
+載入圖片失敗時的替代圖   |                            | 寬 `previewSize * 100` px, 高依 16:9 四捨五入, 深灰色 (`Qt.GlobalColor.darkGray`)
+縮圖 寬度                |                            | `previewSize * 100` px, 高度依媒體比例, 各尺寸按需產生並共存
 縮圖 格式, 品質          |                            | JPEG 85
 縮圖 VLC 參數            |                            | 關閉硬體解碼 (`--avcodec-hw=none`), 音訊, 影片標題與 OSD, 啟用 `--quiet`
 影片資訊解析逾時         |                            | 5 s

@@ -82,7 +82,7 @@ def run_recovery_probe(media: Path, operation: str = "reattach") -> None:
         process = subprocess.Popen(
             [sys.executable, "-X", "utf8", __file__, "--host"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            creationflags=subprocess.CREATE_NO_WINDOW
         )
         hosts.append(process)
         stdout = process.stdout
@@ -242,7 +242,7 @@ class VideoRecoveryTests(unittest.TestCase):
     真正的 VLC 輸出失效與重掛恢復
     """
 
-    def test_playing_and_paused_video_recover_after_host_process_ends(self):
+    def test_playing_and_paused_video_recover_after_host_process_ends(self) -> None:
         """
         在獨立程序中驗證播放與暫停影片失去父視窗後恢復輸出及關閉
         """
@@ -255,19 +255,19 @@ class VideoRecoveryTests(unittest.TestCase):
             subprocess.run(
                 [FFMPEG, "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30",
                  "-t", "20", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(media)],
-                check=True, capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW,
+                check=True, capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW
             )
             result = subprocess.run(
                 [sys.executable, "-X", "utf8", __file__, "--probe", str(media)], cwd=ROOT,
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=30, creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=30, creationflags=subprocess.CREATE_NO_WINDOW
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             for stage in ("play", "pause", "shutdown"):
                 self.assertIn(f"PASS {stage}:", result.stdout)
 
 
-    def test_lost_video_output_stops_and_switches_media_without_qt_reentry(self):
+    def test_lost_video_output_stops_and_switches_media_without_qt_reentry(self) -> None:
         """
         失效輸出在播放或暫停時可停止, 亦可切換影片與圖片, 期間不執行 Qt 回呼
         """
@@ -282,7 +282,7 @@ class VideoRecoveryTests(unittest.TestCase):
             subprocess.run(
                 [FFMPEG, "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30",
                  "-t", "20", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(media)],
-                check=True, capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW,
+                check=True, capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW
             )
             image = QImage(320, 180, QImage.Format.Format_RGB32)
             image.fill(0xff336699)
@@ -293,7 +293,7 @@ class VideoRecoveryTests(unittest.TestCase):
                     result = subprocess.run(
                         [sys.executable, "-X", "utf8", __file__, "--probe", str(media), operation], cwd=ROOT,
                         capture_output=True, text=True, encoding="utf-8", errors="replace",
-                        timeout=30, creationflags=subprocess.CREATE_NO_WINDOW,
+                        timeout=30, creationflags=subprocess.CREATE_NO_WINDOW
                     )
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertIn(f"PASS {operation}:", result.stdout)

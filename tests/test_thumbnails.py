@@ -1,5 +1,5 @@
 """
-測試快取檔案保護, 特殊影片解碼與取消
+測試快取檔案保護, 排程時序, 特殊影片解碼與取消
 影片案例需要 Windows, VLC-lite 與 ffmpeg; 缺少時顯示跳過
 只在暫存資料夾操作, 不啟動桌布或修改使用者設定
 """
@@ -26,7 +26,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
-from thumbnails import create_video_thumbnail, ensure_thumbnail, get_video_thumbnail_sizes
+from app_loader import QtTestCase
+from thumbnails import (
+    ThumbnailThread, cleanup_orphaned_thumbnails, create_video_thumbnail,
+    ensure_thumbnail, get_video_thumbnail_sizes,
+)
 
 
 VLC_DIR = ROOT / "VLC-lite"
@@ -169,7 +173,7 @@ class ThumbnailTests(unittest.TestCase):
         self.assertTrue(image.save(str(path)))
 
 
-    def thumbnail(self, path: Path) -> Path:
+    def thumbnail(self, path: Path, preview_size: int = 3) -> Path:
         """
         使用測試路徑取得或產生縮圖
         """
@@ -178,11 +182,12 @@ class ThumbnailTests(unittest.TestCase):
             path,
             lambda: False,
             media_dir=self.media_dir,
-            thumbnail_dir=self.thumbnail_dir
+            thumbnail_dir=self.thumbnail_dir,
+            preview_size=preview_size
         )
 
 
-    def test_long_names_with_same_content_have_independent_caches(self):
+    def test_long_names_with_same_content_have_independent_caches(self) -> None:
         """
         驗證相同內容的長檔名使用獨立快取, 清理過期快取時保留無關檔案與目錄
         """
@@ -198,12 +203,18 @@ class ThumbnailTests(unittest.TestCase):
 
         for thumbnail in (first_thumbnail, second_thumbnail):
             self.assertEqual(QImage(str(thumbnail)).width(), 300)
+            self.assertEqual(len(thumbnail.name), 31)
+
+        other_sizes = [self.thumbnail(first, size) for size in (1, 5)]
+        for thumbnail, width in zip(other_sizes, (100, 500)):
+            self.assertEqual(QImage(str(thumbnail)).width(), width)
+        self.assertTrue(first_thumbnail.exists())
 
         # 混入無關檔案與目錄, 確認快取清理不會誤刪
-        prefix = first_thumbnail.name.rsplit("-", 1)[0] + "-"
+        prefix = first_thumbnail.name.split("-", 1)[0] + "-"
         unrelated = self.thumbnail_dir / "unrelated.jpg"
-        malformed = self.thumbnail_dir / f"{prefix}deadbeeg.jpg"
-        directory = self.thumbnail_dir / f"{prefix}deadbeef.jpg"
+        malformed = self.thumbnail_dir / f"{prefix}deadbeeg-3.jpg"
+        directory = self.thumbnail_dir / f"{prefix}deadbeef-3.jpg"
         directory.mkdir()
         for path in (unrelated, malformed):
             path.write_bytes(b"keep")
@@ -213,16 +224,18 @@ class ThumbnailTests(unittest.TestCase):
         self.assertEqual(first_thumbnail.stat().st_mtime_ns, saved_mtime)
 
         self.save_image(first, Qt.GlobalColor.blue)
-        updated_thumbnail = self.thumbnail(first)
+        updated_thumbnail = self.thumbnail(first, 4)
         self.assertNotEqual(updated_thumbnail, first_thumbnail)
         self.assertFalse(first_thumbnail.exists())
+        for thumbnail in other_sizes:
+            self.assertFalse(thumbnail.exists())
         self.assertTrue(second_thumbnail.exists())
         self.assertEqual(unrelated.read_bytes(), b"keep")
         self.assertEqual(malformed.read_bytes(), b"keep")
         self.assertTrue(directory.is_dir())
 
 
-    def test_write_failure_preserves_cache_and_removes_temp(self):
+    def test_write_failure_preserves_cache_and_removes_temp(self) -> None:
         """
         寫入暫存檔後失敗時保留舊快取並關閉及清除暫存檔
         """
@@ -246,7 +259,7 @@ class ThumbnailTests(unittest.TestCase):
         self.assertEqual(list(self.thumbnail_dir.iterdir()), [previous])
 
 
-    def test_replace_failure_preserves_cache_and_removes_temp(self):
+    def test_replace_failure_preserves_cache_and_removes_temp(self) -> None:
         """
         替換快取失敗時保留舊檔並清除暫存檔
         """
@@ -264,7 +277,36 @@ class ThumbnailTests(unittest.TestCase):
         self.assertFalse(list(self.thumbnail_dir.glob(".thumbnail-*.tmp")))
 
 
-    def test_cancellation_stops_media_parsing(self):
+    def test_cleanup_preserves_directory_after_partial_scan_failure(self) -> None:
+        """
+        來源清單讀取途中失敗時, 不以不完整清單刪除縮圖
+        """
+
+        source = self.media_dir / "sample.bmp"
+        self.save_image(source, Qt.GlobalColor.red)
+        kept = self.thumbnail(source)
+        orphan = self.thumbnail_dir / ("a" * 16 + "-deadbeef-3.jpg")
+        orphan.write_bytes(b"keep")
+        original_scandir = os.scandir
+
+        def interrupted_entries(entries):
+            yield next(entries)
+            raise PermissionError("模擬來源清單讀取途中失敗")
+
+        @contextmanager
+        def scan_directory(path):
+            with original_scandir(path) as entries:
+                yield interrupted_entries(entries) if Path(path) == self.media_dir else entries
+
+        with mock.patch("thumbnails.os.scandir", scan_directory), mock.patch("thumbnails.logger") as log:
+            cleanup_orphaned_thumbnails(self.media_dir, self.thumbnail_dir)
+
+        self.assertTrue(kept.is_file())
+        self.assertEqual(orphan.read_bytes(), b"keep")
+        log.warning.assert_called_once()
+
+
+    def test_cancellation_stops_media_parsing(self) -> None:
         """
         取消時停止進行中的媒體解析
         """
@@ -279,6 +321,73 @@ class ThumbnailTests(unittest.TestCase):
                 get_video_thumbnail_sizes(media, cancelled)
 
         media.parse_stop.assert_called_once_with()
+
+
+
+class ThumbnailThreadTests(QtTestCase):
+    """
+    指向項目變更與背景工作交錯時的排程
+    """
+
+
+    def test_latest_preview_runs_next_without_duplicate_work(self) -> None:
+        """
+        首項處理中連續切換指向, 驗證已排隊項目可提前且同項目不重複處理
+        """
+
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        thumbnail_path = directory / "thumbnail.jpg"
+        image = QImage(32, 18, QImage.Format.Format_RGB32)
+        image.fill(Qt.GlobalColor.blue)
+        self.assertTrue(image.save(str(thumbnail_path)))
+        first, ordinary, queued, newest, last = (
+            directory / f"{name}.mp4" for name in ("first", "ordinary", "queued", "newest", "last")
+        )
+        started = threading.Event()
+        release = threading.Event()
+        completed = threading.Event()
+        processed: list[tuple[Path, int]] = []
+
+        def blocked_thumbnail(path, cancelled, **kwargs):
+            processed.append((path, kwargs["preview_size"]))
+
+            if path == first:
+
+                started.set()
+
+                if not release.wait(5):
+                    raise TimeoutError("測試未放行縮圖工作")
+
+            return thumbnail_path
+
+        self.enterContext(mock.patch("thumbnails.ensure_thumbnail", side_effect=blocked_thumbnail))
+        worker = ThumbnailThread(directory, directory / "thumbnails")
+        self.addCleanup(worker.deleteLater)
+        self.addCleanup(worker.stop)
+        self.addCleanup(release.set)
+        worker.thumbnail_ready.connect(
+            lambda path, size, image: completed.set() if Path(path) == last else None,
+            Qt.ConnectionType.DirectConnection
+        )
+        worker.request(first)
+        self.assertTrue(started.wait(5), "首項縮圖工作未開始")
+        worker.request(ordinary)
+        worker.request(queued)
+        worker.request(last)
+        worker.request(first)
+        worker.request(first, priority=True)
+        worker.request(first, preview_size=4, priority=True)
+        worker.request(first, preview_size=4)
+        worker.request(queued, priority=True)
+        worker.request(newest, priority=True)
+        worker.request(queued, priority=True)
+        worker.request(ordinary)
+        release.set()
+        self.assertTrue(completed.wait(5), "縮圖佇列未處理完成")
+        worker.stop()
+        self.assertEqual(processed, [
+            (first, 3), (queued, 3), (newest, 3), (first, 4), (ordinary, 3), (last, 3)
+        ])
 
 
 
@@ -381,7 +490,7 @@ class VideoThumbnailTests(unittest.TestCase):
             process.close()
 
 
-    def test_av1_thumbnails_finish_without_hanging(self):
+    def test_av1_thumbnails_finish_without_hanging(self) -> None:
         """
         AV1 的 MP4 與 MKV 縮圖皆可正常完成
         """
@@ -400,7 +509,7 @@ class VideoThumbnailTests(unittest.TestCase):
                 self.assertEqual(result["size"], (300, 169))
 
 
-    def test_default_video_track_determines_size_and_pixels(self):
+    def test_default_video_track_determines_size_and_pixels(self) -> None:
         """
         依預設影像軌決定縮圖尺寸與內容
         """
@@ -442,7 +551,7 @@ class VideoThumbnailTests(unittest.TestCase):
                             self.assertLessEqual(abs(actual - expected), 30)
 
 
-    def test_av1_cancellation_and_setup_failure_finish(self):
+    def test_av1_cancellation_and_setup_failure_finish(self) -> None:
         """
         AV1 取消或設定失敗後可正常結束
         """
@@ -465,18 +574,20 @@ class VideoThumbnailTests(unittest.TestCase):
                 self.assertEqual(result["cancelled"], mode == "cancel")
 
 
-    def test_non_square_pixels_use_display_aspect_ratio(self):
+    def test_non_square_pixels_use_display_aspect_ratio(self) -> None:
         """
         非正方形像素依實際顯示比例產生縮圖
         """
 
-        image = create_video_thumbnail(self.anamorphic_media, lambda: False)
+        for width, height in ((100, 28), (200, 56), (300, 84), (400, 112), (500, 141)):
 
-        self.assertFalse(image.isNull())
-        self.assertEqual((image.width(), image.height()), (300, 84))
+            with self.subTest(width=width):
+                image = create_video_thumbnail(self.anamorphic_media, lambda: False, width)
+                self.assertFalse(image.isNull())
+                self.assertEqual((image.width(), image.height()), (width, height))
 
 
-    def test_rotated_videos_preserve_size_and_pixel_orientation(self):
+    def test_rotated_videos_preserve_size_and_pixel_orientation(self) -> None:
         """
         旋轉影片的縮圖尺寸與像素方向正確
         """

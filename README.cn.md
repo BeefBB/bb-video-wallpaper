@@ -110,6 +110,7 @@ Folder/
 未接通电源时自动暂停 | "autoPauseIfOnBattery" | false
 字体大小 | "fontSize" | 11 pt, 6-48
 最近记录显示条数 | "recentDisplayCount" | 6 条, 0-20
+预览大小 | "previewSize" | 3 (普通), 1-5 对应 100-500 px
 最近使用记录 | "recentVideo" | [], 0-20 条
 各屏幕壁纸 | "screenWallpapers" | {}
 屏幕跟随关系 | "screenFollows" | {}
@@ -124,7 +125,7 @@ Folder/
 单文件导入文件夹 | SINGLE_IMPORT_DIR | 媒体文件夹下的 `_imports/`
 缩略图文件夹 | THUMBNAIL_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\thumbnails\`
 日志文件 |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\log\log.log`
-VLC 壁纸播放参数 |  | 关闭音频, 不显示视频标题, 重播参数 `--input-repeat=65535`
+VLC 壁纸播放参数 |  | 关闭音频, 不显示视频标题, 循环播放参数 `--input-repeat=65535`
 壁纸缩放方式 |  | 图片和视频均保持比例居中裁剪填满
 启动时选择壁纸的顺序 |  | 该屏幕保存的壁纸 > 最近记录第一条 > 媒体列表第一项, 前两者要求文件存在
 启动时延后最大化检测 | fullscreen_detection_timer | 10 s
@@ -144,12 +145,12 @@ VLC 壁纸播放参数 |  | 关闭音频, 不显示视频标题, 重播参数 `-
 启动时恢复跟随关系前的等待 | RESTORE_DELAY_MS | 3 s, 仅在有已保存的跟随关系时等待
 首次显示预览的等待时间 | preview_timer | 0.5 s
 离开选项后退出预览模式的延迟 | reset_timer | 1 s
-预览图片最大宽度 |  | 300 px, 不含左右各 4 px 内边距, 屏幕空间不足时缩小
+预览图片最长边 |  | `previewSize * 100` px, 不含左右各 4 px 内边距, 屏幕空间不足时缩小
 预览背景色 |  | #202020
 预览内边距 |  | 4 px
 预览与菜单间距 |  | 8 px, 优先放在左侧, 空间不足时改放右侧
-加载图片失败时的替代图 |  | 300 x 169 px, 深灰色 (`Qt.GlobalColor.darkGray`)
-缩略图宽度 |  | 300 px, 高度按媒体比例缩放
+加载图片失败时的替代图 |  | 宽 `previewSize * 100` px, 高按 16:9 四舍五入, 深灰色 (`Qt.GlobalColor.darkGray`)
+缩略图宽度 |  | `previewSize * 100` px, 高度按媒体比例缩放, 各尺寸按需生成并共存
 缩略图格式和质量 |  | JPEG 85
 缩略图 VLC 参数 |  | 关闭硬件解码 (`--avcodec-hw=none`), 音频, 视频标题和 OSD, 启用 `--quiet`
 视频信息解析超时 |  | 5 s

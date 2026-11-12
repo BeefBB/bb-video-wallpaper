@@ -110,6 +110,7 @@ Automatically pause when the screen is off | "autoPauseIfScreenOff" | true
 Automatically pause when on battery | "autoPauseIfOnBattery" | false
 Font size | "fontSize" | 11 pt, 6-48
 Number of recent entries to display | "recentDisplayCount" | 6 entries, 0-20
+Preview size | "previewSize" | 3 (Normal), 1-5 maps to 100-500 px
 Recently used media | "recentVideo" | [], 0-20 entries
 Wallpaper for each monitor | "screenWallpapers" | {}
 Monitor follow relationships | "screenFollows" | {}
@@ -144,12 +145,12 @@ Playback synchronization tolerance for following monitors | SYNC_TOLERANCE_MS | 
 Delay before restoring monitor follow relationships on startup | RESTORE_DELAY_MS | 3 s, only when saved follow relationships exist
 Delay before showing the first preview | preview_timer | 0.5 s
 Delay before leaving preview mode after moving away | reset_timer | 1 s
-Maximum preview image width |  | 300 px, excluding 4 px of padding on each side; shrinks when screen space is insufficient
+Longest preview image edge |  | `previewSize * 100` px, excluding 4 px of padding on each side; shrinks when screen space is insufficient
 Preview background color |  | #202020
 Preview padding |  | 4 px
 Gap between the preview and menu |  | 8 px, preferably on the left; moves to the right if there is not enough space
-Fallback when the loading image cannot be loaded |  | 300 x 169 px, dark gray (`Qt.GlobalColor.darkGray`)
-Thumbnail width |  | 300 px, height follows the media aspect ratio
+Fallback when the loading image cannot be loaded |  | Width `previewSize * 100` px, height rounded to 16:9, dark gray (`Qt.GlobalColor.darkGray`)
+Thumbnail width |  | `previewSize * 100` px, height follows the media aspect ratio; sizes are generated on demand and cached separately
 Thumbnail format and quality |  | JPEG 85
 VLC thumbnail options |  | Hardware decoding (`--avcodec-hw=none`), audio, video titles, and OSD disabled; `--quiet` enabled
 Video metadata parsing timeout |  | 5 s

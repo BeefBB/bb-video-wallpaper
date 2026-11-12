@@ -113,7 +113,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 測試腳本                                                           | 檢查重點
 ---                                                                | ---
 [test_app_ui.py](./tests/test_app_ui.py)                           | 匯入取消與過期回呼, 螢幕變動, 主執行緒更新, 預覽過期結果, 匯入主程式不初始化
-[test_config.py](./tests/test_config.py)                           | 初始化與讀寫失敗不破壞原檔, 損壞設定與路徑邊界
+[test_config.py](./tests/test_config.py)                           | 存取與保存失敗不破壞原檔, 損壞內容重建與修復, 路徑邊界
 [test_screen_follow.py](./tests/test_screen_follow.py)             | 循環與群組拆分, 群組暫停, 進度誤差與循環邊界, 過期同步訊號
 [test_media_import.py](./tests/test_media_import.py)               | 命名衝突, 磁碟空間邊界, 複製中寫滿與各階段取消後清理
 [test_playback_state.py](./tests/test_playback_state.py)           | 延遲播放事件, 重掛順序與重試, 舊進度失效, 關閉與螢幕移除競態
@@ -129,7 +129,7 @@ Qt 測試共用 [app_loader.py](./tests/app_loader.py) 的 `QtTestCase`, 統一�
 
 - 啟動與退出: 系統匣可操作, 各螢幕有桌布, 退出後桌布消失且程序結束
 - 播放操作: 切換圖片與影片, 播放, 暫停及停止; 選擇損壞圖片失敗後, 原桌布與已保存選擇仍保留
-- 匯入與預覽: 一般匯入完成後選單恢復可操作, 各螢幕選單可預覽同一媒體, 縮圖內容與方向正確
+- 匯入與預覽: 一般匯入完成後選單恢復可操作, 各螢幕選單可預覽同一媒體, 縮圖內容與方向正確, 預覽依目標螢幕比例裁切
 - 設定與紀錄: 各螢幕選擇不同桌布, 清除最近紀錄後重啟仍還原各自桌布; 媒體暫時遺失時使用備援且不覆寫原選擇; 舊版僅有最近紀錄的設定仍可載入
 - 跟隨操作: 從選單加入或解除跟隨, 來源切換媒體後跟隨者同步, 重啟後還原關係; 來源拔除再接回不自動恢復已解除的跟隨
 - 自動暫停: 在目標與另一螢幕分別最大化視窗, 切換虛擬桌面, 關閉再開啟螢幕及切換供電, 確認對應選項生效且手動暫停不被解除
