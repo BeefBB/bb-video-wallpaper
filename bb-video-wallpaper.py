@@ -305,6 +305,8 @@ class Wallpaper(QWidget):
 
     # 影片開始播放訊號
     playback_started = Signal()
+    # 桌布媒體變更訊號
+    media_changed = Signal()
     # 重掛完成訊號
     reattach_finished = Signal()
 
@@ -944,6 +946,7 @@ class Wallpaper(QWidget):
         logger.info("set_play_media - %s", path)
 
         self.apply_playback_state()
+        self.media_changed.emit()
 
 
     def select_media(self, path: Path) -> None:
@@ -1373,6 +1376,8 @@ class Tray:
 
         self.wallpapers[wallpaper.screen_id] = wallpaper
         wallpaper.auto_pause_handler = self.follow_controller.check_auto_pause
+        wallpaper.media_changed.connect(self.refresh_tooltip, Qt.ConnectionType.QueuedConnection)
+
         for signal in (wallpaper.playback_started, wallpaper.reattach_finished):
             signal.connect(
                 lambda s=wallpaper.screen_id, w=wallpaper: self.follow_controller.on_ready(s, w),
@@ -1462,6 +1467,32 @@ class Tray:
                 self.menu.insertMenu(self.add_media_action, menu)
 
         self.refresh_playback_actions()
+        self.refresh_tooltip()
+
+
+    def refresh_tooltip(self) -> None:
+        """
+        所有螢幕使用同一媒體時, 在系統匣提示顯示桌布名稱
+        """
+
+        if self.is_exiting:
+            return
+
+        text = tr("app_name")
+        media_paths = {wallpaper.current_media for wallpaper in self.wallpapers.values()}
+
+        if len(media_paths) == 1:
+            path = next(iter(media_paths))
+
+            if path is not None:
+                name = path.stem
+
+                if len(name) > 40:
+                    name = name[:32] + ".."
+
+                text = f"{text} - {name}"
+
+        self.tray.setToolTip(text)
 
 
     def refresh_playback_actions(
