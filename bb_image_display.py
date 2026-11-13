@@ -6,11 +6,13 @@ Qt 圖片顯示模組, 接收主程式提供的 HWND 並共用既有 QApplicatio
 
     display = bb_image_display.Instance()
     display.set_hwnd(int(target_window.winId()))
-    display.set_image("image.png")
+    display.set_scaling("fit", "#202020")
+    display.set_media("image.png")
     display.show()
 
 主程式負責目標視窗的建立, 顯示, 桌面掛載與 Qt 事件迴圈
 模組只管理圖片及其內部子視窗
+預設為 fill 與黑色背景, 保留 set_image 呼叫方式
 """
 
 from ctypes import wintypes
@@ -22,7 +24,7 @@ import win32con
 import win32gui
 
 from PySide6.QtCore import QAbstractNativeEventFilter, QObject, QRectF, Qt, Slot
-from PySide6.QtGui import QImageReader, QPainter, QPaintEvent, QRasterWindow, QWindow
+from PySide6.QtGui import QColor, QImageReader, QPainter, QPaintEvent, QRasterWindow, QWindow
 from PySide6.QtWidgets import QApplication
 
 
@@ -63,7 +65,7 @@ class _TargetEvents(QAbstractNativeEventFilter):
 
 class ImageWallpaper(QRasterWindow):
     """
-    在指定視窗內等比例裁切顯示圖片, 自行管理繪圖所需的內部容器
+    在指定視窗內繪製圖片與背景, 自行管理繪圖所需的內部容器
     """
 
     def __init__(self, image_path: Path, target_hwnd: int) -> None:
@@ -75,6 +77,8 @@ class ImageWallpaper(QRasterWindow):
         self._host_hwnd = 0
         self._host_window: QWindow | None = None
         self._target_events: _TargetEvents | None = None
+        self.scaling_mode = "fill"
+        self.background_color = QColor(Qt.GlobalColor.black)
 
         reader = QImageReader(str(image_path))
         reader.setAutoTransform(True)
@@ -303,26 +307,21 @@ class ImageWallpaper(QRasterWindow):
         if self.width() <= 0 or self.height() <= 0:
             return
 
-        # 等比例置中裁切填滿, 僅在 Qt 要求重繪時繪製
-        scale = max(
-            self.width() / self.image.width(),
-            self.height() / self.image.height()
-        )
-        width = self.width() / scale
-        height = self.height() / scale
+        bounds = QRectF(0, 0, self.width(), self.height())
+        source = QRectF(self.image.rect())
+        target = QRectF(bounds)
 
-        source = QRectF(
-            (self.image.width() - width) / 2,
-            (self.image.height() - height) / 2,
-            width,
-            height
-        )
+        # 只調整繪製範圍, 避免先建立放大後的圖片
+        if self.scaling_mode == "fill":
+            source.setSize(bounds.size().scaled(source.size(), Qt.AspectRatioMode.KeepAspectRatio))
+            source.moveCenter(QRectF(self.image.rect()).center())
 
-
-        target = QRectF(0, 0, self.width(), self.height())
+        elif self.scaling_mode == "fit":
+            target.setSize(source.size().scaled(bounds.size(), Qt.AspectRatioMode.KeepAspectRatio))
+            target.moveCenter(bounds.center())
 
         painter = QPainter(self)
-        painter.fillRect(target, Qt.GlobalColor.black)
+        painter.fillRect(bounds, self.background_color)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         painter.drawImage(target, self.image, source)
 
@@ -346,6 +345,8 @@ class Instance(QObject):
         self.window: ImageWallpaper | None = None
         self._hwnd = 0
         self.current_image: Path | None = None
+        self._scaling_mode = "fill"
+        self._background_color = QColor(Qt.GlobalColor.black)
 
         app.aboutToQuit.connect(self.close)
 
@@ -371,7 +372,7 @@ class Instance(QObject):
         return self._hwnd
 
 
-    def set_image(self, path: Path | str) -> None:
+    def set_media(self, path: Path | str) -> None:
         """
         載入圖片, 讀取失敗時保留原本的圖片與顯示狀態
         """
@@ -391,10 +392,39 @@ class Instance(QObject):
                 raise RuntimeError(f"無法讀取圖片: {reader.errorString()}")
 
             self.window.image = image
-            self.window.update()
 
 
         self.current_image = source
+        self.set_scaling(self._scaling_mode, self._background_color)
+
+
+    def set_image(self, path: Path | str) -> None:
+        """
+        相容既有的圖片載入呼叫
+        """
+
+        self.set_media(path)
+
+
+    def set_scaling(self, mode: str, background_color: QColor | str = "#000000") -> None:
+        """
+        設定 fill, fit 或 stretch 與不透明背景色, 可在載入前設定
+        換圖, 關閉及重新掛載時保留顯示選項
+        """
+
+        if mode not in ("fill", "fit", "stretch"):
+            raise ValueError("無效的縮放模式")
+
+        color = QColor(background_color)
+        if not color.isValid() or color.alpha() != 255:
+            raise ValueError("背景色必須是有效的不透明顏色")
+
+        self._scaling_mode = mode
+        self._background_color = color
+        if self.window is not None:
+            self.window.scaling_mode = mode
+            self.window.background_color = QColor(color)
+            self.window.update()
 
 
     @Slot()
