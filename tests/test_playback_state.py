@@ -11,6 +11,7 @@ import unittest
 from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, QRect, Qt, QTimer, Signal
+from PySide6.QtGui import QImage
 from shiboken6 import isValid
 
 
@@ -23,6 +24,8 @@ if __name__ == "__main__":
 
 from playback import PlaybackState
 from app_loader import QtTestCase, load_app_module
+from config import ConfigStore
+from thumbnails import ThumbnailThread
 import bb_video_display
 import windows_integration as windows
 
@@ -256,6 +259,7 @@ class ImageDisplay:
         self.visible = False
         self.hwnd = 0
         self.deleteLater = mock.Mock()
+        self.set_scaling = mock.Mock()
 
 
     def set_image(self, path: Path) -> None:
@@ -513,6 +517,105 @@ class PlaybackStateTests(QtTestCase):
         self.start_loading()
         self.player.finish_loading()
         self.app.processEvents()
+
+
+    def test_scaling_follows_orientation_without_changing_paused_followers(self) -> None:
+        """
+        驗證橫直方向的縮放設定, 跟隨狀態與暫停進度
+        """
+
+        media_dir = self.namespace["MEDIA_DIR"]
+        store = ConfigStore(media_dir / "config.json", media_dir, ROOT / "lang")
+        self.namespace["config_store"] = store
+        self.start_playing()
+        self.tray.pause()
+        self.player.position = 4321
+        same = self.add_following_wallpaper()
+        portrait = self.add_following_wallpaper("screen-c")
+        portrait.target_screen._geometry = QRect(0, 0, 1080, 1920)
+        for follower in (same, portrait):
+            self.assertTrue(self.tray.follow_controller.follow(follower.screen_id, self.wallpaper.screen_id))
+
+        self.tray.set_scaling(self.wallpaper.screen_id, "fit")
+        self.assertEqual(store.load()["scalingMode"]["sample.mp4"], {"landscape": "fit", "portrait": "fit"})
+        self.tray.set_scaling(portrait.screen_id, "stretch")
+        self.assertEqual((self.wallpaper.scaling_mode, same.scaling_mode, portrait.scaling_mode), ("fit", "fit", "stretch"))
+        self.assertEqual((self.player.state, self.player.position), ("paused", 4321))
+        self.assertEqual(len(self.tray.follow_controller.graph.sources), 2)
+
+        with mock.patch.object(store, "save", return_value=False):
+            self.tray.set_scaling(self.wallpaper.screen_id, "fill")
+        self.assertEqual((self.wallpaper.scaling_mode, same.scaling_mode), ("fit", "fit"))
+        self.assertEqual(store.load()["scalingMode"]["sample.mp4"]["landscape"], "fit")
+
+        self.wallpaper.target_screen._geometry = QRect(0, 0, 1080, 1920)
+        self.wallpaper.reattach_to_desktop()
+        self.player.finish_loading()
+        self.app.processEvents()
+        self.assertEqual(self.wallpaper.scaling_mode, "stretch")
+        self.assertEqual((self.player.state, self.player.position), ("paused", 4321))
+
+        config = store.load()
+        config["scalingMode"]["sample.mp4"] = {"landscape": "fit"}
+        store.save(config)
+        self.wallpaper.apply_scaling()
+        self.assertEqual(self.wallpaper.scaling_mode, "fit")
+        self.wallpaper.set_play_media(media_dir / "next.mp4")
+        self.assertEqual(self.wallpaper.scaling_mode, "fill")
+
+
+    def test_queued_background_color_respects_media_changes_and_saved_colors(self) -> None:
+        """
+        驗證換片與保存色碼後的延遲取色回呼
+        """
+
+        media_dir = self.namespace["MEDIA_DIR"]
+        store = ConfigStore(media_dir / "config.json", media_dir, ROOT / "lang")
+        self.namespace["config_store"] = store
+        self.start_playing()
+        self.tray.set_scaling(self.wallpaper.screen_id, "fit")
+        signal_source = ThumbnailThread(media_dir, media_dir / "thumbnails")
+        self.addCleanup(signal_source.deleteLater)
+        signal_source.thumbnail_ready.connect(self.tray.apply_background_color, Qt.ConnectionType.QueuedConnection)
+        image = QImage(2, 2, QImage.Format.Format_RGB32)
+        image.fill(0xff336699)
+
+        def deliver(path: Path) -> None:
+
+            worker = threading.Thread(target=lambda: signal_source.thumbnail_ready.emit(str(path), 3, image))
+            worker.start()
+            worker.join()
+
+        deliver(self.media_path)
+        next_media = media_dir / "next.mp4"
+        self.wallpaper.set_play_media(next_media)
+        self.tray.set_scaling(self.wallpaper.screen_id, "fit")
+        self.app.processEvents()
+        self.assertEqual(store.load()["backgroundColor"], {})
+
+        deliver(next_media)
+        config = store.load()
+        config["backgroundColor"]["next.mp4"] = "#112233"
+        store.save(config)
+        self.wallpaper.apply_scaling(config)
+        self.app.processEvents()
+        self.assertEqual(store.load()["backgroundColor"], {"next.mp4": "#112233"})
+        self.assertEqual(self.wallpaper.instance_video._background_color.name(), "#112233")
+
+        self.wallpaper.set_play_media(self.media_path)
+        self.tray.pause()
+        self.player.finish_loading()
+        self.app.processEvents()
+        self.player.position = 4321
+        deliver(self.media_path)
+        deliver(self.media_path)
+        with mock.patch.object(store, "save", wraps=store.save) as save:
+            save.assert_not_called()
+            self.app.processEvents()
+            save.assert_called_once()
+        self.assertEqual(store.load()["backgroundColor"]["sample.mp4"], "#336699")
+        self.assertEqual((self.player.state, self.player.position), ("paused", 4321))
+        self.assertEqual(self.wallpaper.instance_video._background_color.name(), "#336699")
 
 
     def create_independent_wallpaper(self, screen_id: str):

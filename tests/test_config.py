@@ -69,9 +69,17 @@ class ConfigTests(unittest.TestCase):
             paths += ["C:relative.mp4", "\\rooted.mp4", "\\\\server\\share\\file.mp4"]
 
         selections = {str(index): path for index, path in enumerate(paths)}
-        result, _ = self.store.validate({"recentVideo": paths, "screenWallpapers": selections})
+        result, _ = self.store.validate({
+            "recentVideo": paths,
+            "screenWallpapers": selections,
+            "scalingMode": {path: {"landscape": "fit", "portrait": [], "unknown": "fill"}
+                            for path in paths if isinstance(path, str)},
+            "backgroundColor": {path: "#AABBCC" for path in paths if isinstance(path, str)},
+        })
         self.assertEqual(result["recentVideo"], valid)
         self.assertEqual(result["screenWallpapers"], {"0": valid[0], "1": valid[1]})
+        self.assertEqual(result["scalingMode"], {path: {"landscape": "fit"} for path in valid})
+        self.assertEqual(result["backgroundColor"], {path: "#aabbcc" for path in valid})
 
 
     def test_loading_and_startup_save_validate_config(self) -> None:

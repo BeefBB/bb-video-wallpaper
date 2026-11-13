@@ -14,11 +14,11 @@ from win32con import WM_DESTROY
 
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog
 from PySide6.QtCore import QByteArray, Qt, QTimer, QThread, Signal
-from PySide6.QtGui import QAction, QActionGroup, QIcon, QFont, QScreen, QCursor
+from PySide6.QtGui import QAction, QActionGroup, QIcon, QFont, QImage, QScreen, QCursor
 
 import bb_image_display
 import bb_video_display
-from config import CONFIG_DEFAULTS, ConfigStore, SUPPORTED_LANGUAGES
+from config import CONFIG_DEFAULTS, ConfigStore, SUPPORTED_LANGUAGES, get_scaling_mode
 from media_import import MediaImportCancelled, import_media
 from media_preview import MediaPreviewMenu
 from playback import AutoPauseReason, PlaybackState, update_auto_pause
@@ -345,6 +345,7 @@ class Wallpaper(QWidget):
         # 播放狀態: "play", "pause", "stop"
         self.play_state = "stop"
         self.playback_state = PlaybackState()
+        self.scaling_mode = "fill"
         self.auto_pause_handler: AutoPauseHandler | None = None
 
         # 全螢幕檢測就緒
@@ -681,6 +682,9 @@ class Wallpaper(QWidget):
             self.show()
 
 
+            # 重新掛載前套用目前螢幕方向的縮放設定
+            self.apply_scaling()
+
             # 掛載到桌布
             self.attach_to_desktop()
 
@@ -752,10 +756,34 @@ class Wallpaper(QWidget):
 
 
         self.current_media = path
+        self.apply_scaling()
         logger.info("set_play_media - %s", path)
 
         self.apply_playback_state()
         self.media_changed.emit()
+
+
+    def get_orientation(self) -> str:
+
+        geometry = self.target_screen.geometry()
+        return "landscape" if geometry.width() >= geometry.height() else "portrait"
+
+
+    def apply_scaling(self, config: dict | None = None) -> None:
+        """
+        套用目前素材與螢幕方向的顯示選項
+        """
+
+        if self.is_exiting or self.current_media is None:
+            return
+
+        if config is None:
+            config = config_store.load()
+        media_path = self.current_media.relative_to(MEDIA_DIR).as_posix()
+        self.scaling_mode = get_scaling_mode(config, media_path, self.get_orientation())
+        color = config.get("backgroundColor", {}).get(media_path, "#000000")
+        self.instance_image.set_scaling(self.scaling_mode, color)
+        self.instance_video.set_scaling(self.scaling_mode, color)
 
 
     def select_media(self, path: Path) -> None:
@@ -932,6 +960,7 @@ class Tray:
 
         # 共用縮圖工作
         self.thumbnail_thread = ThumbnailThread(MEDIA_DIR, THUMBNAIL_DIR)
+        self.thumbnail_thread.thumbnail_ready.connect(self.apply_background_color, Qt.ConnectionType.QueuedConnection)
 
         # 設定檔
         config = config_store.load()
@@ -1166,6 +1195,8 @@ class Tray:
         self.wallpapers[wallpaper.screen_id] = wallpaper
         wallpaper.auto_pause_handler = self.follow_controller.check_auto_pause
         wallpaper.media_changed.connect(self.refresh_tooltip, Qt.ConnectionType.QueuedConnection)
+        wallpaper.media_changed.connect(self.request_background_colors, Qt.ConnectionType.QueuedConnection)
+        wallpaper.reattach_finished.connect(self.request_background_colors, Qt.ConnectionType.QueuedConnection)
 
         for signal in (wallpaper.playback_started, wallpaper.reattach_finished):
             signal.connect(
@@ -1173,6 +1204,7 @@ class Tray:
                 Qt.ConnectionType.QueuedConnection
             )
         wallpaper.show()
+        self.request_background_colors()
 
         if refresh:
             self.follow_controller.restore(self.follow_controller.graph.sources)
@@ -1398,9 +1430,101 @@ class Tray:
 
         if len(self.wallpapers) > 1:
             self.add_follow_menu(menu, screen_id)
-            menu.addSeparator()
+
+        self.add_scaling_menu(menu, screen_id)
+        menu.addSeparator()
 
         self.add_media_menu_actions(menu, screen_id)
+
+
+    def add_scaling_menu(self, menu: QMenu, screen_id: str | None) -> None:
+
+        wallpaper = self.wallpapers.get(screen_id) if screen_id is not None else None
+        scaling_menu = menu.addMenu(tr("scaling_mode"))
+        scaling_menu.setEnabled(bool(wallpaper and wallpaper.current_media))
+        group = QActionGroup(scaling_menu)
+
+        for mode in ("fill", "fit", "stretch"):
+            action = scaling_menu.addAction(tr(f"scaling_{mode}"))
+            action.setCheckable(True)
+            action.setChecked(bool(wallpaper and wallpaper.scaling_mode == mode))
+            group.addAction(action)
+            action.triggered.connect(lambda checked=False, value=mode: self.set_scaling(screen_id, value))
+
+
+    def set_scaling(self, screen_id: str | None, mode: str) -> None:
+        """
+        首次選擇記錄兩種方向, 後續只更新所選螢幕的方向
+        """
+
+        wallpaper = self.wallpapers.get(screen_id) if screen_id is not None else None
+        if self.is_exiting or wallpaper is None or wallpaper.is_exiting or wallpaper.current_media is None:
+            return
+
+        path = wallpaper.current_media
+        media_path = path.relative_to(MEDIA_DIR).as_posix()
+        config = config_store.load()
+        modes = config.setdefault("scalingMode", {}).setdefault(media_path, {})
+        if not modes:
+            modes.update(landscape=mode, portrait=mode)
+        else:
+            modes[wallpaper.get_orientation()] = mode
+
+        if not config_store.save(config):
+            return
+
+        for target in self.wallpapers.values():
+            if target.current_media == path:
+                target.apply_scaling(config)
+        self.request_background_colors()
+
+
+    def request_background_colors(self) -> None:
+        """
+        為尚無背景色的完整顯示桌布請求縮圖
+        """
+
+        if self.is_exiting:
+            return
+
+        config = config_store.load()
+        colors = config.get("backgroundColor", {})
+        for wallpaper in self.wallpapers.values():
+            path = wallpaper.current_media
+            if wallpaper.is_exiting or wallpaper.scaling_mode != "fit" or path is None:
+                continue
+            if path.relative_to(MEDIA_DIR).as_posix() not in colors:
+                self.thumbnail_thread.request(path)
+
+
+    def apply_background_color(self, media_path: str, preview_size: int, image: QImage) -> None:
+        """
+        從縮圖取得平均色, 保存並套用為背景色
+        """
+
+        if self.is_exiting or image.isNull():
+            return
+
+        path = Path(media_path)
+        targets = [w for w in self.wallpapers.values() if not w.is_exiting and w.current_media == path]
+        if not any(w.scaling_mode == "fit" for w in targets):
+            return
+
+        config = config_store.load()
+        colors = config.setdefault("backgroundColor", {})
+        key = path.relative_to(MEDIA_DIR).as_posix()
+        if key in colors:
+            return
+
+        color = image.scaled(1, 1, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        colors[key] = color.pixelColor(0, 0).name()
+        if not config_store.save(config):
+            return
+
+        for wallpaper in targets:
+            wallpaper.apply_scaling(config)
+        for menu in (self.media_menu, *self.screen_menus.values()):
+            menu.display_config = config
 
 
     def add_follow_menu(self, menu: QMenu, screen_id: str) -> None:
@@ -1452,8 +1576,14 @@ class Tray:
         """
 
         self.media_menu.reset_preview()
+        for action in self.media_menu.actions():
+            submenu = action.menu()
+            if submenu is not None:
+                submenu.deleteLater()
         self.media_menu.clear()
         screen_id = next(iter(self.wallpapers)) if len(self.wallpapers) == 1 else None
+        self.add_scaling_menu(self.media_menu, screen_id)
+        self.media_menu.addSeparator()
         self.add_media_menu_actions(self.media_menu, screen_id)
 
 
@@ -1466,6 +1596,7 @@ class Tray:
         menu.target_screen = wallpaper.target_screen if wallpaper is not None else None
 
         config = config_store.load()
+        menu.display_config = config
         recent = config["recentVideo"][:config["recentDisplayCount"]]
 
         for media_path in recent:
