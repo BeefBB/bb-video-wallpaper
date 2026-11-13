@@ -5,6 +5,7 @@
 
 from pathlib import Path
 import sys
+import tempfile
 import threading
 import unittest
 from unittest import mock
@@ -22,6 +23,7 @@ if __name__ == "__main__":
 
 from playback import PlaybackState
 from app_loader import QtTestCase, load_app_module
+import bb_video_display
 import windows_integration as windows
 
 
@@ -105,13 +107,23 @@ class DeferredPlayer:
         self.position = 0
         self.pause_calls = []
         self.callbacks = {}
+        self.last_playing_callback = None
 
         self.events = mock.Mock(spec=["event_attach", "event_detach"])
-        self.events.event_attach.side_effect = self.callbacks.__setitem__
+        self.events.event_attach.side_effect = self.attach_event
         self.events.event_detach.side_effect = self.callbacks.pop
 
         self.video_set_crop_geometry = mock.Mock()
+        self.video_set_key_input = mock.Mock()
+        self.video_set_mouse_input = mock.Mock()
         self.set_hwnd = mock.Mock()
+
+
+    def attach_event(self, event, callback) -> None:
+
+        self.callbacks[event] = callback
+        if event is PLAYING_EVENT:
+            self.last_playing_callback = callback
 
 
     def event_manager(self) -> mock.Mock:
@@ -132,6 +144,8 @@ class DeferredPlayer:
 
         elif self.state != "playing":
             self.state = "opening"
+            if self.position < 0:
+                self.position = 0
 
         return 0
 
@@ -215,7 +229,9 @@ class DeferredPlayer:
             if self.position < 0:
                 self.position = 0
 
-        self.callbacks[PLAYING_EVENT](None)
+        callback = self.callbacks.get(PLAYING_EVENT, self.last_playing_callback)
+        if callback is not None:
+            callback(None)
 
 
     def release(self) -> None:
@@ -289,6 +305,47 @@ class ImageDisplay:
         self.current_image = None
 
 
+class VideoDisplay(bb_video_display.Instance):
+    """
+    保留影片模組的播放與停止流程, 只替換原生視窗及影像軌查詢
+    """
+
+    def __init__(self) -> None:
+
+        super().__init__()
+        self._hwnd = 1
+        self._bound_hwnd = 0
+        self._layout = mock.Mock()
+        self._read_video_size = mock.Mock()
+        try:
+            self._ensure_player()
+        except Exception:
+            self.close()
+            self.deleteLater()
+            raise
+
+
+    def show(self) -> None:
+
+        if self._hwnd and self._hwnd != self._bound_hwnd:
+            assert self._player is not None
+            self._player.set_hwnd(self._hwnd)
+            self._bound_hwnd = self._hwnd
+        self._visible = True
+
+
+    def hide(self) -> None:
+
+        self._visible = False
+
+
+    def set_hwnd(self, hwnd: int, *, process_events: bool = False) -> None:
+
+        if hwnd != self._hwnd:
+            self._bound_hwnd = 0
+        super().set_hwnd(hwnd, process_events=process_events)
+
+
 class PlaybackStateTests(QtTestCase):
     """
     桌布播放狀態, 重掛與資源釋放
@@ -300,6 +357,10 @@ class PlaybackStateTests(QtTestCase):
         """
 
         super().setUp()
+
+        media_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        for name in ("sample.mp4", "next.mp4", "new.mp4"):
+            (media_dir / name).touch()
 
         self.player = DeferredPlayer()
         self.image_output = ImageDisplay()
@@ -315,6 +376,10 @@ class PlaybackStateTests(QtTestCase):
         vlc.EventType.MediaPlayerPlaying = PLAYING_EVENT
         vlc.State.Playing = "playing"
         vlc.State.Paused = "paused"
+        vlc.State.Stopped = "stopped"
+        vlc.State.NothingSpecial = "nothing"
+        self.enterContext(mock.patch.dict(sys.modules, {"vlc": vlc}))
+        self.enterContext(mock.patch.object(bb_video_display.win32gui, "IsWindow", return_value=True))
 
         config_store = mock.Mock()
         config_store.load.return_value = {}
@@ -328,9 +393,10 @@ class PlaybackStateTests(QtTestCase):
             "DesktopEventWindow": HeadlessDesktopEvents,
             "vlc": vlc,
             "bb_image_display": image_module,
+            "bb_video_display": mock.Mock(Instance=VideoDisplay),
             "config_store": config_store,
             "get_media": mock.Mock(return_value=[]),
-            "MEDIA_DIR": ROOT / "test-media",
+            "MEDIA_DIR": media_dir,
             "SUPPORTED_IMAGE_EXTENSIONS": {".png", ".jpg"},
             "SUPPORTED_VIDEO_EXTENSIONS": {".mp4"},
             "is_on_battery": mock.Mock(return_value=False),
@@ -350,14 +416,14 @@ class PlaybackStateTests(QtTestCase):
             module = load_app_module()
         module.__dict__.update(self.namespace)
         self.namespace = module.__dict__
+        self.enterContext(mock.patch.object(bb_video_display, "wake_vlc_video_windows", self.namespace["wake_vlc_video_windows"]))
+        self.enterContext(mock.patch.object(bb_video_display, "logger", self.namespace["logger"]))
 
         wallpaper_class = self.namespace["Wallpaper"]
         # 保留原始方法供個別案例呼叫
-        self.attach_to_desktop = wallpaper_class.attach_to_desktop
         self.unregister_power_notification = wallpaper_class.unregister_power_notification
 
-        for name in ("attach_to_desktop", "unregister_power_notification"):
-            self.enterContext(mock.patch.object(wallpaper_class, name))
+        self.enterContext(mock.patch.object(wallpaper_class, "unregister_power_notification"))
 
         self.wallpaper = wallpaper_class()
         self.addCleanup(self.dispose_wallpaper)
@@ -425,7 +491,7 @@ class PlaybackStateTests(QtTestCase):
         if wallpaper.desktop_events is not None:
             wallpaper.desktop_events.deleteLater()
 
-        self.player.callbacks.clear()
+        wallpaper.instance_video.close()
         wallpaper.deleteLater()
 
 
@@ -521,7 +587,7 @@ class PlaybackStateTests(QtTestCase):
             media_after_removal.append(downstream.current_media)
 
         callback = self.queue_operation(remove_middle)
-        self.wait_for_native_wakeup(middle.instance_vlc_player)
+        self.wait_for_native_wakeup(middle.instance_video._player)
         controller.synchronize()
         callback.assert_not_called()
         self.app.processEvents()
@@ -651,7 +717,7 @@ class PlaybackStateTests(QtTestCase):
         self.player.position = 6500
         self.tray.pause(self.wallpaper.screen_id)
         follower = self.add_following_wallpaper()
-        player = follower.instance_vlc_player
+        player = follower.instance_video._player
         self.assertTrue(self.tray.follow_controller.follow(follower.screen_id, self.wallpaper.screen_id))
         self.assertEqual(follower.play_state, "pause")
         self.assertEqual(player.state, "opening")
@@ -672,19 +738,20 @@ class PlaybackStateTests(QtTestCase):
         self.player.finish_loading()
         follower = self.add_following_wallpaper()
         self.tray.follow_controller.follow(follower.screen_id, self.wallpaper.screen_id)
-        follower.instance_vlc_player.finish_loading()
+        follower.instance_video._player.finish_loading()
         self.app.processEvents()
         self.player.position = 7500
-        follower.instance_vlc_player.position = 1000
+        follower.instance_video._player.position = 1000
         self.wallpaper.reattach_to_desktop()
         self.app.processEvents()
-        self.assertEqual(self.wallpaper.pending_reattach_time, 7500)
-        self.assertEqual(follower.instance_vlc_player.position, 1000)
+        self.assertEqual(self.wallpaper.instance_video._pending_time, 7500)
+        self.assertEqual(follower.instance_video._player.position, 1000)
 
         self.player.finish_loading()
         self.app.processEvents()
-        self.assertIsNone(self.wallpaper.pending_reattach_time)
-        self.assertEqual(follower.instance_vlc_player.position, 7500)
+        self.app.processEvents()
+        self.assertIsNone(self.wallpaper.instance_video._pending_time)
+        self.assertEqual(follower.instance_video._player.position, 7500)
 
 
     def test_follow_new_local_media_ignores_queued_source_ready_events(self) -> None:
@@ -717,10 +784,10 @@ class PlaybackStateTests(QtTestCase):
         with mock.patch.object(self.player, "is_seekable", return_value=False):
             self.assertFalse(self.wallpaper.seek_time(4000))
         self.assertTrue(self.wallpaper.seek_time(4000))
-        self.wallpaper.pending_reattach_time = 6000
+        self.wallpaper.instance_video._pending_time = 6000
         self.assertIsNone(self.wallpaper.get_playback_time())
         self.assertFalse(self.wallpaper.seek_time(2000))
-        self.assertEqual(self.wallpaper.pending_reattach_time, 6000)
+        self.assertEqual(self.wallpaper.instance_video._pending_time, 6000)
 
 
     def test_playing_callback_from_worker_pauses_on_qt_thread(self) -> None:
@@ -795,7 +862,6 @@ class PlaybackStateTests(QtTestCase):
         """
 
         self.start_playing()
-        self.wallpaper.attach_to_desktop.side_effect = lambda: self.attach_to_desktop(self.wallpaper)
         original_stop = self.player.stop
 
         def stop_and_clear_time():
@@ -814,11 +880,9 @@ class PlaybackStateTests(QtTestCase):
             operations.attach_mock(self.player.set_hwnd, "set_hwnd")
             self.wallpaper.reattach_to_desktop()
 
-        self.assertEqual(operations.mock_calls[:3], [
-            mock.call.stop(),
-            mock.call.destroy(True, True),
-            mock.call.set_hwnd(1),
-        ])
+        calls = operations.mock_calls
+        self.assertLess(calls.index(mock.call.stop()), calls.index(mock.call.destroy(True, True)))
+        self.assertLess(calls.index(mock.call.destroy(True, True)), calls.index(mock.call.set_hwnd(1)))
 
 
     def test_reattach_stop_keeps_qt_events_running_and_ignores_pending_pause(self) -> None:
@@ -847,7 +911,7 @@ class PlaybackStateTests(QtTestCase):
         self.player.pause_calls.clear()
 
         with mock.patch.object(self.player, "stop", side_effect=stop_waiting_for_ui):
-            self.wallpaper.stop_video_output()
+            self.wallpaper.instance_video.set_hwnd(0, process_events=True)
 
         self.assertTrue(processed.is_set())
         self.assertEqual(self.player.pause_calls, [])
@@ -879,9 +943,9 @@ class PlaybackStateTests(QtTestCase):
                 with mock.patch.object(self.player, "set_time", side_effect=seek_when_ready):
                     self.wallpaper.reattach_to_desktop()
                     self.assertEqual(self.player.position, 0)
-                    self.assertEqual(self.wallpaper.pending_reattach_time, 4321)
+                    self.assertEqual(self.wallpaper.instance_video._pending_time, 4321)
                     if repeated:
-                        self.wallpaper.attach_to_desktop.side_effect = [RuntimeError("attachment failed"), None]
+                        self.namespace["set_windows_as_wallpaper"].side_effect = [RuntimeError("attachment failed"), None]
                         self.wallpaper.reattach_to_desktop()
                         self.wallpaper.reattach_timer.start(0)
                         self.app.processEvents()
@@ -890,7 +954,7 @@ class PlaybackStateTests(QtTestCase):
 
                 self.assertEqual(self.player.position, 4321)
                 self.assertEqual(self.player.state, "paused" if state == "pause" else "playing")
-                self.assertIsNone(self.wallpaper.pending_reattach_time)
+                self.assertIsNone(self.wallpaper.instance_video._pending_time)
 
 
     def test_stop_or_media_selection_cancels_pending_seek_during_load_or_retry(self) -> None:
@@ -907,11 +971,11 @@ class PlaybackStateTests(QtTestCase):
                 if failed:
                     self.start_playing()
                     self.player.position = 4321
-                    self.wallpaper.attach_to_desktop.side_effect = [RuntimeError("attachment failed"), None]
+                    self.namespace["set_windows_as_wallpaper"].side_effect = [RuntimeError("attachment failed"), None]
                     self.wallpaper.reattach_to_desktop()
                 else:
                     self.start_loading()
-                    self.wallpaper.pending_reattach_time = 4321
+                    self.wallpaper.instance_video._pending_time = 4321
 
                 if action == "stop":
                     self.tray.stop()
@@ -933,7 +997,7 @@ class PlaybackStateTests(QtTestCase):
                     self.player.finish_loading()
                     self.app.processEvents()
                 seek.assert_not_called()
-                self.assertIsNone(self.wallpaper.pending_reattach_time)
+                self.assertIsNone(self.wallpaper.instance_video._pending_time)
                 self.assertEqual(self.wallpaper.play_state, "stop" if action == "stop" else "play")
 
 
@@ -948,7 +1012,7 @@ class PlaybackStateTests(QtTestCase):
                     self.start_playing()
                     getattr(self.tray, state)()
                     self.player.position = 4321
-                    self.wallpaper.attach_to_desktop.side_effect = [
+                    self.namespace["set_windows_as_wallpaper"].side_effect = [
                         *[RuntimeError("attachment failed") for _ in range(failures)], None,
                     ]
 
@@ -1098,8 +1162,8 @@ class PlaybackStateTests(QtTestCase):
         """
 
         self.namespace["wintypes"].MSG.from_address.return_value.message = self.namespace["WM_DESTROY"]
-        self.wallpaper.attach_to_desktop.reset_mock()
-        self.wallpaper.attach_to_desktop.side_effect = RuntimeError("desktop unavailable")
+        self.namespace["set_windows_as_wallpaper"].reset_mock()
+        self.namespace["set_windows_as_wallpaper"].side_effect = RuntimeError("desktop unavailable")
         timer = self.wallpaper.reattach_timer
         self.wallpaper.on_screen_changed(mock.sentinel.geometry)
 
@@ -1116,7 +1180,7 @@ class PlaybackStateTests(QtTestCase):
                 timer.start(0)
                 self.app.processEvents()
 
-                self.assertEqual(self.wallpaper.attach_to_desktop.call_count, attempt + 1)
+                self.assertEqual(self.namespace["set_windows_as_wallpaper"].call_count, attempt + 1)
                 self.assertEqual(self.wallpaper.reattach_retry_count, min(attempt + 1, 2))
                 self.assertFalse(self.wallpaper.is_recreating)
 
@@ -1128,7 +1192,7 @@ class PlaybackStateTests(QtTestCase):
         驗證工作列重建通知可重設重試次數並排定一次重掛, 不需視窗銷毀事件
         """
 
-        self.wallpaper.attach_to_desktop.reset_mock()
+        self.namespace["set_windows_as_wallpaper"].reset_mock()
         self.wallpaper.reattach_retry_count = 2
         self.wallpaper.desktop_events.taskbar_created.emit()
         self.wallpaper.desktop_events.taskbar_created.emit()
@@ -1140,7 +1204,7 @@ class PlaybackStateTests(QtTestCase):
         timer.start(0)
         self.app.processEvents()
 
-        self.wallpaper.attach_to_desktop.assert_called_once_with()
+        self.namespace["set_windows_as_wallpaper"].assert_called_once_with(1)
         self.assertFalse(timer.isActive())
 
 
@@ -1153,7 +1217,7 @@ class PlaybackStateTests(QtTestCase):
         self.tray.pause()
         self.player.position = 4321
         self.wallpaper.reattach_retry_count = 1
-        self.wallpaper.attach_to_desktop.reset_mock()
+        self.namespace["set_windows_as_wallpaper"].reset_mock()
         self.namespace["check_desktop_ready"].side_effect = windows.check_desktop_ready
         timer = self.wallpaper.reattach_timer
         desktop_windows = {}
@@ -1171,7 +1235,7 @@ class PlaybackStateTests(QtTestCase):
                 self.assertEqual(self.wallpaper.reattach_retry_count, 1)
                 self.wallpaper.destroy.assert_not_called()
                 self.wallpaper.hide.assert_not_called()
-                self.wallpaper.attach_to_desktop.assert_not_called()
+                self.namespace["set_windows_as_wallpaper"].assert_not_called()
                 self.assertEqual((self.player.state, self.player.position), ("paused", 4321))
 
             desktop_windows = {"Shell_TrayWnd": 1, "Progman": 2}
@@ -1180,7 +1244,7 @@ class PlaybackStateTests(QtTestCase):
             self.player.finish_loading()
             self.app.processEvents()
 
-        self.wallpaper.attach_to_desktop.assert_called_once_with()
+        self.namespace["set_windows_as_wallpaper"].assert_called_once_with(1)
         self.assertFalse(timer.isActive())
         self.assertEqual(self.wallpaper.reattach_retry_count, 0)
         self.assertEqual((self.player.state, self.player.position), ("paused", 4321))
@@ -1199,9 +1263,6 @@ class PlaybackStateTests(QtTestCase):
                 self.instance_image.reset_mock()
                 self.namespace["config_store"].save.reset_mock()
                 self.wallpaper.winId.return_value = 2
-                self.wallpaper.attach_to_desktop.side_effect = (
-                    lambda: self.attach_to_desktop(self.wallpaper)
-                )
 
                 operations = mock.Mock()
                 operations.attach_mock(self.instance_image.set_hwnd, "image_hwnd")
@@ -1289,13 +1350,13 @@ class PlaybackStateTests(QtTestCase):
         self.player.finish_loading()
         pause_calls = list(self.player.pause_calls)
         playing_callback = self.player.callbacks[PLAYING_EVENT]
-        self.wallpaper.attach_to_desktop.reset_mock()
+        self.namespace["set_windows_as_wallpaper"].reset_mock()
         self.namespace["check_desktop_ready"].return_value = False
         self.wallpaper.reattach_to_desktop()
         self.assertTrue(self.wallpaper.reattach_timer.isActive())
         listener = self.wallpaper.desktop_events
         listener.taskbar_created.emit()
-        instance = self.wallpaper.instance_vlc
+        instance = self.wallpaper.instance_video._instance
         handle = 2**40 + 1
         self.wallpaper.power_notify = handle
         self.wallpaper.unregister_power_notification.side_effect = lambda: self.unregister_power_notification(self.wallpaper)
@@ -1331,7 +1392,7 @@ class PlaybackStateTests(QtTestCase):
         self.assertEqual(self.player.pause_calls, pause_calls)
         self.assertFalse(any(timer.isActive() for timer in self.wallpaper.findChildren(QTimer)))
         listener.close.assert_called_once_with()
-        self.wallpaper.attach_to_desktop.assert_not_called()
+        self.namespace["set_windows_as_wallpaper"].assert_not_called()
         self.tray.app.quit.assert_not_called()
         self.namespace["unregister_power_notification"].assert_called_once_with(handle)
         self.assertIsNone(self.wallpaper.power_notify)
@@ -1346,6 +1407,7 @@ class PlaybackStateTests(QtTestCase):
         listener = self.wallpaper.desktop_events
         listener.close.side_effect = RuntimeError("listener close failed")
         self.instance_image.close.side_effect = RuntimeError("image close failed")
+        instance = self.wallpaper.instance_video._instance
 
         with (
             mock.patch.object(self.player, "stop", side_effect=RuntimeError("stop failed")),
@@ -1356,7 +1418,7 @@ class PlaybackStateTests(QtTestCase):
         self.wallpaper.unregister_power_notification.assert_called_once_with()
         self.instance_image.set_hwnd.assert_called_with(0)
         self.instance_image.deleteLater.assert_called_once_with()
-        self.wallpaper.instance_vlc.release.assert_called_once_with()
+        instance.release.assert_called_once_with()
         self.wallpaper.hide.assert_called_once_with()
         self.wallpaper.destroy.assert_called_once_with(True, True)
         self.assertIsNone(self.wallpaper.desktop_events)
@@ -1370,7 +1432,7 @@ class PlaybackStateTests(QtTestCase):
         """
 
         self.start_loading()
-        self.wallpaper.attach_to_desktop.reset_mock()
+        self.namespace["set_windows_as_wallpaper"].reset_mock()
         self.tray.rebuild_screen_menus = mock.Mock()
         continue_stop = threading.Event()
         original_stop = self.player.stop
@@ -1404,7 +1466,7 @@ class PlaybackStateTests(QtTestCase):
         self.assertEqual(self.tray.wallpapers, {})
         self.assertEqual(self.player.state, "released")
         stop.assert_called_once_with()
-        self.wallpaper.attach_to_desktop.assert_not_called()
+        self.namespace["set_windows_as_wallpaper"].assert_not_called()
         self.wallpaper.create.assert_not_called()
         self.namespace["logger"].exception.assert_not_called()
         self.app.processEvents()

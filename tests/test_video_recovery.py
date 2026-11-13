@@ -126,7 +126,8 @@ def run_recovery_probe(media: Path, operation: str = "reattach") -> None:
         wallpaper.check_auto_pause_timer.stop()
         wallpaper.setGeometry(0, 0, 640, 360)
         wallpaper.show()
-        player = wallpaper.instance_vlc_player
+        player = wallpaper.instance_video._player
+        assert player is not None, "影片模組沒有建立播放器"
         wait_until(lambda: player.has_vout() > 0 and player.get_time() > 1000)
         # 重建途中不顯示尚未掛入測試容器的頂層視窗
         wallpaper.show = lambda: None

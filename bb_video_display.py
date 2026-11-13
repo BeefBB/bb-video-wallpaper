@@ -14,8 +14,10 @@ Qt 影片顯示模組, 接收主程式提供的 HWND 並共用既有 QApplicatio
 show/hide 只改變可見性, stop 隱藏輸出並停止播放
 set_hwnd(0) 解除掛載但保留進度與播放意圖, 重新綁定後恢復
 close 釋放媒體及內部資源, 保留 HWND 與顯示選項供重新載入
+重掛或結束時可傳入 process_events=True, 在等待停止期間處理 Qt 事件
 """
 
+from collections.abc import Callable
 import ctypes
 from ctypes import wintypes
 import logging
@@ -28,7 +30,10 @@ import win32api
 import win32con
 import win32gui
 
-from PySide6.QtCore import QByteArray, QAbstractNativeEventFilter, QObject, QRectF, QSizeF, Qt, Signal, Slot
+from PySide6.QtCore import (
+    QByteArray, QAbstractNativeEventFilter, QEventLoop, QObject, QRectF, QSizeF,
+    Qt, QThread, Signal, Slot,
+)
 from PySide6.QtGui import QColor, QPainter, QPaintEvent, QRasterWindow, QWindow
 from PySide6.QtWidgets import QApplication
 
@@ -71,6 +76,26 @@ class _TargetEvents(QAbstractNativeEventFilter):
                 display._target_event.emit(display._hwnd, msg.message == win32con.WM_DESTROY)
 
         return False, 0
+
+
+class _StopThread(QThread):
+    """
+    重掛時在背景停止 VLC, 讓 Qt 主執行緒繼續處理視窗訊息
+    """
+
+    def __init__(self, stop: Callable[[], None], parent: QObject) -> None:
+
+        super().__init__(parent)
+        self._stop = stop
+        self.error: Exception | None = None
+
+
+    def run(self) -> None:
+
+        try:
+            self._stop()
+        except Exception as error:
+            self.error = error
 
 
 class _VideoWindow(QRasterWindow):
@@ -235,6 +260,8 @@ class Instance(QObject):
         self._media: vlc.Media | None = None
         self._events: vlc.EventManager | None = None
         self._event_types: list[vlc.EventType] = []
+        self._stop_thread: _StopThread | None = None
+        self._closing = False
         self._generation = 0
         self._state = "stop"
         self._visible = False
@@ -291,14 +318,51 @@ class Instance(QObject):
         self._event_types.clear()
 
 
-    def _stop_player(self) -> None:
+    def _stop_player(self, *, process_events: bool = False) -> bool:
         """
-        同步停止輸出, 背景喚醒 VLC 視窗並在返回前回收執行緒
+        重掛時共用停止工作, 若等待期間被較新的操作取代則回傳 False
         """
 
         self._detach_events()
-        if self._player is None:
-            return
+        generation = self._generation
+        player = self._player
+        if player is None:
+            return True
+
+        if not process_events and self._stop_thread is None:
+            self._stop_sync(player)
+            return True
+
+        loop = QEventLoop(self)
+        worker = self._stop_thread
+        owns_worker = worker is None
+        if worker is None:
+            worker = _StopThread(lambda: self._stop_sync(player), self)
+            self._stop_thread = worker
+
+        worker.finished.connect(loop.quit)
+        if owns_worker:
+            worker.start()
+        if worker.isRunning():
+            loop.exec(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+        worker.wait()
+        worker.finished.disconnect(loop.quit)
+        error = worker.error
+
+        if owns_worker:
+            self._stop_thread = None
+            worker.deleteLater()
+        loop.deleteLater()
+
+        if error is not None:
+            raise error
+        return generation == self._generation
+
+
+    def _stop_sync(self, player: "vlc.MediaPlayer") -> None:
+        """
+        同步停止輸出, 背景喚醒 VLC 視窗並在返回前回收執行緒
+        """
 
         finished = threading.Event()
 
@@ -314,7 +378,7 @@ class Instance(QObject):
         worker.start()
 
         try:
-            self._player.stop()
+            player.stop()
         finally:
             finished.set()
             worker.join()
@@ -336,7 +400,9 @@ class Instance(QObject):
             raise RuntimeError("無法建立 VLC 媒體")
 
         try:
-            self._stop_player()
+            if not self._stop_player():
+                media.release()
+                return
             self._player.set_media(media)
         except Exception:
             media.release()
@@ -354,7 +420,7 @@ class Instance(QObject):
             self._start_player()
 
 
-    def set_hwnd(self, hwnd: int) -> None:
+    def set_hwnd(self, hwnd: int, *, process_events: bool = False) -> None:
         """
         停止舊輸出後換綁目標, 保留進度與播放意圖, 0 表示解除掛載
         """
@@ -371,16 +437,29 @@ class Instance(QObject):
         if position is None and self._player is not None and self._state != "stop":
             # 輸出失效時 VLC 可能已離開 Playing/Paused, 仍保留最後可取得的進度
             current = self._player.get_time()
-            position = current if current >= 0 else None
+            position = current if current > 0 else None
 
-        self._stop_player()
+        # 停止或釋放視窗失敗時, 下次重試仍使用原先的進度
+        self._pending_time = position
+        needs_stop = self._stop_thread is not None
+        if not needs_stop and self._player is not None:
+            import vlc
+            needs_stop = self._player.get_state() not in (
+                getattr(vlc.State, "Stopped"), getattr(vlc.State, "NothingSpecial")
+            )
+
+        if needs_stop:
+            if not self._stop_player(process_events=process_events):
+                return
+        else:
+            self._detach_events()
+
         if self._player is not None:
             self._player.set_hwnd(0)
         if self._window is not None:
             self._window.close()
             self._window = None
         self._hwnd = hwnd
-        self._pending_time = position
 
         if hwnd and self._state != "stop":
             self._start_player()
@@ -479,13 +558,7 @@ class Instance(QObject):
         顯示輸出並播放, 載入期間以最新的播放意圖為準
         """
 
-        self.show()
-        self._state = "play"
-        assert self._player is not None
-        if self._is_ready():
-            self._player.set_pause(0)
-        elif not self._event_types:
-            self._start_player()
+        self._request_playback("play")
 
 
     def pause(self) -> None:
@@ -493,16 +566,32 @@ class Instance(QObject):
         顯示輸出並暫停, 尚未就緒時等播放通知後套用
         """
 
-        self.show()
-        self._state = "pause"
+        self._request_playback("pause")
+
+
+    def _request_playback(self, state: str) -> None:
+        """
+        等待重掛時只更新播放意圖, 有效目標綁定後再恢復輸出
+        """
+
+        if self._media is None:
+            raise RuntimeError("尚未設定影片")
+        if self._hwnd:
+            self.show()
+        else:
+            self._visible = True
+        self._state = state
+        if not self._hwnd:
+            return
+
         assert self._player is not None
         if self._is_ready():
-            self._player.set_pause(1)
+            self._player.set_pause(int(state == "pause"))
         elif not self._event_types:
             self._start_player()
 
 
-    def stop(self) -> None:
+    def stop(self, *, process_events: bool = False) -> None:
         """
         隱藏輸出並停止播放, 清除等待中的進度要求
         """
@@ -510,7 +599,7 @@ class Instance(QObject):
         self._state = "stop"
         self._pending_time = None
         self.hide()
-        self._stop_player()
+        self._stop_player(process_events=process_events)
 
 
     def _is_ready(self) -> bool:
@@ -676,35 +765,52 @@ class Instance(QObject):
 
 
     @Slot()
-    def close(self) -> None:
+    def close(self, *, process_events: bool = False) -> None:
         """
         停止輸出並釋放內部資源, 保留外部 HWND 與顯示選項
         """
 
-        self.stop()
-        if self._target_events is not None:
-            app = QApplication.instance()
-            if app is not None:
-                app.removeNativeEventFilter(self._target_events)
-            self._target_events = None
+        if self._closing:
+            return
 
+        self._closing = True
+        error: Exception | None = None
+        steps: list[Callable[[], object]] = [lambda: self.stop(process_events=process_events)]
+        app = QApplication.instance()
+        if app is not None and self._target_events is not None:
+            events = self._target_events
+            steps.append(lambda: app.removeNativeEventFilter(events))
         if self._player is not None:
-            self._player.set_hwnd(0)
-            self._player.release()
-            self._player = None
-        self._events = None
-
+            player = self._player
+            steps.extend((lambda: player.set_hwnd(0), player.release))
         if self._media is not None:
-            self._media.release()
-            self._media = None
-
+            steps.append(self._media.release)
         if self._instance is not None:
-            self._instance.release()
-            self._instance = None
-
+            steps.append(self._instance.release)
         if self._window is not None:
-            self._window.close()
-            self._window = None
+            window = self._window
+            steps.append(lambda: window.close())
 
-        self.current_media = None
-        self._video_size = None
+        try:
+            for cleanup in steps:
+                try:
+                    cleanup()
+                except Exception as failure:
+                    if error is None:
+                        error = failure
+                    else:
+                        logger.exception("釋放影片資源失敗")
+        finally:
+            self._target_events = None
+            self._player = None
+            self._events = None
+            self._event_types.clear()
+            self._media = None
+            self._instance = None
+            self._window = None
+            self.current_media = None
+            self._video_size = None
+            self._closing = False
+
+        if error is not None:
+            raise error

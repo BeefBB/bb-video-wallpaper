@@ -4,23 +4,20 @@ import sys
 import os
 from ctypes import wintypes
 from pathlib import Path
-import threading
 import time
 import subprocess
 import logging
 from logging.handlers import RotatingFileHandler
-from typing import TYPE_CHECKING, cast
-
-if TYPE_CHECKING:
-    import vlc
+from typing import cast
 
 from win32con import WM_DESTROY
 
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog
-from PySide6.QtCore import QByteArray, QEventLoop, Qt, QTimer, QThread, Slot, Signal
+from PySide6.QtCore import QByteArray, Qt, QTimer, QThread, Signal
 from PySide6.QtGui import QAction, QActionGroup, QIcon, QFont, QScreen, QCursor
 
 import bb_image_display
+import bb_video_display
 from config import CONFIG_DEFAULTS, ConfigStore, SUPPORTED_LANGUAGES
 from media_import import MediaImportCancelled, import_media
 from media_preview import MediaPreviewMenu
@@ -48,7 +45,6 @@ from windows_integration import (
     set_windows_as_wallpaper,
     task_exists,
     unregister_power_notification,
-    wake_vlc_video_windows,
 )
 
 
@@ -241,28 +237,6 @@ class MediaImportThread(QThread):
             self.error = str(e)
 
 
-class VlcStopThread(QThread):
-    """
-    停止影片輸出時讓 Qt 主執行緒仍能處理原生視窗訊息
-    """
-
-    def __init__(self, player, parent=None) -> None:
-
-        super().__init__(parent)
-
-        self.player = player
-        self.error = None
-
-
-    def run(self) -> None:
-
-        try:
-            self.player.stop()
-
-        except Exception as error:
-            self.error = error
-
-
 class DesktopEventWindow(QWidget):
     """
     用獨立的隱藏頂層視窗接收通知, 避免隨 Explorer 的桌布容器一起失效
@@ -322,9 +296,6 @@ class Wallpaper(QWidget):
         # 不掛在桌布視窗或 Explorer 之下的獨立頂層 HWND
         self.desktop_events = None
 
-        self.playback_started.connect(self.apply_pending_reattach_time, Qt.ConnectionType.QueuedConnection)
-        self.playback_started.connect(self.apply_pending_pause, Qt.ConnectionType.QueuedConnection)
-
         try:
             self._initialize(target_screen)
 
@@ -358,7 +329,6 @@ class Wallpaper(QWidget):
         self.is_recreating = False
         # 重掛失敗重試次數
         self.reattach_retry_count = 0
-        self._video_stop_thread: VlcStopThread | None = None
 
         # 重掛用計時器
         self.reattach_timer = QTimer(self)
@@ -375,10 +345,6 @@ class Wallpaper(QWidget):
         # 播放狀態: "play", "pause", "stop"
         self.play_state = "stop"
         self.playback_state = PlaybackState()
-        # 等待影片輸出就緒後套用的進度
-        self.pending_reattach_time: int | None = None
-        # 重掛失敗重試時保留的進度
-        self._reattach_time: int | None = None
         self.auto_pause_handler: AutoPauseHandler | None = None
 
         # 全螢幕檢測就緒
@@ -425,29 +391,14 @@ class Wallpaper(QWidget):
             initial_media = media_files[0]
 
 
-        # VLC 播放器物件
-        instance_vlc = vlc.Instance(
-            "--no-video-title-show",
-            "--input-repeat=65535",
-            "--no-audio"
-        )
-
-        if instance_vlc is None:
-            raise RuntimeError("無法建立 VLC 實例")
-
-        self.instance_vlc = instance_vlc
-        self.instance_vlc_player = self.instance_vlc.media_player_new()
+        # 影片物件隨桌布刪除, 重掛中的清理不會過早刪除仍在等待的 Qt 物件
+        self.instance_video = bb_video_display.Instance()
+        self.instance_video.setParent(self)
+        self.instance_video.playback_started.connect(self.playback_started)
 
         # 圖片顯示物件
         # 圖片共用主程式的 QApplication 與桌布 HWND
         self.instance_image = bb_image_display.Instance()
-
-
-        self.player_events = self.instance_vlc_player.event_manager()
-        self.player_events.event_attach(
-            getattr(vlc.EventType, "MediaPlayerPlaying"),
-            lambda event: self.playback_started.emit()
-        )
 
 
         # 掛載到桌布
@@ -559,55 +510,27 @@ class Wallpaper(QWidget):
         if self.is_image():
             self.instance_image.show()
 
-        elif target == "play" or self.play_state == "stop" or force:
-            self.instance_vlc_player.play()
+        elif target == "pause":
+            self.instance_video.pause()
+
+        else:
+            self.instance_video.play()
 
         self.play_state = target
-        if target == "pause":
-            self.apply_pending_pause()
 
 
-    def _stop_media_output(self, *, preserve_reattach_time: bool = False) -> None:
+    def _stop_media_output(self) -> None:
         """
         停止目前輸出, 媒體切換時保留播放意圖
         """
-
-        self.pending_reattach_time = None
-        if not preserve_reattach_time:
-            self._reattach_time = None
 
         if self.is_image():
             self.instance_image.hide()
 
         else:
-            self._stop_video_with_wakeup()
+            self.instance_video.stop()
 
         self.play_state = "stop"
-
-
-    def _stop_video_with_wakeup(self) -> None:
-        """
-        同步停止影片, 背景只喚醒原生視窗, 避免 Qt 事件插入目前操作
-        """
-
-        finished = threading.Event()
-
-        def wake() -> None:
-            while not finished.wait(0.05):
-                try:
-                    wake_vlc_video_windows()
-                except Exception:
-                    logger.exception("喚醒 VLC 原生視窗失敗")
-
-        worker = threading.Thread(target=wake, daemon=True)
-        worker.start()
-
-        try:
-            self.instance_vlc_player.stop()
-
-        finally:
-            finished.set()
-            worker.join()
 
 
     def manual_play(self) -> None:
@@ -646,31 +569,6 @@ class Wallpaper(QWidget):
         logger.info("manual - stop")
 
 
-    @Slot()
-    def apply_pending_reattach_time(self) -> None:
-        """
-        新影片輸出開始後補套重掛前的播放進度
-        """
-
-        if self.is_exiting or self.is_recreating or self.is_image() or self.play_state == "stop":
-            return
-
-        if self.pending_reattach_time is not None:
-            self.instance_vlc_player.set_time(self.pending_reattach_time)
-            self.pending_reattach_time = None
-
-
-    @Slot()
-    def apply_pending_pause(self) -> None:
-        """
-        VLC 播放器在 MediaPlayerPlaying 事件發生前不會接受暫停指令, 所以要等到播放開始後再套用暫停
-        """
-
-        # 載入完成後依最新狀態補套暫停, 不覆蓋後續的播放或停止要求
-        if not self.is_exiting and not self.is_recreating and not self.is_image() and self.play_state == "pause":
-            self.instance_vlc_player.set_pause(1)
-
-
     def get_playback_time(self) -> int | None:
         """
         取得播放中或暫停中的進度, 尚未就緒時回傳 None
@@ -678,36 +576,26 @@ class Wallpaper(QWidget):
 
         if (
             self.is_exiting or self.is_recreating or self.is_image() or not self.current_media or
-            self.play_state == "stop" or self.pending_reattach_time is not None or
-            self._reattach_time is not None
+            self.play_state == "stop"
         ):
             return None
 
-        # python-vlc 在執行時建立列舉成員
-        playing_state: vlc.State = getattr(vlc.State, "Playing")
-        paused_state: vlc.State = getattr(vlc.State, "Paused")
-        if self.instance_vlc_player.get_state() not in (playing_state, paused_state):
-            return None
-
-        position = self.instance_vlc_player.get_time()
-        return position if position >= 0 else None
+        return self.instance_video.get_time()
 
 
     def get_playback_length(self) -> int:
 
-        return self.instance_vlc_player.get_length()
+        return self.instance_video.get_length()
 
 
     def seek_time(self, position: int) -> bool:
 
-        if position < 0 or self.get_playback_time() is None or not self.instance_vlc_player.is_seekable():
+        if position < 0 or self.get_playback_time() is None:
             return False
 
-        self.instance_vlc_player.set_time(position)
-        return True
+        return self.instance_video.set_time(position)
 
 
-    @Slot()
     def on_taskbar_created(self) -> None:
         """
         工作列重建後啟動新的恢復嘗試, 實際掛載交給共用計時器
@@ -730,46 +618,6 @@ class Wallpaper(QWidget):
             return
 
         self.reattach_timer.start(delay_ms)
-
-
-    def stop_video_output(self) -> None:
-        """
-        等待舊影片輸出停止, 期間處理視窗訊息並暫緩使用者輸入
-        """
-
-        loop = QEventLoop(self)
-        # 重掛等待期間可能收到關閉要求, 共用同一次停止工作
-        worker = self._video_stop_thread
-        owns_worker = worker is None
-
-        if worker is None:
-            worker = VlcStopThread(self.instance_vlc_player, self)
-            self._video_stop_thread = worker
-
-        worker.finished.connect(loop.quit)
-        wake_timer = QTimer(self)
-        wake_timer.timeout.connect(wake_vlc_video_windows)
-        wake_timer.start(50)
-        if owns_worker:
-            worker.start()
-
-        if worker.isRunning():
-            loop.exec(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
-
-        worker.wait()
-        wake_timer.stop()
-        wake_timer.deleteLater()
-        error = worker.error
-        worker.finished.disconnect(loop.quit)
-
-        if owns_worker:
-            self._video_stop_thread = None
-            worker.deleteLater()
-
-        loop.deleteLater()
-
-        if error is not None:
-            raise error
 
 
     def reattach_to_desktop(self) -> None:
@@ -801,20 +649,8 @@ class Wallpaper(QWidget):
             logger.info("reattach_to_desktop - start")
 
 
-            # 先停止舊影片輸出再換綁 HWND, 避免 VLC 在換綁後停止時卡住
-            # 直接停止播放器, 保留 play_state 供重掛後恢復
-            if not self.is_image():
-                if self.current_media and self._reattach_time is None:
-                    # 尚未完成的 seek 比新輸出回報的起始進度優先
-                    curr_time = self.pending_reattach_time
-                    if curr_time is None:
-                        curr_time = self.instance_vlc_player.get_time()
-                    if curr_time >= 0:
-                        self._reattach_time = curr_time
-
-                # 舊輸出的 Playing 通知不能消耗等待重試的進度
-                self.pending_reattach_time = None
-                self.stop_video_output()
+            # 解除輸出時保留模組內的播放意圖與進度, 等待期間繼續處理 Qt 事件
+            self.instance_video.set_hwnd(0, process_events=True)
 
             # 停止輸出的事件迴圈可能已處理關閉要求
             if self.is_exiting:
@@ -849,27 +685,9 @@ class Wallpaper(QWidget):
             self.attach_to_desktop()
 
 
-            # 恢復播放與時間進度
+            # 模組已在重新綁定時恢復進度, 依目前操作意圖恢復顯示
             if self.current_media:
-
-                if self.is_image():
-
-                    if self.play_state == "play":
-                        self.apply_playback_state(force=True)
-
-                else:
-
-                    self.set_play_media(self.current_media, preserve_reattach_time=True)
-
-                    curr_time = self._reattach_time
-                    if curr_time is not None and curr_time > 0:
-                        self.instance_vlc_player.set_time(curr_time)
-                        # VLC 尚在啟動時可能略過 seek, 等 Playing 事件再補套
-                        if self.play_state != "stop":
-                            self.pending_reattach_time = curr_time
-
-
-            self._reattach_time = None
+                self.apply_playback_state(force=True)
             logger.info("reattach_to_desktop - finish")
             self.is_recreating = False
             self.reattach_retry_count = 0
@@ -908,9 +726,9 @@ class Wallpaper(QWidget):
         self.schedule_reattach()
 
 
-    def set_play_media(self, path: Path, *, preserve_reattach_time: bool = False) -> None:
+    def set_play_media(self, path: Path) -> None:
         """
-        圖片交給 Qt 顯示, 影片交給 VLC, 保留原本的播放或停止狀態
+        圖片與影片交給各自的顯示模組, 保留原本的播放或停止狀態
         """
 
         if self.is_exiting:
@@ -923,22 +741,13 @@ class Wallpaper(QWidget):
             self.instance_image.set_image(path)
 
 
-        self._stop_media_output(preserve_reattach_time=preserve_reattach_time)
+        self._stop_media_output()
         logger.debug("set_play_media - stop")
 
 
         if not is_image:
 
-            media = self.instance_vlc.media_new(str(path))
-
-            try:
-                self.instance_vlc_player.set_media(media)
-
-            finally:
-                media.release()
-
-            # 裁切填滿螢幕, 並釋放已不再使用的圖片
-            self.instance_vlc_player.video_set_crop_geometry(self.get_screen_aspect_ratio())
+            self.instance_video.set_media(path)
             self.instance_image.close()
 
 
@@ -979,7 +788,7 @@ class Wallpaper(QWidget):
 
 
         # 重新設定圖片與影片輸出的目標 HWND
-        self.instance_vlc_player.set_hwnd(hwnd)
+        self.instance_video.set_hwnd(hwnd)
         self.instance_image.set_hwnd(hwnd)
 
 
@@ -987,19 +796,6 @@ class Wallpaper(QWidget):
 
         if not self.power_notify:
             logger.error("螢幕電源通知註冊失敗")
-
-
-    def get_screen_aspect_ratio(self) -> str:
-        """
-        取得螢幕解析度的寬高比
-        """
-
-        geometry = self.target_screen.geometry()
-
-        width = geometry.width()
-        height = geometry.height()
-
-        return f"{width}:{height}"
 
 
     def enable_fullscreen_detection(self) -> None:
@@ -1068,8 +864,6 @@ class Wallpaper(QWidget):
         self.auto_pause_handler = None
         self.playback_state = PlaybackState()
         self.fullscreen_detection_ready = False
-        self.pending_reattach_time = None
-        self._reattach_time = None
         self.play_state = "stop"
         self.current_media = None
 
@@ -1081,9 +875,7 @@ class Wallpaper(QWidget):
             ("停止自動暫停計時器", "check_auto_pause_timer", lambda: self.check_auto_pause_timer.stop()),
             ("停止全螢幕偵測等待", "fullscreen_detection_timer", lambda: self.fullscreen_detection_timer.stop()),
             ("解除螢幕訊號", "target_screen", lambda: self.target_screen.geometryChanged.disconnect(self.on_screen_changed)),
-            ("解除 VLC 回呼", "player_events", lambda: self.player_events.event_detach(getattr(vlc.EventType, "MediaPlayerPlaying"))),
-            ("解除進度恢復訊號", None, lambda: self.playback_started.disconnect(self.apply_pending_reattach_time)),
-            ("解除暫停恢復訊號", None, lambda: self.playback_started.disconnect(self.apply_pending_pause)),
+            ("解除影片訊號", "instance_video", lambda: self.instance_video.playback_started.disconnect(self.playback_started)),
         ]
 
         if desktop_events is not None:
@@ -1095,13 +887,10 @@ class Wallpaper(QWidget):
 
         steps.extend([
             ("取消電源通知", None, self.unregister_power_notification),
-            ("停止影片輸出", "instance_vlc_player", self.stop_video_output),
+            ("關閉影片輸出", "instance_video", lambda: self.instance_video.close(process_events=True)),
             ("關閉圖片輸出", "instance_image", lambda: self.instance_image.close()),
             ("解除圖片目標視窗", "instance_image", lambda: self.instance_image.set_hwnd(0)),
             ("釋放圖片物件", "instance_image", lambda: self.instance_image.deleteLater()),
-            ("解除影片目標視窗", "instance_vlc_player", lambda: self.instance_vlc_player.set_hwnd(0)),
-            ("釋放 VLC 播放器", "instance_vlc_player", lambda: self.instance_vlc_player.release()),
-            ("釋放 VLC 實例", "instance_vlc", lambda: self.instance_vlc.release()),
             ("隱藏桌布視窗", None, self.hide),
             ("釋放桌布視窗", None, lambda: self.destroy(True, True)),
         ])
