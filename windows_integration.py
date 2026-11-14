@@ -260,11 +260,15 @@ def create_task(executable_path: Path) -> None:
     加入 Windows 工作排程器
     """
 
+    command = [str(executable_path), "--task"]
+    if not getattr(sys, "frozen", False):
+        command.insert(0, sys.executable)
+
     cmd = [
         "schtasks",
         "/Create",
         "/TN", TASK_NAME,
-        "/TR", f'"{str(executable_path)}" --task',
+        "/TR", subprocess.list2cmdline(command),
         "/SC", "ONLOGON",
         "/RL", "HIGHEST",
         "/F"
