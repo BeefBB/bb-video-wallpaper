@@ -56,6 +56,7 @@ bb-video-wallpaper/
  │   └─ ...
  ├─ bb-video-wallpaper.py
  ├─ bb_image_display.py
+ ├─ bb_video_display.py
  ├─ config.py
  ├─ media_import.py
  ├─ media_preview.py
@@ -114,6 +115,8 @@ Folder/
 最近の使用履歴 | "recentVideo" | [], 0-20 件
 各モニターの壁紙 | "screenWallpapers" | {}
 モニターの追従関係 | "screenFollows" | {}
+メディアとモニターの向きごとの拡大縮小モード | "scalingMode" | {}, 記録がない場合は fill
+メディアごとに共有する余白の色 | "backgroundColor" | {}, 全体を表示するときに自動で計算して保存
 
 言語コードは `zh-TW`, `zh-CN`, `ja-JP`, `ko-KR`, `en-US` のいずれかと完全に一致する必要があります。例えば、システム言語が `en-GB` の場合、`en-US` には自動的に対応付けられません。
 
@@ -126,7 +129,7 @@ Folder/
 サムネイルフォルダー | THUMBNAIL_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\thumbnails\`
 ログファイル |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\log\log.log`
 VLC の壁紙再生オプション |  | 音声無効, 動画タイトル非表示, リピート設定 `--input-repeat=65535`
-壁紙の拡大縮小方式 |  | 画像・動画ともに縦横比を維持し、中央で切り抜いて画面全体を埋める
+壁紙の拡大縮小方式 |  | fill (デフォルト), fit, stretch; メディアとモニターの向きごとに保存
 起動時の壁紙選択順序 |  | そのモニターに保存された壁紙 > 最近の使用履歴の先頭 > メディア一覧の先頭; 保存された壁紙と履歴の候補は、ファイルが存在する場合のみ使用
 起動時の最大化検出開始までの待機時間 | fullscreen_detection_timer | 10 s
 自動一時停止の確認間隔 | check_auto_pause_timer | 0.5 s
@@ -146,7 +149,7 @@ VLC 停止時のウェイクアップ間隔 |  | 0.05 s
 初回プレビュー表示までの待機時間 | preview_timer | 0.5 s
 項目から離れた後にプレビューモードを終了するまでの時間 | reset_timer | 1 s
 プレビュー画像の最長辺 |  | `previewSize * 100` px, 左右それぞれ 4 px の内側余白を除く; 画面の空き領域が足りない場合は縮小
-プレビューの背景色 |  | #202020
+プレビュー外枠の背景色 |  | #202020; プレビュー内容にはメディアの背景色を使用
 プレビューの内側余白 |  | 4 px
 プレビューとメニューの間隔 |  | 8 px, 左側を優先し、空き領域が足りない場合は右側に表示
 読み込み中表示用の画像を読み込めない場合の代替画像 |  | 幅 `previewSize * 100` px, 高さは 16:9 で丸める, ダークグレー (`Qt.GlobalColor.darkGray`)

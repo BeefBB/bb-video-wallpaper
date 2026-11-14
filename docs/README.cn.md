@@ -56,6 +56,7 @@ bb-video-wallpaper/
  │   └─ ...
  ├─ bb-video-wallpaper.py
  ├─ bb_image_display.py
+ ├─ bb_video_display.py
  ├─ config.py
  ├─ media_import.py
  ├─ media_preview.py
@@ -114,6 +115,8 @@ Folder/
 最近使用记录 | "recentVideo" | [], 0-20 条
 各屏幕壁纸 | "screenWallpapers" | {}
 屏幕跟随关系 | "screenFollows" | {}
+素材与屏幕方向的缩放模式 | "scalingMode" | {}, 无记录时使用 fill
+素材共用的留白颜色 | "backgroundColor" | {}, 完整显示时自动取色并保存
 
 语言代码必须完全匹配 `zh-TW`, `zh-CN`, `ja-JP`, `ko-KR`, `en-US`; 例如系统语言为 `en-GB` 时不会自动对应 `en-US`
 
@@ -126,7 +129,7 @@ Folder/
 缩略图文件夹 | THUMBNAIL_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\thumbnails\`
 日志文件 |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\log\log.log`
 VLC 壁纸播放参数 |  | 关闭音频, 不显示视频标题, 循环播放参数 `--input-repeat=65535`
-壁纸缩放方式 |  | 图片和视频均保持比例居中裁剪填满
+壁纸缩放方式 |  | fill (默认), fit 或 stretch, 按素材与屏幕方向保存
 启动时选择壁纸的顺序 |  | 该屏幕保存的壁纸 > 最近记录第一条 > 媒体列表第一项, 前两者要求文件存在
 启动时延后最大化检测 | fullscreen_detection_timer | 10 s
 自动暂停检查间隔 | check_auto_pause_timer | 0.5 s
@@ -146,7 +149,7 @@ VLC 壁纸播放参数 |  | 关闭音频, 不显示视频标题, 循环播放参
 首次显示预览的等待时间 | preview_timer | 0.5 s
 离开选项后退出预览模式的延迟 | reset_timer | 1 s
 预览图片最长边 |  | `previewSize * 100` px, 不含左右各 4 px 内边距, 屏幕空间不足时缩小
-预览背景色 |  | #202020
+预览边框背景色 |  | #202020, 预览内容使用素材的留白颜色
 预览内边距 |  | 4 px
 预览与菜单间距 |  | 8 px, 优先放在左侧, 空间不足时改放右侧
 加载图片失败时的替代图 |  | 宽 `previewSize * 100` px, 高按 16:9 四舍五入, 深灰色 (`Qt.GlobalColor.darkGray`)

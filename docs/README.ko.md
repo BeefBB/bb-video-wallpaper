@@ -56,6 +56,7 @@ bb-video-wallpaper/
  │   └─ ...
  ├─ bb-video-wallpaper.py
  ├─ bb_image_display.py
+ ├─ bb_video_display.py
  ├─ config.py
  ├─ media_import.py
  ├─ media_preview.py
@@ -114,6 +115,8 @@ Folder/
 최근 사용 기록 | "recentVideo" | [], 0-20개
 모니터별 배경화면 | "screenWallpapers" | {}
 모니터 따라가기 관계 | "screenFollows" | {}
+미디어와 모니터 방향별 크기 조정 모드 | "scalingMode" | {}, 기록이 없으면 fill 사용
+미디어별 공통 여백 색상 | "backgroundColor" | {}, 맞춤 모드에서 자동으로 계산하고 저장
 
 언어 코드는 `zh-TW`, `zh-CN`, `ja-JP`, `ko-KR`, `en-US` 중 하나와 정확히 일치해야 합니다. 예를 들어 시스템 언어가 `en-GB`여도 `en-US`로 자동 매핑되지 않습니다.
 
@@ -126,7 +129,7 @@ Folder/
 썸네일 폴더 | THUMBNAIL_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\thumbnails\`
 로그 파일 |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\log\log.log`
 VLC 배경화면 재생 옵션 |  | 오디오 비활성화, 동영상 제목 숨김, 반복 옵션 `--input-repeat=65535`
-배경화면 크기 조정 방식 |  | 이미지와 동영상 모두 종횡비를 유지하면서 가운데를 기준으로 잘라 화면을 채움
+배경화면 크기 조정 방식 |  | fill (기본값), fit, stretch; 미디어와 모니터 방향별로 저장
 시작 시 배경화면 선택 순서 |  | 해당 모니터에 저장된 배경화면 > 최근 기록의 첫 항목 > 미디어 목록의 첫 항목, 앞의 두 후보는 파일이 존재해야 함
 시작 시 최대화 감지 지연 시간 | fullscreen_detection_timer | 10 s
 자동 일시 중지 확인 간격 | check_auto_pause_timer | 0.5 s
@@ -146,7 +149,7 @@ VLC 중지 시 깨우기 간격 |  | 0.05 s
 첫 미리보기 표시 전 대기 시간 | preview_timer | 0.5 s
 항목을 벗어난 뒤 미리보기 모드를 종료하기까지의 시간 | reset_timer | 1 s
 미리보기 이미지의 가장 긴 변 |  | `previewSize * 100` px, 좌우 각각 4 px의 안쪽 여백 제외, 화면 공간이 부족하면 축소
-미리보기 배경색 |  | #202020
+미리보기 테두리 배경색 |  | #202020; 미리보기 내용은 미디어의 배경색 사용
 미리보기 안쪽 여백 |  | 4 px
 미리보기와 메뉴 사이 간격 |  | 8 px, 왼쪽에 우선 표시하고 공간이 부족하면 오른쪽에 표시
 로딩 이미지를 불러오지 못했을 때 대체 이미지 |  | 너비 `previewSize * 100` px, 높이는 16:9 비율로 반올림, 짙은 회색 (`Qt.GlobalColor.darkGray`)

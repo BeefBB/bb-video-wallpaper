@@ -56,6 +56,7 @@ bb-video-wallpaper/
  │   └─ ...
  ├─ bb-video-wallpaper.py
  ├─ bb_image_display.py
+ ├─ bb_video_display.py
  ├─ config.py
  ├─ media_import.py
  ├─ media_preview.py
@@ -114,6 +115,8 @@ Folder/
 最近使用紀錄             | "recentVideo"           | [], 0-20
 各螢幕桌布               | "screenWallpapers"      | {}
 螢幕跟隨關係             | "screenFollows"         | {}
+素材縮放模式             | "scalingMode"           | {}, 無紀錄時使用 fill
+素材留白顏色             | "backgroundColor"       | {}, 完整顯示時自動取色並保存
 
 語言代碼須完全符合 `zh-TW`, `zh-CN`, `ja-JP`, `ko-KR`, `en-US`; 例如系統語言為 `en-GB` 時不會自動對應 `en-US`
 

@@ -54,7 +54,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 
 路徑          | 用途
 ---           | ---
-`config.json` | 語言, 自動暫停選項, 各螢幕桌布, 跟隨關係與共用最近使用紀錄
+`config.json` | 語言, 自動暫停選項, 各螢幕桌布, 跟隨關係, 共用最近使用紀錄, 素材與螢幕方向的縮放模式及素材共用背景色
 `video/`      | 媒體資料夾, 匯入檔案存放在其下的 `_imports/`
 `thumbnails/` | 縮圖快取
 `log/log.log` | 日誌, 達到上限後輪替
@@ -63,8 +63,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 
 依要修改的功能查找實作:
 
-檔案                                               | 職責
----                                                | ---
+檔案                                                | 職責
+---                                                 | ---
 [bb-video-wallpaper.py](../bb-video-wallpaper.py)   | 主程式組裝, VLC 初始化, 桌布生命週期, 系統匣與匯入介面, 自動暫停及桌面重建恢復
 [config.py](../config.py)                           | 設定初始化, 驗證與讀寫, 語言檔載入
 [playback.py](../playback.py)                       | 不可變播放意圖與暫停原因, 單螢幕及跟隨群組共用的自動暫停判斷
@@ -72,14 +72,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 [media_import.py](../media_import.py)               | 媒體內容去重, 分塊複製, 容量檢查, 命名衝突與取消清理
 [media_preview.py](../media_preview.py)             | 預覽選單, 懸停時序, 縮圖訊號與預覽視窗定位
 [windows_integration.py](../windows_integration.py) | 單一實例, 螢幕識別, 桌面掛載與就緒檢查, 虛擬桌面及最大化視窗偵測, 電源通知與開機排程
-[bb_image_display.py](../bb_image_display.py)       | Qt 圖片輸出, 原生子視窗管理與重綁
+[bb_image_display.py](../bb_image_display.py)       | Qt 圖片輸出, 縮放與背景色, 原生子視窗管理與重綁
+[bb_video_display.py](../bb_video_display.py)       | VLC 影片輸出, 縮放與背景色, 非同步播放及進度恢復, 原生子視窗管理與重綁
 [thumbnails.py](../thumbnails.py)                   | 支援的媒體格式, 縮圖產生, 快取驗證與背景排隊
 
 模組整合時需維持以下邊界:
 
 - 模組不反向匯入主程式, 匯入時不建立使用者資料夾或設定日誌. 路徑, 翻譯函式與進度及取消回呼由呼叫端傳入; Windows 的 Mutex, 桌面掛載與排程操作也只在呼叫相關函式時執行
-- Qt 元件共用主程式的 `QApplication`. 主程式負責桌布掛載, 媒體切換與退出時停止縮圖工作; 圖片模組管理內部子視窗, 預覽模組管理選單及縮圖顯示
-- 主程式先完成 VLC DLL 載入設定. 影片縮圖只在實際使用時匯入 VLC, 其他模組測試可獨立執行
+- Qt 元件共用主程式的 `QApplication`. 主程式負責桌布掛載, 媒體切換與退出時停止縮圖工作; 圖片及影片模組管理各自的內部子視窗, 預覽模組管理選單及縮圖顯示
+- 主程式先完成 VLC DLL 載入設定. 影片顯示與影片縮圖在實際使用時建立各自的 VLC 播放器, 其他模組測試可獨立執行
 - 主程式匯入時只定義函式與類別, 由 `main()` 初始化路徑, 資料夾, 日誌, VLC 與設定後啟動介面. 測試以 [app_loader.py](../tests/app_loader.py) 直接載入獨立的主程式模組, 再替換需要的執行環境或輸出物件
 
 日常修改後, 重新啟動程式並執行相關測試即可. 更動 VLC 時需重建精簡版, 準備發佈時則接著打包與製作安裝檔
@@ -110,13 +111,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 
 自動測試集中在難以穩定手動重現的時序, 故障注入, 原生資源生命週期與資料保護. 一般操作改用下方手動驗收清單. 同一流程依層分工: 選單測試驗證匯入結果等待重掛且只套用一次, 播放測試驗證切換媒體時捨棄舊進度, 真實 VLC 測試驗證輸出恢復與關閉
 
-測試腳本                                                           | 檢查重點
----                                                                | ---
+測試腳本                                                            | 檢查重點
+---                                                                 | ---
 [test_app_ui.py](../tests/test_app_ui.py)                           | 匯入取消與過期回呼, 螢幕變動, 主執行緒更新, 預覽過期結果, 匯入主程式不初始化
 [test_config.py](../tests/test_config.py)                           | 存取與保存失敗不破壞原檔, 損壞內容重建與修復, 路徑邊界
 [test_screen_follow.py](../tests/test_screen_follow.py)             | 循環與群組拆分, 群組暫停, 進度誤差與循環邊界, 過期同步訊號
 [test_media_import.py](../tests/test_media_import.py)               | 命名衝突, 磁碟空間邊界, 複製中寫滿與各階段取消後清理
 [test_playback_state.py](../tests/test_playback_state.py)           | 延遲播放事件, 重掛順序與重試, 舊進度失效, 關閉與螢幕移除競態
+[test_video_display.py](../tests/test_video_display.py)             | 真實 VLC 模組的載入中指令, 父視窗失效重綁
 [test_video_recovery.py](../tests/test_video_recovery.py)           | 主程式實際載入 VLC, 影片輸出失效後的重建, 播放及暫停狀態與進度恢復
 [test_windows_integration.py](../tests/test_windows_integration.py) | 螢幕識別變動, 64 位元 handle, 掛載失敗, 桌面通知, 圖片原生子視窗重綁與釋放
 [test_thumbnails.py](../tests/test_thumbnails.py)                   | 快取保護與儲存失敗, 非正方形像素, 旋轉方向, 多影像軌, AV1 解碼逾時與取消
@@ -129,7 +131,7 @@ Qt 測試共用 [app_loader.py](../tests/app_loader.py) 的 `QtTestCase`, 統一
 
 - 啟動與退出: 系統匣可操作, 各螢幕有桌布, 退出後桌布消失且程序結束
 - 播放操作: 切換圖片與影片, 播放, 暫停及停止; 選擇損壞圖片失敗後, 原桌布與已保存選擇仍保留
-- 匯入與預覽: 一般匯入完成後選單恢復可操作, 各螢幕選單可預覽同一媒體, 縮圖內容與方向正確, 預覽依目標螢幕比例裁切
+- 匯入與預覽: 一般匯入完成後選單恢復可操作, 各螢幕選單可預覽同一媒體, 縮圖內容與方向正確, 預覽依目標螢幕比例套用素材的縮放模式
 - 設定與紀錄: 各螢幕選擇不同桌布, 清除最近紀錄後重啟仍還原各自桌布; 媒體暫時遺失時使用備援且不覆寫原選擇; 舊版僅有最近紀錄的設定仍可載入
 - 跟隨操作: 從選單加入或解除跟隨, 來源切換媒體後跟隨者同步, 重啟後還原關係; 來源拔除再接回不自動恢復已解除的跟隨
 - 自動暫停: 在目標與另一螢幕分別最大化視窗, 切換虛擬桌面, 關閉再開啟螢幕及切換供電, 確認對應選項生效且手動暫停不被解除
@@ -141,7 +143,7 @@ Qt 測試共用 [app_loader.py](../tests/app_loader.py) 的 `QtTestCase`, 統一
 
 原生視窗測試只操作測試建立的視窗及程序. 桌面通知只送給測試視窗; 影片重掛測試會結束自己的畫面外父視窗程序, 確認 VLC 能恢復輸出. 這些測試不廣播訊息, 不重啟 Explorer, 不建立實際開機排程或改變使用者的桌面掛載
 
-影片重掛與影片縮圖測試另需專案內的 `VLC-lite/` 及 PATH 中的 `ffmpeg`. FFmpeg 僅用來產生測試短片, 程式的影片播放與縮圖仍使用 VLC. 缺少 Windows, VLC-lite 或 FFmpeg 時, 這兩組測試會顯示 `skipped`; 部分案例也可能因缺少指定編碼器而跳過, 檢查結果時需留意未執行的項目
+影片顯示, 影片重掛與影片縮圖測試另需專案內的 `VLC-lite/` 及 PATH 中的 `ffmpeg`. FFmpeg 僅用來產生測試短片, 程式的影片播放與縮圖仍使用 VLC. 缺少 Windows, VLC-lite 或 FFmpeg 時, 這三組測試會顯示 `skipped`; 部分案例也可能因缺少指定編碼器而跳過, 檢查結果時需留意未執行的項目
 
 ## 打包與發佈
 
