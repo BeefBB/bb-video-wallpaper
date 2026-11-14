@@ -392,6 +392,68 @@ class ImportMenuTests(QtTestCase):
         self.tray.refresh_media_menu.assert_called_once_with()
 
 
+    def test_stop_overrides_queued_import_after_reattach_and_allows_new_import(self) -> None:
+        """
+        驗證停止優先於已排入的重掛回呼, 保留匯入內容且新匯入仍可自動播放
+        """
+
+        self.namespace["get_media"].return_value = [self.source]
+        self.wallpaper.is_recreating = True
+        self.tray.add_media()
+        worker = self.tray.import_thread
+        self.assertTrue(worker.wait(5000))
+        self.app.processEvents()
+        self.assertIs(self.tray.import_thread, worker)
+
+        self.wallpaper.is_recreating = False
+        self.reattach_notifier.reattach_finished.emit()
+        self.tray.stop()
+        self.app.processEvents()
+
+        self.assertIsNone(self.tray.import_thread)
+        self.wallpaper.manual_stop.assert_called_once_with()
+        self.tray.play_from_menu.assert_not_called()
+        self.tray.thumbnail_thread.request.assert_called_once_with(self.destination, preview_size=self.tray.preview_size)
+        self.namespace["config_store"].remember_recent.assert_called_once_with(self.destination)
+        self.tray.refresh_media_menu.assert_called_once_with()
+
+        self.tray.add_media()
+        self.wait_for_completion(self.tray.import_thread)
+        self.tray.play_from_menu.assert_called_once_with(self.destination, "screen-a")
+
+
+    def test_stopping_import_target_also_excludes_followers_but_keeps_other_screens(self) -> None:
+        """
+        驗證等待重掛時停止來源與跟隨者, 只取消該群組的自動套用且不影響下次匯入
+        """
+
+        self.add_screen("screen-b")
+        self.add_screen("screen-c")
+        self.tray.follow_controller.graph.follow("screen-b", "screen-a")
+        self.wallpaper.is_recreating = True
+        self.tray.add_media()
+        worker = self.tray.import_thread
+        self.assertTrue(worker.wait(5000))
+        self.app.processEvents()
+        self.assertIs(self.tray.import_thread, worker)
+
+        self.tray.stop("screen-a")
+        self.wallpaper.is_recreating = False
+        self.reattach_notifier.reattach_finished.emit()
+        self.app.processEvents()
+
+        self.assertIsNone(self.tray.import_thread)
+        self.wallpaper.manual_stop.assert_called_once_with()
+        self.tray.play_from_menu.assert_called_once_with(self.destination, "screen-c")
+
+        self.tray.play_from_menu.reset_mock()
+        self.tray.add_media()
+        self.wait_for_completion(self.tray.import_thread)
+        self.assertEqual(self.tray.play_from_menu.call_args_list, [
+            mock.call(self.destination, screen_id) for screen_id in ("screen-a", "screen-b", "screen-c")
+        ])
+
+
     def test_quitting_discards_import_deferred_during_reattach(self) -> None:
         """
         驗證退出時捨棄等待重掛的匯入結果, 不播放或請求縮圖

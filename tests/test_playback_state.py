@@ -446,6 +446,7 @@ class PlaybackStateTests(QtTestCase):
         self.tray.import_thread = None
         self.tray.import_screen_id = self.wallpaper.screen_id
         self.tray.import_applies_to_all = False
+        self.tray.import_stopped_screens = set()
         self.tray.media_menu = mock.Mock()
         self.tray.thumbnail_thread = mock.Mock()
         self.tray.screen_menus = {}

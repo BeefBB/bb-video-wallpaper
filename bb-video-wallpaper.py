@@ -954,6 +954,7 @@ class Tray:
         self.import_thread: MediaImportThread | None = None
         self.import_screen_id: str | None = None
         self.import_applies_to_all = False
+        self.import_stopped_screens: set[str] = set()
         self.app.aboutToQuit.connect(self.shutdown)
 
         # 共用縮圖工作
@@ -1387,7 +1388,12 @@ class Tray:
     def stop(self, screen_id: str | None = None) -> None:
 
         if screen_id is not None:
+            self.import_stopped_screens.update(self.follow_controller.graph.subtree(screen_id))
             self.follow_controller.detach(screen_id)
+
+        else:
+            self.import_screen_id = None
+            self.import_applies_to_all = False
 
         for wallpaper in self.get_wallpapers(screen_id):
             wallpaper.manual_stop()
@@ -1832,6 +1838,7 @@ class Tray:
         self.cancel_import_action.setVisible(True)
         self.import_screen_id = next(iter(self.wallpapers)) if len(self.wallpapers) == 1 else None
         self.import_applies_to_all = len(self.wallpapers) > 1 and not get_media()
+        self.import_stopped_screens.clear()
 
         self.import_thread = MediaImportThread(Path(filename))
         self.import_thread.progress.connect(self.update_import_progress, Qt.ConnectionType.QueuedConnection)
@@ -1866,6 +1873,8 @@ class Tray:
 
         elif self.import_screen_id is not None and self.import_screen_id in self.wallpapers:
             screen_ids = (self.import_screen_id,)
+
+        screen_ids = tuple(screen_id for screen_id in screen_ids if screen_id not in self.import_stopped_screens)
 
         # 巢狀事件迴圈仍會收到匯入完成訊號, 等當次重掛離開後才切換媒體
         if (
