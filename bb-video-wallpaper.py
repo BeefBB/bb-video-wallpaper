@@ -1057,9 +1057,11 @@ class Tray:
             action = QAction(tr(text_key), self.options_menu)
             action.setCheckable(True)
             action.setChecked(config.get(config_key, CONFIG_DEFAULTS[config_key]))
+
             action.triggered.connect(
                 lambda checked, key=config_key, attr=attribute: self.set_auto_pause_option(key, attr, checked)
             )
+
             self.options_menu.addAction(action)
 
         self.options_menu.addSeparator()
@@ -1076,7 +1078,9 @@ class Tray:
             action.setCheckable(True)
             action.setChecked(size == self.font_size)
             font_size_group.addAction(action)
+
             action.triggered.connect(lambda checked, value=size: self.set_font_size(value))
+
             font_size_menu.addAction(action)
             self.font_size_actions[size] = action
 
@@ -1092,7 +1096,9 @@ class Tray:
             action.setCheckable(True)
             action.setChecked(size == self.preview_size)
             preview_size_group.addAction(action)
+
             action.triggered.connect(lambda checked, value=size: self.set_preview_size(value))
+
             preview_size_menu.addAction(action)
             self.preview_size_actions[size] = action
 
@@ -1281,9 +1287,11 @@ class Tray:
                     preview_size=self.preview_size,
                     thumbnail_thread=self.thumbnail_thread
                 )
+
                 menu.aboutToShow.connect(
                     lambda s=screen_id, m=menu: self.refresh_screen_menu(s, m)
                 )
+
                 self.screen_menus[screen_id] = menu
                 self.menu.insertMenu(self.add_media_action, menu)
 

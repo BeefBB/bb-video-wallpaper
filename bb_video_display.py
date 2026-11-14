@@ -255,18 +255,22 @@ class Instance(QObject):
         self._hwnd = 0
         self._window: _VideoWindow | None = None
         self._target_events: _TargetEvents | None = None
+
         self._instance: vlc.Instance | None = None
         self._player: vlc.MediaPlayer | None = None
         self._media: vlc.Media | None = None
         self._events: vlc.EventManager | None = None
         self._event_types: list[vlc.EventType] = []
+
         self._stop_thread: _StopThread | None = None
         self._closing = False
         self._generation = 0
+
         self._state = "stop"
         self._visible = False
         self._pending_time: int | None = None
         self._video_size: QSizeF | None = None
+
         self._scaling_mode = "fill"
         self._background_color = QColor(Qt.GlobalColor.black)
         self.current_media: Path | None = None
@@ -312,9 +316,11 @@ class Instance(QObject):
         """
 
         self._generation += 1
+
         if self._events is not None:
             for event_type in self._event_types:
                 self._events.event_detach(event_type)
+
         self._event_types.clear()
 
 
@@ -326,6 +332,7 @@ class Instance(QObject):
         self._detach_events()
         generation = self._generation
         player = self._player
+
         if player is None:
             return True
 
@@ -336,6 +343,7 @@ class Instance(QObject):
         loop = QEventLoop(self)
         worker = self._stop_thread
         owns_worker = worker is None
+
         if worker is None:
             worker = _StopThread(lambda: self._stop_sync(player), self)
             self._stop_thread = worker
@@ -343,19 +351,23 @@ class Instance(QObject):
         worker.finished.connect(loop.quit)
         if owns_worker:
             worker.start()
+
         if worker.isRunning():
             loop.exec(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
         worker.wait()
+
         worker.finished.disconnect(loop.quit)
         error = worker.error
 
         if owns_worker:
             self._stop_thread = None
             worker.deleteLater()
+
         loop.deleteLater()
 
         if error is not None:
             raise error
+
         return generation == self._generation
 
 
@@ -496,24 +508,30 @@ class Instance(QObject):
 
         if self._media is None or self._player is None:
             raise RuntimeError("尚未設定影片")
+
         if not self._hwnd or not win32gui.IsWindow(self._hwnd):
             raise RuntimeError("必須先設定有效的目標視窗")
+
         if self._window is not None and not win32gui.IsWindow(self._window.video_hwnd):
             raise RuntimeError("影片輸出已失效, 請重新設定目標視窗")
 
         self._visible = True
+
         if self._window is None:
             window = _VideoWindow(self._hwnd, self._background_color)
             window.show()
             self._window = window
             self._player.set_hwnd(window.video_hwnd)
+
             if self._target_events is None:
                 self._target_events = _TargetEvents(self)
                 app = QApplication.instance()
                 assert app is not None
                 app.installNativeEventFilter(self._target_events)
+
         else:
             self._window.show()
+
         self._layout()
 
 
@@ -538,8 +556,10 @@ class Instance(QObject):
         self.show()
         if not visible:
             self.hide()
+
         self._detach_events()
         assert self._player is not None and self._events is not None
+
         for name in ("Playing", "Vout", "SeekableChanged", "ESSelected", "EncounteredError"):
             event_type = getattr(vlc.EventType, f"MediaPlayer{name}")
             self._events.event_attach(
@@ -576,10 +596,12 @@ class Instance(QObject):
 
         if self._media is None:
             raise RuntimeError("尚未設定影片")
+
         if self._hwnd:
             self.show()
         else:
             self._visible = True
+
         self._state = state
         if not self._hwnd:
             return
@@ -639,6 +661,7 @@ class Instance(QObject):
 
         if position < 0 or self._media is None or self._player is None:
             return False
+
         if self._is_ready() and not self._player.is_seekable():
             return False
 
@@ -651,9 +674,11 @@ class Instance(QObject):
 
         if self._player is None or not self._is_ready() or self._state == "stop":
             return
+
         if self._pending_time is not None and self._player.is_seekable():
             self._player.set_time(self._pending_time)
             self._pending_time = None
+
         if self._state == "pause":
             self._player.set_pause(1)
 
@@ -663,9 +688,11 @@ class Instance(QObject):
 
         if generation != self._generation or self._state == "stop" or self._player is None:
             return
+
         if self._hwnd and not win32gui.IsWindow(self._hwnd):
             self.set_hwnd(0)
             return
+
         if kind == "EncounteredError":
             path = self.current_media
             self.stop()
@@ -675,6 +702,7 @@ class Instance(QObject):
         self._read_video_size()
         self._layout()
         self._apply_pending()
+
         if kind == "Playing":
             self.playback_started.emit()
 
@@ -733,6 +761,7 @@ class Instance(QObject):
         window.sync_geometry()
         window.background_color = QColor(self._background_color)
         window.update()
+
         _, _, width, height = win32gui.GetClientRect(int(window.winId()))
         if width <= 0 or height <= 0:
             return
@@ -746,9 +775,11 @@ class Instance(QObject):
             window.video_hwnd, 0, (width - video_width) // 2, (height - video_height) // 2,
             video_width, video_height, win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE
         )
+
         self._player.video_set_scale(0)
         self._player.video_set_crop_geometry(f"{width}:{height}" if self._scaling_mode == "fill" else None)
         self._player.video_set_aspect_ratio(f"{width}:{height}" if self._scaling_mode == "stretch" else None)
+
         show_video = self._video_size is not None and self._state != "stop" and self._player.has_vout() > 0
         win32gui.ShowWindow(window.video_hwnd, win32con.SW_SHOWNOACTIVATE if show_video else win32con.SW_HIDE)
 
@@ -758,6 +789,7 @@ class Instance(QObject):
 
         if hwnd != self._hwnd:
             return
+
         if destroyed and not win32gui.IsWindow(hwnd):
             self.set_hwnd(0)
         else:
@@ -776,17 +808,22 @@ class Instance(QObject):
         self._closing = True
         error: Exception | None = None
         steps: list[Callable[[], object]] = [lambda: self.stop(process_events=process_events)]
+
         app = QApplication.instance()
         if app is not None and self._target_events is not None:
             events = self._target_events
             steps.append(lambda: app.removeNativeEventFilter(events))
+
         if self._player is not None:
             player = self._player
             steps.extend((lambda: player.set_hwnd(0), player.release))
+
         if self._media is not None:
             steps.append(self._media.release)
+
         if self._instance is not None:
             steps.append(self._instance.release)
+
         if self._window is not None:
             window = self._window
             steps.append(lambda: window.close())
@@ -795,11 +832,14 @@ class Instance(QObject):
             for cleanup in steps:
                 try:
                     cleanup()
+
                 except Exception as failure:
                     if error is None:
                         error = failure
+
                     else:
                         logger.exception("釋放影片資源失敗")
+
         finally:
             self._target_events = None
             self._player = None
@@ -808,8 +848,10 @@ class Instance(QObject):
             self._media = None
             self._instance = None
             self._window = None
+
             self.current_media = None
             self._video_size = None
+
             self._closing = False
 
         if error is not None:
