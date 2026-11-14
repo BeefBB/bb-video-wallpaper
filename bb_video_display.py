@@ -813,7 +813,12 @@ class Instance(QObject):
         self._player.video_set_scale(0)
         # VLC 的拉伸比例使用旋轉前的影像方向
         ratio = f"{height}:{width}" if self._video_transposed else f"{width}:{height}"
-        self._player.video_set_crop_geometry(ratio if self._scaling_mode == "fill" and not clip_video else None)
+        # VLC 3 可能略過待處理裁切的空值重設, 改用明確比例還原
+        crop = None if self._video_transposed else ratio
+        if crop is not None and self._scaling_mode == "fit":
+            video_size = self._video_size
+            crop = f"{round(video_size.width())}:{round(video_size.height())}" if video_size is not None else None
+        self._player.video_set_crop_geometry(crop)
         self._player.video_set_aspect_ratio(ratio if self._scaling_mode == "stretch" else None)
 
         show_video = self._video_size is not None and self._state != "stop" and self._player.has_vout() > 0

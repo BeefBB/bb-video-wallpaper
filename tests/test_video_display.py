@@ -190,6 +190,27 @@ def run_probe(directory: Path, operation: str) -> None:
             display.close()
             assert display._player is None and display._window is None
 
+        elif operation == "crop-reset":
+            display.set_media(directory / "base.mp4")
+            display.play()
+            wait(lambda: display._video_size is not None and (display.get_time() or 0) > 500)
+            display.pause()
+            player = display._player
+            assert player is not None
+            wait(lambda: player.get_state() == getattr(vlc.State, "Paused"))
+            position = display.get_time()
+
+            for mode, point in (("fit", (5, 200)), ("stretch", (5, 5))):
+                for _ in range(3):
+                    player.video_set_crop_geometry("5:3")
+                    display.set_scaling(mode, "#123456")
+                    # 等待裁切佇列處理, 避免舊畫面讓比對提早通過
+                    loop = QEventLoop()
+                    QTimer.singleShot(250, loop.quit)
+                    loop.exec()
+                    wait(lambda: capture().pixelColor(*point).red() > 180)
+                    assert display.get_time() == position, "縮放模式切換不應改變暫停進度"
+
         elif operation.startswith("scaling-"):
             rotation = int(operation.removeprefix("scaling-"))
             source = QImage(str(directory / "pattern.png"))
@@ -394,6 +415,14 @@ class VideoDisplayTests(unittest.TestCase):
         for rotation in (90, 270, 180, 0):
             with self.subTest(rotation=rotation):
                 self.probe(f"scaling-{rotation}")
+
+
+    def test_pending_crop_is_cleared_when_switching_scaling_while_paused(self) -> None:
+        """
+        連續設定裁切與縮放後恢復完整畫面, 保留暫停進度
+        """
+
+        self.probe("crop-reset")
 
 
 if __name__ == "__main__":
