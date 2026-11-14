@@ -391,7 +391,7 @@ class ImageDisplayTests(QtTestCase):
         驗證圖片原生容器的顯示, 重綁與釋放, 保留圖片與外部目標視窗
         """
 
-        self.display.set_image(self.image_path)
+        self.display.set_media(self.image_path)
         window = self.display.window
         assert window is not None
         self.assertEqual(window._host_hwnd, 0)
@@ -425,7 +425,7 @@ class ImageDisplayTests(QtTestCase):
         self.assertEqual(self.display.get_hwnd(), target_hwnd)
         self.assertIsNone(self.display.window)
         self.assertIsNone(self.display.current_image)
-        self.display.set_image(self.image_path)
+        self.display.set_media(self.image_path)
         self.display.show()
         window = self.display.window
         assert window is not None

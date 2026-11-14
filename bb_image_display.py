@@ -12,7 +12,7 @@ Qt 圖片顯示模組, 接收主程式提供的 HWND 並共用既有 QApplicatio
 
 主程式負責目標視窗的建立, 顯示, 桌面掛載與 Qt 事件迴圈
 模組只管理圖片及其內部子視窗
-預設為 fill 與黑色背景, 保留 set_image 呼叫方式
+預設為 fill 與黑色背景
 """
 
 from ctypes import wintypes
@@ -396,14 +396,6 @@ class Instance(QObject):
 
         self.current_image = source
         self.set_scaling(self._scaling_mode, self._background_color)
-
-
-    def set_image(self, path: Path | str) -> None:
-        """
-        相容既有的圖片載入呼叫
-        """
-
-        self.set_media(path)
 
 
     def set_scaling(self, mode: str, background_color: QColor | str = "#000000") -> None:

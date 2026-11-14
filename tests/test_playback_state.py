@@ -116,7 +116,6 @@ class DeferredPlayer:
         self.events.event_attach.side_effect = self.attach_event
         self.events.event_detach.side_effect = self.callbacks.pop
 
-        self.video_set_crop_geometry = mock.Mock()
         self.video_set_key_input = mock.Mock()
         self.video_set_mouse_input = mock.Mock()
         self.set_hwnd = mock.Mock()
@@ -262,7 +261,7 @@ class ImageDisplay:
         self.set_scaling = mock.Mock()
 
 
-    def set_image(self, path: Path) -> None:
+    def set_media(self, path: Path) -> None:
         """
         保存指定圖片路徑, 不變更顯示狀態
         """
@@ -376,6 +375,7 @@ class PlaybackStateTests(QtTestCase):
         instance.media_player_new.return_value = self.player
 
         vlc = mock.Mock()
+        self.vlc = vlc
         vlc.Instance.return_value = instance
         vlc.EventType.MediaPlayerPlaying = PLAYING_EVENT
         vlc.State.Playing = "playing"
@@ -395,7 +395,6 @@ class PlaybackStateTests(QtTestCase):
             # Qt 類別與視窗替身
             "QApplication": application,
             "DesktopEventWindow": HeadlessDesktopEvents,
-            "vlc": vlc,
             "bb_image_display": image_module,
             "bb_video_display": mock.Mock(Instance=VideoDisplay),
             "config_store": config_store,
@@ -407,7 +406,6 @@ class PlaybackStateTests(QtTestCase):
             "is_any_fullscreen": mock.Mock(return_value=False),
             "check_desktop_ready": mock.Mock(return_value=True),
             "get_monitor_id": mock.Mock(return_value="monitor-1"),
-            "wake_vlc_video_windows": mock.Mock(),
             "set_windows_as_wallpaper": mock.Mock(),
             "register_power_notification": mock.Mock(return_value=2**40 + 1),
             "unregister_power_notification": mock.Mock(),
@@ -420,7 +418,9 @@ class PlaybackStateTests(QtTestCase):
             module = load_app_module()
         module.__dict__.update(self.namespace)
         self.namespace = module.__dict__
-        self.enterContext(mock.patch.object(bb_video_display, "wake_vlc_video_windows", self.namespace["wake_vlc_video_windows"]))
+        self.wake_vlc_video_windows = self.enterContext(
+            mock.patch.object(bb_video_display, "wake_vlc_video_windows")
+        )
         self.enterContext(mock.patch.object(bb_video_display, "logger", self.namespace["logger"]))
 
         wallpaper_class = self.namespace["Wallpaper"]
@@ -678,7 +678,7 @@ class PlaybackStateTests(QtTestCase):
 
         instance = mock.Mock()
         instance.media_player_new.return_value = DeferredPlayer()
-        self.namespace["vlc"].Instance.return_value = instance
+        self.vlc.Instance.return_value = instance
         self.namespace["bb_image_display"].Instance.return_value = mock.Mock(wraps=ImageDisplay())
         self.namespace["get_monitor_id"].return_value = screen_id
         wallpaper = self.namespace["Wallpaper"](target_screen=HeadlessScreen(QRect(0, 0, 1920, 1080)))
@@ -695,7 +695,7 @@ class PlaybackStateTests(QtTestCase):
         """
 
         woken = threading.Event()
-        self.namespace["wake_vlc_video_windows"].side_effect = woken.set
+        self.wake_vlc_video_windows.side_effect = woken.set
         original_stop = player.stop
 
         def stop() -> None:
@@ -850,7 +850,7 @@ class PlaybackStateTests(QtTestCase):
                         raise error
                     original_stop()
 
-                self.namespace["wake_vlc_video_windows"].side_effect = wake
+                self.wake_vlc_video_windows.side_effect = wake
                 with mock.patch.object(self.player, "stop", side_effect=stop):
                     if failure == "stop":
                         with self.assertRaises(RuntimeError) as raised:
@@ -1051,7 +1051,7 @@ class PlaybackStateTests(QtTestCase):
         self.wallpaper.is_recreating = True
         processed = threading.Event()
         woken = threading.Event()
-        self.namespace["wake_vlc_video_windows"].side_effect = woken.set
+        self.wake_vlc_video_windows.side_effect = woken.set
 
         def stop_waiting_for_ui():
             """
@@ -1072,7 +1072,7 @@ class PlaybackStateTests(QtTestCase):
         self.assertTrue(processed.is_set())
         self.assertEqual(self.player.pause_calls, [])
         self.assertEqual(self.wallpaper.play_state, "pause")
-        self.namespace["wake_vlc_video_windows"].assert_called_once_with()
+        self.wake_vlc_video_windows.assert_called_once_with()
         self.assertFalse(any(timer.isActive() for timer in self.wallpaper.findChildren(QTimer)))
 
 
@@ -1440,7 +1440,7 @@ class PlaybackStateTests(QtTestCase):
                 self.assertEqual(self.image_output.visible, command == "play")
                 self.assertEqual(self.wallpaper.play_state, command)
                 self.assertEqual(self.player.state, "stopped")
-                self.instance_image.set_image.assert_not_called()
+                self.instance_image.set_media.assert_not_called()
                 self.namespace["config_store"].save.assert_not_called()
                 self.namespace["logger"].exception.assert_not_called()
 
@@ -1474,7 +1474,7 @@ class PlaybackStateTests(QtTestCase):
 
                 self.namespace["logger"].reset_mock()
                 with (
-                    mock.patch.object(self.namespace["vlc"], "Instance", return_value=instance,
+                    mock.patch.object(self.vlc, "Instance", return_value=instance,
                                       side_effect=error if stage == "instance" else None),
                     mock.patch.object(self.namespace["bb_image_display"], "Instance", return_value=image,
                                       side_effect=error if stage == "image" else None),

@@ -122,10 +122,10 @@ def initialize_logging() -> None:
 
 def initialize_vlc() -> bool:
     """
-    先設定 DLL 搜尋位置與載入原生函式庫, 再匯入 VLC
+    設定 VLC DLL 搜尋位置並載入原生函式庫
     """
 
-    global vlc, _vlc_dll_directory
+    global _vlc_dll_directory
 
     vlc_dir = next(
         (path for path in (ROOT_DIR / "VLC-lite", ROOT_DIR / "VLC") if path.is_dir()),
@@ -147,8 +147,6 @@ def initialize_vlc() -> bool:
     except OSError:
         logger.exception("VLC 載入失敗")
         return False
-
-    import vlc
 
     return True
 
@@ -742,7 +740,7 @@ class Wallpaper(QWidget):
 
         # 先讀取圖片, 失敗時保留原本的輸出與播放狀態
         if is_image:
-            self.instance_image.set_image(path)
+            self.instance_image.set_media(path)
 
 
         self._stop_media_output()
