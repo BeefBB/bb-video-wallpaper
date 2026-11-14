@@ -1449,7 +1449,44 @@ class Tray:
             action.setCheckable(True)
             action.setChecked(bool(wallpaper and wallpaper.scaling_mode == mode))
             group.addAction(action)
-            action.triggered.connect(lambda checked=False, value=mode: self.set_scaling(screen_id, value))
+
+            action.triggered.connect(
+                lambda checked=False, value=mode: self.set_scaling(screen_id, value)
+            )
+
+
+        if wallpaper is None or wallpaper.current_media is None or wallpaper.scaling_mode != "fit":
+            return
+
+        scaling_menu.addSeparator()
+
+        color_menu = scaling_menu.addMenu(tr("background_color"))
+        color_group = QActionGroup(color_menu)
+
+        colors = {
+            None: "background_color_auto",
+            "#000000": "background_color_black",
+            "#202020": "background_color_near_black",
+            "#404040": "background_color_dark_gray",
+            "#808080": "background_color_medium_gray",
+            "#c0c0c0": "background_color_light_gray",
+            "#e0e0e0": "background_color_bright_gray",
+            "#ffffff": "background_color_white",
+        }
+
+        media_path = wallpaper.current_media.relative_to(MEDIA_DIR).as_posix()
+        color = config_store.load().get("backgroundColor", {}).get(media_path)
+        selected_color = color if color in colors else None
+
+        for color, label in colors.items():
+            action = color_menu.addAction(tr(label))
+            action.setCheckable(True)
+            action.setChecked(color == selected_color)
+            color_group.addAction(action)
+
+            action.triggered.connect(
+                lambda checked=False, value=color: self.set_background_color(screen_id, value)
+            )
 
 
     def set_scaling(self, screen_id: str | None, mode: str) -> None:
@@ -1477,6 +1514,48 @@ class Tray:
             if target.current_media == path:
                 target.apply_scaling(config)
         self.request_background_colors()
+
+
+    def set_background_color(self, screen_id: str | None, color: str | None) -> None:
+        """
+        保存素材共用的背景色, None 表示重新自動取色
+        """
+
+        wallpaper = self.wallpapers.get(screen_id) if screen_id is not None else None
+        if (
+            self.is_exiting or wallpaper is None or
+            wallpaper.is_exiting or wallpaper.current_media is None
+        ):
+            return
+
+
+        path = wallpaper.current_media
+        media_path = path.relative_to(MEDIA_DIR).as_posix()
+        config = config_store.load()
+        colors = config.setdefault("backgroundColor", {})
+
+        if color is None:
+            colors.pop(media_path, None)
+
+        else:
+            colors[media_path] = color
+
+
+        if not config_store.save(config):
+            return
+
+
+        for menu in (self.media_menu, *self.screen_menus.values()):
+            menu.display_config = config
+
+
+        if color is None:
+            self.request_background_colors()
+
+        else:
+            for target in self.wallpapers.values():
+                if target.current_media == path:
+                    target.apply_scaling(config)
 
 
     def request_background_colors(self) -> None:

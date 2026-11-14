@@ -566,7 +566,7 @@ class PlaybackStateTests(QtTestCase):
 
     def test_queued_background_color_respects_media_changes_and_saved_colors(self) -> None:
         """
-        驗證換片與保存色碼後的延遲取色回呼
+        驗證換片, 手動選色與保存失敗後的延遲取色回呼
         """
 
         media_dir = self.namespace["MEDIA_DIR"]
@@ -594,13 +594,10 @@ class PlaybackStateTests(QtTestCase):
         self.assertEqual(store.load()["backgroundColor"], {})
 
         deliver(next_media)
-        config = store.load()
-        config["backgroundColor"]["next.mp4"] = "#112233"
-        store.save(config)
-        self.wallpaper.apply_scaling(config)
+        self.tray.set_background_color(self.wallpaper.screen_id, "#ffffff")
         self.app.processEvents()
-        self.assertEqual(store.load()["backgroundColor"], {"next.mp4": "#112233"})
-        self.assertEqual(self.wallpaper.instance_video._background_color.name(), "#112233")
+        self.assertEqual(store.load()["backgroundColor"], {"next.mp4": "#ffffff"})
+        self.assertEqual(self.wallpaper.instance_video._background_color.name(), "#ffffff")
 
         self.wallpaper.set_play_media(self.media_path)
         self.tray.pause()
@@ -616,6 +613,62 @@ class PlaybackStateTests(QtTestCase):
         self.assertEqual(store.load()["backgroundColor"]["sample.mp4"], "#336699")
         self.assertEqual((self.player.state, self.player.position), ("paused", 4321))
         self.assertEqual(self.wallpaper.instance_video._background_color.name(), "#336699")
+
+        portrait = self.add_following_wallpaper()
+        portrait.target_screen._geometry = QRect(0, 0, 1080, 1920)
+        self.assertTrue(
+            self.tray.follow_controller.follow(portrait.screen_id, self.wallpaper.screen_id)
+        )
+
+        portrait.instance_video._player.finish_loading()
+        self.app.processEvents()
+
+        self.tray.screen_menus[portrait.screen_id] = mock.Mock()
+        targets = (self.wallpaper, portrait)
+
+        self.tray.set_background_color(portrait.screen_id, "#808080")
+        self.assertEqual(
+            [w.instance_video._background_color.name() for w in targets], ["#808080"] * 2
+        )
+
+        config = store.load()
+        for menu in (self.tray.media_menu, *self.tray.screen_menus.values()):
+            self.assertEqual(menu.display_config, config)
+
+        self.tray.thumbnail_thread.request.reset_mock()
+        with mock.patch.object(store, "save", return_value=False):
+            for color in ("#ffffff", None):
+                self.tray.set_background_color(portrait.screen_id, color)
+
+        self.assertEqual(store.load(), config)
+        self.assertEqual(
+            [w.instance_video._background_color.name() for w in targets], ["#808080"] * 2
+        )
+
+        self.tray.thumbnail_thread.request.assert_not_called()
+        for menu in (self.tray.media_menu, *self.tray.screen_menus.values()):
+            self.assertEqual(menu.display_config, config)
+
+        self.tray.set_background_color(portrait.screen_id, None)
+        self.assertEqual(store.load()["backgroundColor"], {"next.mp4": "#ffffff"})
+        self.assertEqual(
+            [w.instance_video._background_color.name() for w in targets], ["#808080"] * 2
+        )
+        self.tray.thumbnail_thread.request.assert_any_call(self.media_path)
+
+        image.fill(0xffaabbcc)
+        deliver(self.media_path)
+        self.app.processEvents()
+
+        self.assertEqual(store.load()["backgroundColor"]["sample.mp4"], "#aabbcc")
+        self.assertEqual(
+            [w.instance_video._background_color.name() for w in targets], ["#aabbcc"] * 2
+        )
+        self.assertEqual((self.player.state, self.player.position), ("paused", 4321))
+        self.assertEqual(
+            self.tray.follow_controller.graph.sources,
+            {portrait.screen_id: self.wallpaper.screen_id}
+        )
 
 
     def create_independent_wallpaper(self, screen_id: str):
