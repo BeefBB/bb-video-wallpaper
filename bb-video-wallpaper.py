@@ -1057,8 +1057,11 @@ class Tray:
             action.setCheckable(True)
             action.setChecked(config.get(config_key, CONFIG_DEFAULTS[config_key]))
 
+            # triggered 前已切換勾選, 保存失敗時還原
             action.triggered.connect(
-                lambda checked, key=config_key, attr=attribute: self.set_auto_pause_option(key, attr, checked)
+                lambda checked, key=config_key, attr=attribute, item=action: item.setChecked(
+                    checked if self.set_auto_pause_option(key, attr, checked) else not checked
+                )
             )
 
             self.options_menu.addAction(action)
@@ -1959,14 +1962,24 @@ class Tray:
         self.restart()
 
 
-    def set_auto_pause_option(self, config_key: str, attribute: str, checked: bool) -> None:
+    def set_auto_pause_option(self, config_key: str, attribute: str, checked: bool) -> bool:
 
-        config = config_store.load()
+        if self.is_exiting:
+            return False
+
+        try:
+            config = config_store.load()
+        except OSError:
+            return False
+
         config[config_key] = checked
-        config_store.save(config)
+        if not config_store.save(config):
+            return False
 
         for wallpaper in self.get_wallpapers():
             setattr(wallpaper, attribute, checked)
+
+        return True
 
 
     def set_font_size(self, font_size: int) -> None:

@@ -226,6 +226,50 @@ class ImportMenuTests(QtTestCase):
         self.tray.thumbnail_thread.stop.assert_called_once_with()
 
 
+    def test_auto_pause_failures_restore_checks_and_retry_updates_all_screens(self) -> None:
+        """
+        三種自動暫停選項在讀取或保存失敗時還原勾選, 重試成功後更新所有螢幕
+        """
+
+        other = self.add_screen("screen-b")
+        wallpapers = (self.wallpaper, other)
+        store = self.namespace["config_store"]
+        config = {**self.namespace["CONFIG_DEFAULTS"], "futureOption": 9}
+        store.load.side_effect = lambda: config.copy()
+        store.save.return_value = True
+
+        for text_key, config_key, attribute in (
+            ("auto_pause_fullscreen", "autoPauseIfFullscreen", "auto_pause_if_fullscreen"),
+            ("auto_pause_screen_off", "autoPauseIfScreenOff", "auto_pause_if_screen_off"),
+            ("auto_pause_battery", "autoPauseIfOnBattery", "auto_pause_if_on_battery"),
+        ):
+            action = next(
+                action for action in self.tray.options_menu.actions()
+                if action.text() == self.namespace["tr"](text_key)
+            )
+            previous = action.isChecked()
+            for wallpaper in wallpapers:
+                setattr(wallpaper, attribute, previous)
+
+            for failure, patcher in (
+                ("read", mock.patch.object(store, "load", side_effect=PermissionError)),
+                ("save", mock.patch.object(store, "save", return_value=False)),
+            ):
+                with self.subTest(option=config_key, failure=failure), patcher:
+                    action.trigger()
+                    self.assertEqual(action.isChecked(), previous)
+                    self.assertEqual([getattr(w, attribute) for w in wallpapers], [previous] * 2)
+                    self.assertEqual(config[config_key], previous)
+
+            store.save.reset_mock()
+            action.trigger()
+
+            store.save.assert_called_once_with({**config, config_key: not previous})
+            self.assertEqual(action.isChecked(), not previous)
+            self.assertEqual([getattr(w, attribute) for w in wallpapers], [not previous] * 2)
+            config[config_key] = not previous
+
+
     def test_preview_size_save_failure_keeps_menus_and_selection(self) -> None:
         """
         保存失敗時還原勾選且不變更各選單, 重試成功後共用新尺寸
