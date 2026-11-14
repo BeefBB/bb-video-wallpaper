@@ -31,6 +31,8 @@
   "media_add_failed": "Could not add video: {error}",
   "media_load_failed": "Could not load wallpaper",
   "media_insufficient_space": "Not enough disk space\n{required:,} MB required, {available:,} MB available",
+  "media_source_busy": "Source file is in use. Finish downloading or editing it before importing.",
+  "media_source_incomplete": "Could not read the complete source file. Please try importing it again.",
   "open_video_folder": "Open Video Folder",
   "select_video": "Select Video",
   "clear_recent_videos": "Clear History",

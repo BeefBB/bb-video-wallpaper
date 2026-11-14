@@ -9,6 +9,10 @@ from pathlib import Path
 import shutil
 import tempfile
 
+import win32con
+import win32file
+import winerror
+
 from thumbnails import SUPPORTED_MEDIA_EXTENSIONS
 
 
@@ -72,6 +76,37 @@ def import_media(
     ):
         raise ValueError(source.name)
 
+
+    # 只允許共用讀取, 來源在雜湊與複製期間不能被改寫或替換
+    try:
+        source_handle = win32file.CreateFile(
+            str(source), win32con.GENERIC_READ, win32con.FILE_SHARE_READ,
+            None, win32con.OPEN_EXISTING, win32con.FILE_ATTRIBUTE_NORMAL, None
+        )
+
+    except win32file.error as error:
+        if error.winerror == winerror.ERROR_SHARING_VIOLATION:
+            raise OSError(translate("media_source_busy")) from error
+        raise
+
+    try:
+        return _import_media(source, import_dir, translate=translate, progress=progress, cancelled=cancelled)
+
+    finally:
+        source_handle.Close()
+
+
+def _import_media(
+    source: Path,
+    import_dir: Path,
+    *,
+    translate: Callable[[str], str],
+    progress: Callable[[int], None] | None,
+    cancelled: Callable[[], bool]
+) -> Path:
+    """
+    在來源禁止寫入期間進行內容比對與複製
+    """
 
     import_dir.mkdir(parents=True, exist_ok=True)
 
@@ -160,6 +195,9 @@ def import_media(
                 if progress is not None and percent != last_percent:
                     progress(percent)
                     last_percent = percent
+
+        if copied != source_size:
+            raise OSError(translate("media_source_incomplete"))
 
         destination = import_dir / source.name
         index = 1

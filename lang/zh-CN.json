@@ -31,6 +31,8 @@
   "media_add_failed": "添加视频失败：{error}",
   "media_load_failed": "加载壁纸失败",
   "media_insufficient_space": "磁盘空间不足\n需要 {required:,} MB, 当前可用 {available:,} MB",
+  "media_source_busy": "源文件正在使用中, 请完成下载或编辑后再导入",
+  "media_source_incomplete": "源文件读取不完整, 请重新导入",
   "open_video_folder": "打开视频文件夹",
   "select_video": "选择视频",
   "clear_recent_videos": "清除记录",

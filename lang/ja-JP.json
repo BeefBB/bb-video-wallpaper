@@ -31,6 +31,8 @@
   "media_add_failed": "動画を追加できませんでした：{error}",
   "media_load_failed": "壁紙を読み込めませんでした",
   "media_insufficient_space": "ディスクの空き容量が不足しています\n必要な空き容量は {required:,} MB、現在の空き容量は {available:,} MB です",
+  "media_source_busy": "元のファイルは使用中です。ダウンロードや編集が完了してから、もう一度取り込んでください",
+  "media_source_incomplete": "元のファイルを最後まで読み取れませんでした。もう一度取り込んでください",
   "open_video_folder": "動画フォルダーを開く",
   "select_video": "動画を選択",
   "clear_recent_videos": "履歴をクリア",

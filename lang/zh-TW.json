@@ -31,6 +31,8 @@
   "media_add_failed": "新增影片失敗：{error}",
   "media_load_failed": "載入桌布失敗",
   "media_insufficient_space": "磁碟空間不足\n需要 {required:,} MB, 目前可用 {available:,} MB",
+  "media_source_busy": "來源檔案正在使用中, 請完成下載或編輯後再匯入",
+  "media_source_incomplete": "來源檔案讀取不完整, 請重新匯入",
   "open_video_folder": "開啟影片資料夾",
   "select_video": "選擇影片",
   "clear_recent_videos": "清除紀錄",

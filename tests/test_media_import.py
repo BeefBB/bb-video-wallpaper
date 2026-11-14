@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
-from media_import import MediaImportCancelled, import_media
+from media_import import MediaImportCancelled, calculate_sha256, import_media
 
 
 @unittest.skipUnless(os.name == "nt", "需要 Windows 的 rename 不覆寫語意")
@@ -103,6 +103,72 @@ class MediaImportTests(unittest.TestCase):
         self.disk_usage.assert_not_called()
 
 
+    def test_source_with_active_writer_is_rejected_and_can_be_retried(self) -> None:
+        """
+        驗證已有寫入者時拒絕匯入且不留下暫存檔, 關閉寫入者後可重試
+        """
+
+        source = self.source_dir / "sample.mp4"
+        contents = b"new contents"
+        source.write_bytes(contents)
+        progress = mock.Mock()
+
+        with source.open("r+b"):
+            with self.assertRaises(OSError) as caught:
+                self.import_media(source, progress=progress)
+
+        self.assertEqual(str(caught.exception), self.language["media_source_busy"])
+        progress.assert_not_called()
+        self.assertEqual(list(self.import_dir.iterdir()), [])
+        destination = self.import_media(source)
+        self.assertEqual(destination.read_bytes(), contents)
+
+
+    def test_source_is_protected_during_hashing_and_copy_and_released_on_success(self) -> None:
+        """
+        驗證雜湊與複製期間可讀取來源但不能寫入, 更名或刪除, 完成後釋放保護
+        """
+
+        source = self.source_dir / "sample.mp4"
+        contents = b"new" * (1024 * 1024)
+        source.write_bytes(contents)
+        existing = self.import_dir / "existing.mp4"
+        existing.write_bytes(b"old" * (1024 * 1024))
+
+        def check_source_protection(percent=None):
+            """
+            使用真正的 Windows 檔案操作驗證共用模式
+            """
+
+            self.assertEqual(source.read_bytes(), contents)
+            with self.assertRaises(PermissionError):
+                with source.open("r+b"):
+                    pass
+            with self.assertRaises(PermissionError):
+                source.rename(source.with_name("renamed.mp4"))
+            with self.assertRaises(PermissionError):
+                source.unlink()
+
+        def hash_protected_source(path, cancelled):
+            """
+            在每次雜湊開始前確認來源保護仍有效
+            """
+
+            check_source_protection()
+            return calculate_sha256(path, cancelled)
+
+        with mock.patch("media_import.calculate_sha256", side_effect=hash_protected_source) as calculate:
+            destination = self.import_media(source, progress=check_source_protection)
+
+        self.assertEqual(calculate.call_count, 2)
+        self.assertEqual(destination.read_bytes(), contents)
+        with source.open("r+b") as file:
+            self.assertEqual(file.read(), contents)
+        renamed = source.with_name("renamed.mp4")
+        source.rename(renamed)
+        renamed.rename(source)
+
+
     def test_disk_filling_during_copy_cleans_up_partial_file(self) -> None:
         """
         複製途中磁碟已滿時清除暫存檔並保留既有檔案
@@ -151,7 +217,8 @@ class MediaImportTests(unittest.TestCase):
         self.assertNotIn(mock.call(100), progress.call_args_list)
         self.assertEqual(list(self.import_dir.iterdir()), [existing])
         self.assertEqual(existing.read_bytes(), b"old contents")
-        self.assertEqual(source.read_bytes(), b"new contents")
+        with source.open("r+b") as file:
+            self.assertEqual(file.read(), b"new contents")
 
 
     def test_cancel_during_hashing_source_or_candidate(self) -> None:
@@ -206,7 +273,8 @@ class MediaImportTests(unittest.TestCase):
                 self.assertEqual(hash_count, cancel_hash_number)
                 self.assertEqual(list(self.import_dir.iterdir()), [existing])
                 self.assertEqual(existing.read_bytes(), b"old contents")
-                self.assertEqual(source.read_bytes(), b"new contents")
+                with source.open("r+b") as file:
+                    self.assertEqual(file.read(), b"new contents")
 
 
     def test_cancel_during_copy_or_before_rename_cleans_up_partial_file(self) -> None:
@@ -243,7 +311,8 @@ class MediaImportTests(unittest.TestCase):
                 self.assertNotIn(100, updates)
                 self.assertEqual(list(self.import_dir.iterdir()), [existing])
                 self.assertEqual(existing.read_bytes(), b"old contents")
-                self.assertEqual(source.read_bytes(), contents)
+                with source.open("r+b") as file:
+                    self.assertEqual(file.read(), contents)
 
 
     def test_collisions_preserve_files_and_reimport_reuses_truncated_names(self) -> None:
