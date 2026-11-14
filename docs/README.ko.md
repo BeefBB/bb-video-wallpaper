@@ -1,6 +1,6 @@
 # BB 동영상 배경화면
 
-**[繁體中文](README.md) | [简体中文](README.cn.md) | [日本語](README.ja.md) | 한국어 | [English](README.en.md)**
+**[繁體中文](../README.md) | [简体中文](README.cn.md) | [日本語](README.ja.md) | 한국어 | [English](README.en.md)**
 
 동영상을 바탕 화면 배경으로 재생할 수 있는 가벼운 배경화면 관리 프로그램입니다.  
 배경화면을 한 폴더에 보관하여 언제든지 간편하게 전환할 수 있습니다.  
@@ -12,7 +12,7 @@
 
 ### 스크린샷
 
-![스크린샷](./assets/screenshot.png)
+![스크린샷](../assets/screenshot.png)
 
 # 다운로드
 

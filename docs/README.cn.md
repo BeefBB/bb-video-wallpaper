@@ -1,6 +1,6 @@
 # BB 视频壁纸
 
-**[繁體中文](README.md) | 简体中文 | [日本語](README.ja.md) | [한국어](README.ko.md) | [English](README.en.md)**
+**[繁體中文](../README.md) | 简体中文 | [日本語](README.ja.md) | [한국어](README.ko.md) | [English](README.en.md)**
 
 可以将视频作为壁纸播放，同时也是一款非常轻量的壁纸管理软件。  
 将壁纸保存在一个文件夹中，以便随时切换。  
@@ -12,7 +12,7 @@
 
 ### 截图
 
-![截图](./assets/screenshot.png)
+![截图](../assets/screenshot.png)
 
 # 下载
 

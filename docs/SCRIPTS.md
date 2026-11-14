@@ -8,7 +8,7 @@
 
 ### 產生精簡版 VLC
 
-將完整 VLC 放入專案根目錄的 `VLC/`, 保留 DLL, 授權文件, `vlc-cache-gen.exe` 與 `plugins/` 等原始內容, 再執行 [create-vlc-lite.ps1](./create-vlc-lite.ps1):
+將完整 VLC 放入專案根目錄的 `VLC/`, 保留 DLL, 授權文件, `vlc-cache-gen.exe` 與 `plugins/` 等原始內容, 再執行 [create-vlc-lite.ps1](../create-vlc-lite.ps1):
 
 ```powershell
 .\create-vlc-lite.ps1
@@ -26,15 +26,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 
 ### 啟動程式
 
-雙擊 [run.bat](./run.bat), 或在 PowerShell 執行:
+雙擊 [run.bat](../run.bat), 或在 PowerShell 執行:
 
 ```powershell
 .\run.bat
 ```
 
-腳本會檢查管理員權限, 必要時提示提權, 再切換到專案根目錄. 首次執行會建立 `.venv/` 並安裝 [requirements.txt](./requirements.txt) 中的套件, 然後以虛擬環境啟動 [bb-video-wallpaper.py](./bb-video-wallpaper.py). 程式退出後會保留命令視窗, 方便查看輸出
+腳本會檢查管理員權限, 必要時提示提權, 再切換到專案根目錄. 首次執行會建立 `.venv/` 並安裝 [requirements.txt](../requirements.txt) 中的套件, 然後以虛擬環境啟動 [bb-video-wallpaper.py](../bb-video-wallpaper.py). 程式退出後會保留命令視窗, 方便查看輸出
 
-[run.bat](./run.bat) 與 [build.bat](./build.bat) 都只在 `.venv/` 不存在時建立環境並安裝套件. 更新套件需求後, 已有的環境需手動更新:
+[run.bat](../run.bat) 與 [build.bat](../build.bat) 都只在 `.venv/` 不存在時建立環境並安裝套件. 更新套件需求後, 已有的環境需手動更新:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r .\requirements.txt
@@ -65,22 +65,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 
 檔案                                               | 職責
 ---                                                | ---
-[bb-video-wallpaper.py](./bb-video-wallpaper.py)   | 主程式組裝, VLC 初始化, 桌布生命週期, 系統匣與匯入介面, 自動暫停及桌面重建恢復
-[config.py](./config.py)                           | 設定初始化, 驗證與讀寫, 語言檔載入
-[playback.py](./playback.py)                       | 不可變播放意圖與暫停原因, 單螢幕及跟隨群組共用的自動暫停判斷
-[screen_follow.py](./screen_follow.py)             | 跟隨關係與循環驗證, 群組自動暫停, 媒體及播放進度同步
-[media_import.py](./media_import.py)               | 媒體內容去重, 分塊複製, 容量檢查, 命名衝突與取消清理
-[media_preview.py](./media_preview.py)             | 預覽選單, 懸停時序, 縮圖訊號與預覽視窗定位
-[windows_integration.py](./windows_integration.py) | 單一實例, 螢幕識別, 桌面掛載與就緒檢查, 虛擬桌面及最大化視窗偵測, 電源通知與開機排程
-[bb_image_display.py](./bb_image_display.py)       | Qt 圖片輸出, 原生子視窗管理與重綁
-[thumbnails.py](./thumbnails.py)                   | 支援的媒體格式, 縮圖產生, 快取驗證與背景排隊
+[bb-video-wallpaper.py](../bb-video-wallpaper.py)   | 主程式組裝, VLC 初始化, 桌布生命週期, 系統匣與匯入介面, 自動暫停及桌面重建恢復
+[config.py](../config.py)                           | 設定初始化, 驗證與讀寫, 語言檔載入
+[playback.py](../playback.py)                       | 不可變播放意圖與暫停原因, 單螢幕及跟隨群組共用的自動暫停判斷
+[screen_follow.py](../screen_follow.py)             | 跟隨關係與循環驗證, 群組自動暫停, 媒體及播放進度同步
+[media_import.py](../media_import.py)               | 媒體內容去重, 分塊複製, 容量檢查, 命名衝突與取消清理
+[media_preview.py](../media_preview.py)             | 預覽選單, 懸停時序, 縮圖訊號與預覽視窗定位
+[windows_integration.py](../windows_integration.py) | 單一實例, 螢幕識別, 桌面掛載與就緒檢查, 虛擬桌面及最大化視窗偵測, 電源通知與開機排程
+[bb_image_display.py](../bb_image_display.py)       | Qt 圖片輸出, 原生子視窗管理與重綁
+[thumbnails.py](../thumbnails.py)                   | 支援的媒體格式, 縮圖產生, 快取驗證與背景排隊
 
 模組整合時需維持以下邊界:
 
 - 模組不反向匯入主程式, 匯入時不建立使用者資料夾或設定日誌. 路徑, 翻譯函式與進度及取消回呼由呼叫端傳入; Windows 的 Mutex, 桌面掛載與排程操作也只在呼叫相關函式時執行
 - Qt 元件共用主程式的 `QApplication`. 主程式負責桌布掛載, 媒體切換與退出時停止縮圖工作; 圖片模組管理內部子視窗, 預覽模組管理選單及縮圖顯示
 - 主程式先完成 VLC DLL 載入設定. 影片縮圖只在實際使用時匯入 VLC, 其他模組測試可獨立執行
-- 主程式匯入時只定義函式與類別, 由 `main()` 初始化路徑, 資料夾, 日誌, VLC 與設定後啟動介面. 測試以 [app_loader.py](./tests/app_loader.py) 直接載入獨立的主程式模組, 再替換需要的執行環境或輸出物件
+- 主程式匯入時只定義函式與類別, 由 `main()` 初始化路徑, 資料夾, 日誌, VLC 與設定後啟動介面. 測試以 [app_loader.py](../tests/app_loader.py) 直接載入獨立的主程式模組, 再替換需要的執行環境或輸出物件
 
 日常修改後, 重新啟動程式並執行相關測試即可. 更動 VLC 時需重建精簡版, 準備發佈時則接著打包與製作安裝檔
 
@@ -92,7 +92,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 .\test.bat
 ```
 
-[test.bat](./test.bat) 會切換到專案根目錄, 必要時建立虛擬環境並安裝套件, 再執行全部測試. 結束後會保留視窗方便查看結果, 並回傳測試的結束碼
+[test.bat](../test.bat) 會切換到專案根目錄, 必要時建立虛擬環境並安裝套件, 再執行全部測試. 結束後會保留視窗方便查看結果, 並回傳測試的結束碼
 
 也可直接執行:
 
@@ -112,16 +112,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 
 測試腳本                                                           | 檢查重點
 ---                                                                | ---
-[test_app_ui.py](./tests/test_app_ui.py)                           | 匯入取消與過期回呼, 螢幕變動, 主執行緒更新, 預覽過期結果, 匯入主程式不初始化
-[test_config.py](./tests/test_config.py)                           | 存取與保存失敗不破壞原檔, 損壞內容重建與修復, 路徑邊界
-[test_screen_follow.py](./tests/test_screen_follow.py)             | 循環與群組拆分, 群組暫停, 進度誤差與循環邊界, 過期同步訊號
-[test_media_import.py](./tests/test_media_import.py)               | 命名衝突, 磁碟空間邊界, 複製中寫滿與各階段取消後清理
-[test_playback_state.py](./tests/test_playback_state.py)           | 延遲播放事件, 重掛順序與重試, 舊進度失效, 關閉與螢幕移除競態
-[test_video_recovery.py](./tests/test_video_recovery.py)           | 主程式實際載入 VLC, 影片輸出失效後的重建, 播放及暫停狀態與進度恢復
-[test_windows_integration.py](./tests/test_windows_integration.py) | 螢幕識別變動, 64 位元 handle, 掛載失敗, 桌面通知, 圖片原生子視窗重綁與釋放
-[test_thumbnails.py](./tests/test_thumbnails.py)                   | 快取保護與儲存失敗, 非正方形像素, 旋轉方向, 多影像軌, AV1 解碼逾時與取消
+[test_app_ui.py](../tests/test_app_ui.py)                           | 匯入取消與過期回呼, 螢幕變動, 主執行緒更新, 預覽過期結果, 匯入主程式不初始化
+[test_config.py](../tests/test_config.py)                           | 存取與保存失敗不破壞原檔, 損壞內容重建與修復, 路徑邊界
+[test_screen_follow.py](../tests/test_screen_follow.py)             | 循環與群組拆分, 群組暫停, 進度誤差與循環邊界, 過期同步訊號
+[test_media_import.py](../tests/test_media_import.py)               | 命名衝突, 磁碟空間邊界, 複製中寫滿與各階段取消後清理
+[test_playback_state.py](../tests/test_playback_state.py)           | 延遲播放事件, 重掛順序與重試, 舊進度失效, 關閉與螢幕移除競態
+[test_video_recovery.py](../tests/test_video_recovery.py)           | 主程式實際載入 VLC, 影片輸出失效後的重建, 播放及暫停狀態與進度恢復
+[test_windows_integration.py](../tests/test_windows_integration.py) | 螢幕識別變動, 64 位元 handle, 掛載失敗, 桌面通知, 圖片原生子視窗重綁與釋放
+[test_thumbnails.py](../tests/test_thumbnails.py)                   | 快取保護與儲存失敗, 非正方形像素, 旋轉方向, 多影像軌, AV1 解碼逾時與取消
 
-Qt 測試共用 [app_loader.py](./tests/app_loader.py) 的 `QtTestCase`, 統一建立 `QApplication`, 並在個別案例清理後處理延後刪除. 新增 Qt 測試時沿用此基底, 避免先建立 `QCoreApplication` 使 GUI 測試依執行順序被跳過
+Qt 測試共用 [app_loader.py](../tests/app_loader.py) 的 `QtTestCase`, 統一建立 `QApplication`, 並在個別案例清理後處理延後刪除. 新增 Qt 測試時沿用此基底, 避免先建立 `QCoreApplication` 使 GUI 測試依執行順序被跳過
 
 ### 手動驗收
 
@@ -149,7 +149,7 @@ Qt 測試共用 [app_loader.py](./tests/app_loader.py) 的 `QtTestCase`, 統一�
 
 ### 打包程式
 
-先準備好 `VLC-lite/`, 再執行 [build.bat](./build.bat):
+先準備好 `VLC-lite/`, 再執行 [build.bat](../build.bat):
 
 ```powershell
 .\build.bat
@@ -181,7 +181,7 @@ dist/BB Video Wallpaper/
 
 ### 製作安裝檔
 
-[BB Video Wallpaper.iss](./installer/BB%20Video%20Wallpaper.iss) 是 Inno Setup 定義檔, 以打包完成的 `dist/BB Video Wallpaper/` 為輸入:
+[BB Video Wallpaper.iss](../installer/BB%20Video%20Wallpaper.iss) 是 Inno Setup 定義檔, 以打包完成的 `dist/BB Video Wallpaper/` 為輸入:
 
 1. 確認打包結果已更新
 2. 發佈新版本時, 更新定義檔開頭的 `MyAppVersion`
@@ -204,7 +204,7 @@ ISCC.exe '.\installer\BB Video Wallpaper.iss'
 安裝後啟動 | 自動啟動區段目前為註解狀態
 解除安裝   | 移除 `BBVideoWallpaper` 開機排程, 保留使用者資料
 
-主程式的語言載入由 [config.py](./config.py) 處理: 保留既有語言設定; 未指定時依序使用安裝語言, 系統語言, 最後以繁體中文作為預設
+主程式的語言載入由 [config.py](../config.py) 處理: 保留既有語言設定; 未指定時依序使用安裝語言, 系統語言, 最後以繁體中文作為預設
 
 ## 常見情況
 

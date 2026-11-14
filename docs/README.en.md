@@ -1,6 +1,6 @@
 # BB Video Wallpaper
 
-**[繁體中文](README.md) | [简体中文](README.cn.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | English**
+**[繁體中文](../README.md) | [简体中文](README.cn.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | English**
 
 Play videos as your desktop wallpaper while keeping it lightweight and simple to manage.  
 Store your wallpapers in a single folder, making it easy to switch between them at any time.  
@@ -12,7 +12,7 @@ Store your wallpapers in a single folder, making it easy to switch between them 
 
 ### Screenshot
 
-![Screenshot](./assets/screenshot.png)
+![Screenshot](../assets/screenshot.png)
 
 # Download
 

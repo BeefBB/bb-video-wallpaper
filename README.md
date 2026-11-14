@@ -1,6 +1,6 @@
 # BB 影片桌布
 
-**繁體中文 | [简体中文](README.cn.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [English](README.en.md)**
+**繁體中文 | [简体中文](docs/README.cn.md) | [日本語](docs/README.ja.md) | [한국어](docs/README.ko.md) | [English](docs/README.en.md)**
 
 能在桌布播放影片, 同時也是一個極輕量的桌布管理軟體  
 將桌布保存在一個資料夾中, 以便隨時切換  
