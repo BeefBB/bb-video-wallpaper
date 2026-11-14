@@ -34,6 +34,7 @@ def run_probe(directory: Path, operation: str) -> None:
     import win32gui
     import win32ui
     from PySide6.QtCore import QEventLoop, QTimer, Qt
+    from PySide6.QtGui import QImage, QPainter, QTransform
     from PySide6.QtWidgets import QApplication, QWidget
     import bb_video_display
 
@@ -83,6 +84,10 @@ def run_probe(directory: Path, operation: str) -> None:
         ready: queue.Queue[str] = queue.Queue()
         threading.Thread(target=lambda: ready.put(stdout.readline()), daemon=True).start()
         host = int(ready.get(timeout=6))
+        win32gui.SetWindowPos(
+            host, 0, 0, 0, 640, 640,
+            win32con.SWP_NOMOVE | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE
+        )
 
         target = QWidget()
         target.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
@@ -104,7 +109,7 @@ def run_probe(directory: Path, operation: str) -> None:
         )
 
 
-    def corner_pixel() -> tuple[int, int, int]:
+    def capture() -> QImage:
 
         # 擷取原生背景視窗, 不以繪圖替身代替 Qt 與 Windows 的輸出
         window = display._window
@@ -121,8 +126,7 @@ def run_probe(directory: Path, operation: str) -> None:
         try:
             assert ctypes.windll.user32.PrintWindow(hwnd, buffer.GetSafeHdc(), 2)
             pixels = bitmap.GetBitmapBits(True)
-            offset = (5 * width + 5) * 4
-            return pixels[offset + 2], pixels[offset + 1], pixels[offset]
+            return QImage(pixels, width, height, QImage.Format.Format_RGB32).copy()
 
         finally:
             buffer.SelectObject(original)
@@ -132,12 +136,18 @@ def run_probe(directory: Path, operation: str) -> None:
             win32gui.DeleteObject(bitmap.GetHandle())
 
 
+    def corner_pixel() -> tuple[int, int, int]:
+
+        color = capture().pixelColor(5, 5)
+        return color.red(), color.green(), color.blue()
+
+
     try:
         target, host = create_target()
         display.set_hwnd(int(target.winId()))
         display.set_scaling("fit", "#123456")
-        if operation == "lifecycle":
-            media = directory / "base.mp4"
+        if operation.startswith("lifecycle"):
+            media = directory / ("rotated.mp4" if operation == "lifecycle-rotated" else "base.mp4")
             display.set_media(media)
             display.play()
             display.set_time(3000)
@@ -167,6 +177,11 @@ def run_probe(directory: Path, operation: str) -> None:
             display.play()
             wait(lambda: (display.get_time() or 0) > 3300)
 
+            if operation == "lifecycle-rotated":
+                display.set_media(directory / "base.mp4")
+                wait(lambda: (display.get_time() or 0) > 500)
+                wait(lambda: capture().pixelColor(200, 200).red() > 180)
+
             # 輸出再次失效後立即關閉, 延遲回呼不得操作已釋放播放器
             host.terminate()
             host.wait(timeout=5)
@@ -174,6 +189,64 @@ def run_probe(directory: Path, operation: str) -> None:
             app.processEvents()
             display.close()
             assert display._player is None and display._window is None
+
+        elif operation.startswith("scaling-"):
+            rotation = int(operation.removeprefix("scaling-"))
+            source = QImage(str(directory / "pattern.png"))
+            for sar in (1, 2):
+                image = source.scaled(320 * sar, 180).transformed(QTransform().rotate(-rotation))
+                display.set_media(directory / f"pattern-{sar}-{rotation}.mp4")
+                display.play()
+                wait(lambda: display._video_size is not None and (display.get_time() or 0) > 500)
+                display.pause()
+                player = display._player
+                assert player is not None
+                wait(lambda: player.get_state() == getattr(vlc.State, "Paused"))
+
+                for width, height in ((300, 500), (500, 300)):
+                    win32gui.SetWindowPos(
+                        int(target.winId()), 0, 0, 0, width, height,
+                        win32con.SWP_NOMOVE | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE
+                    )
+                    for mode in ("fit", "stretch", "fill", "fit"):
+                        position = display.get_time()
+                        display.set_scaling(mode, "#123456")
+                        aspect = {
+                            "fit": Qt.AspectRatioMode.KeepAspectRatio,
+                            "stretch": Qt.AspectRatioMode.IgnoreAspectRatio,
+                            "fill": Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                        }[mode]
+                        scaled = image.scaled(width, height, aspect)
+                        expected = QImage(width, height, QImage.Format.Format_RGB32)
+                        expected.fill("#123456")
+                        painter = QPainter(expected)
+                        painter.drawImage((width - scaled.width()) // 2, (height - scaled.height()) // 2, scaled)
+                        painter.end()
+
+                        # 多點比對實際畫面, 略過色塊邊界並容許影片壓縮色偏
+                        samples = []
+                        for x in (5, *range(width // 10, width, width // 10), width - 6):
+                            for y in (5, *range(height // 10, height, height // 10), height - 6):
+                                color = expected.pixelColor(x, y)
+                                if all(expected.pixelColor(x + dx, y + dy) == color
+                                       for dx, dy in ((-3, 0), (3, 0), (0, -3), (0, 3))):
+                                    samples.append((x, y, color))
+
+                        def matches() -> bool:
+
+                            actual = capture()
+                            return actual.size() == expected.size() and all(
+                                max(abs(a - b) for a, b in zip(
+                                    actual.pixelColor(x, y).getRgb()[:3], color.getRgb()[:3]
+                                )) <= 30
+                                for x, y, color in samples
+                            )
+
+                        try:
+                            wait(matches)
+                        except AssertionError:
+                            raise AssertionError((rotation, sar, width, height, mode)) from None
+                        assert display.get_time() == position, "縮放模式切換不應改變暫停進度"
 
         else:
             for name, dimensions in (("sar.mp4", (640, 180)), ("rotated.mp4", (180, 320))):
@@ -202,27 +275,6 @@ def run_probe(directory: Path, operation: str) -> None:
 
                     wait(fitted)
                     wait(lambda: corner_pixel() == (18, 52, 86))
-
-                position = display.get_time()
-                for mode in ("stretch", "fill", "fit"):
-                    display.set_scaling(mode, "#123456")
-                    _, _, width, height = win32gui.GetClientRect(int(target.winId()))
-                    assert player.video_get_crop_geometry() == (f"{width}:{height}" if mode == "fill" else None)
-                    assert player.video_get_aspect_ratio() == (f"{width}:{height}" if mode == "stretch" else None)
-
-                    if mode == "fit":
-                        wait(lambda: corner_pixel() == (18, 52, 86))
-                    else:
-                        def filled() -> bool:
-
-                            red, green, blue = corner_pixel()
-                            return red > 180 and green < 60 and blue < 60
-
-                        try:
-                            wait(filled)
-                        except AssertionError:
-                            raise AssertionError((name, mode, corner_pixel())) from None
-                    assert display.get_time() == position
 
         assert not errors, errors
         print(f"PASS {operation}", flush=True)
@@ -283,6 +335,24 @@ class VideoDisplayTests(unittest.TestCase):
         )
         ffmpeg("-display_rotation:v:0", "90", "-i", base, "-c", "copy", cls.directory / "rotated.mp4")
 
+        pattern = cls.directory / "pattern.mp4"
+        ffmpeg(
+            "-f", "lavfi", "-i",
+            "color=c=red:s=320x180:r=30,"
+            "drawbox=x=160:y=0:w=160:h=90:color=lime:t=fill,"
+            "drawbox=x=0:y=90:w=160:h=90:color=blue:t=fill,"
+            "drawbox=x=160:y=90:w=160:h=90:color=yellow:t=fill,"
+            "drawbox=x=80:y=48:w=80:h=48:color=white:t=fill",
+            "-t", "8", "-c:v", "libx264", "-preset", "ultrafast", pattern
+        )
+        ffmpeg("-i", pattern, "-frames:v", "1", cls.directory / "pattern.png")
+        for sar in (1, 2):
+            anamorphic = cls.directory / f"pattern-{sar}.mp4"
+            ffmpeg("-i", pattern, "-vf", f"setsar={sar}", "-c:v", "libx264", "-preset", "ultrafast", anamorphic)
+            for rotation in (0, 90, 180, 270):
+                ffmpeg("-display_rotation:v:0", str(rotation), "-i", anamorphic, "-c", "copy",
+                       cls.directory / f"pattern-{sar}-{rotation}.mp4")
+
 
     def probe(self, operation: str) -> None:
         """
@@ -303,7 +373,9 @@ class VideoDisplayTests(unittest.TestCase):
         載入中指令與失效父視窗不造成卡住, 重綁後恢復暫停進度
         """
 
-        self.probe("lifecycle")
+        for operation in ("lifecycle", "lifecycle-rotated"):
+            with self.subTest(operation=operation):
+                self.probe(operation)
 
 
     def test_native_fit_background_tracks_sar_rotation_and_resize(self) -> None:
@@ -312,6 +384,16 @@ class VideoDisplayTests(unittest.TestCase):
         """
 
         self.probe("geometry")
+
+
+    def test_rotated_scaling_matches_rendered_pixels_while_paused(self) -> None:
+        """
+        實際輸出符合旋轉與像素比例, 暫停時切換縮放或尺寸也更新畫面
+        """
+
+        for rotation in (90, 270, 180, 0):
+            with self.subTest(rotation=rotation):
+                self.probe(f"scaling-{rotation}")
 
 
 if __name__ == "__main__":

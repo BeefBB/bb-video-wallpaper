@@ -47,6 +47,13 @@ __all__ = ["Instance"]
 
 
 logger = logging.getLogger(__name__)
+_VLC_VAR_STRING = 0x0040
+
+
+class _VlcValue(ctypes.Union):
+    """VLC 3 在 64 位元 Windows 使用的變數值 union"""
+
+    _fields_ = [("integer", ctypes.c_int64), ("string", ctypes.c_char_p)]
 
 
 class _TargetEvents(QAbstractNativeEventFilter):
@@ -270,6 +277,9 @@ class Instance(QObject):
         self._visible = False
         self._pending_time: int | None = None
         self._video_size: QSizeF | None = None
+        self._video_transposed = False
+        self._output_transposed = False
+        self._set_output: Callable | None = None
 
         self._scaling_mode = "fill"
         self._background_color = QColor(Qt.GlobalColor.black)
@@ -426,6 +436,7 @@ class Instance(QObject):
         self.current_media = source
         self._pending_time = None
         self._video_size = None
+        self._video_transposed = False
         self._layout()
 
         if self._state != "stop" and self._hwnd:
@@ -557,8 +568,20 @@ class Instance(QObject):
         if not visible:
             self.hide()
 
-        self._detach_events()
         assert self._player is not None and self._events is not None
+        if self._video_transposed or self._output_transposed:
+            # VLC 3 綁定 HWND 時會清空 vout, 旋轉影片改用可正確裁切的原生 OpenGL 輸出
+            if self._set_output is None:
+                set_output = ctypes.CDLL("libvlccore.dll").var_SetChecked
+                set_output.argtypes = (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int, _VlcValue)
+                set_output.restype = ctypes.c_int
+                self._set_output = set_output
+            output = b"glwin32" if self._video_transposed else b""
+            if self._set_output(self._player, b"vout", _VLC_VAR_STRING, _VlcValue(string=output)) != 0:
+                raise RuntimeError("無法設定影片輸出")
+        self._output_transposed = self._video_transposed
+
+        self._detach_events()
 
         for name in ("Playing", "Vout", "SeekableChanged", "ESSelected", "EncounteredError"):
             event_type = getattr(vlc.EventType, f"MediaPlayer{name}")
@@ -700,6 +723,13 @@ class Instance(QObject):
             return
 
         self._read_video_size()
+        if self._video_transposed != self._output_transposed:
+            if self._pending_time is None:
+                position = self._player.get_time()
+                self._pending_time = position if position > 0 else None
+            if self._stop_player():
+                self._start_player()
+            return
         self._layout()
         self._apply_pending()
 
@@ -737,10 +767,11 @@ class Instance(QObject):
                 if video.sar_num and video.sar_den:
                     width *= video.sar_num
                     height *= video.sar_den
-                if video.orientation in (
+                self._video_transposed = video.orientation in (
                     getattr(vlc.VideoOrient, "left_top"), getattr(vlc.VideoOrient, "left_bottom"),
                     getattr(vlc.VideoOrient, "right_top"), getattr(vlc.VideoOrient, "right_bottom")
-                ):
+                )
+                if self._video_transposed:
                     width, height = height, width
                 self._video_size = QSizeF(width, height)
                 break
@@ -751,7 +782,7 @@ class Instance(QObject):
 
     def _layout(self) -> None:
         """
-        完整顯示時縮小影片子視窗, 外圍由 Qt 背景覆蓋
+        依縮放模式調整影片子視窗, 外圍由 Qt 背景覆蓋
         """
 
         window = self._window
@@ -767,8 +798,11 @@ class Instance(QObject):
             return
 
         video_width, video_height = width, height
-        if self._scaling_mode == "fit" and self._video_size is not None:
-            size = self._video_size.scaled(QSizeF(width, height), Qt.AspectRatioMode.KeepAspectRatio)
+        # 旋轉影片避開 VLC 的原生裁切, 由父視窗裁切放大的輸出
+        clip_video = self._scaling_mode == "fill" and self._video_transposed
+        if self._video_size is not None and (self._scaling_mode == "fit" or clip_video):
+            aspect = Qt.AspectRatioMode.KeepAspectRatioByExpanding if clip_video else Qt.AspectRatioMode.KeepAspectRatio
+            size = self._video_size.scaled(QSizeF(width, height), aspect)
             video_width, video_height = max(1, round(size.width())), max(1, round(size.height()))
 
         win32gui.SetWindowPos(
@@ -777,8 +811,10 @@ class Instance(QObject):
         )
 
         self._player.video_set_scale(0)
-        self._player.video_set_crop_geometry(f"{width}:{height}" if self._scaling_mode == "fill" else None)
-        self._player.video_set_aspect_ratio(f"{width}:{height}" if self._scaling_mode == "stretch" else None)
+        # VLC 的拉伸比例使用旋轉前的影像方向
+        ratio = f"{height}:{width}" if self._video_transposed else f"{width}:{height}"
+        self._player.video_set_crop_geometry(ratio if self._scaling_mode == "fill" and not clip_video else None)
+        self._player.video_set_aspect_ratio(ratio if self._scaling_mode == "stretch" else None)
 
         show_video = self._video_size is not None and self._state != "stop" and self._player.has_vout() > 0
         win32gui.ShowWindow(window.video_hwnd, win32con.SW_SHOWNOACTIVATE if show_video else win32con.SW_HIDE)
@@ -851,6 +887,8 @@ class Instance(QObject):
 
             self.current_media = None
             self._video_size = None
+            self._video_transposed = False
+            self._output_transposed = False
 
             self._closing = False
 
