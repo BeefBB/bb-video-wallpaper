@@ -62,7 +62,7 @@ def cleanup_orphaned_thumbnails(media_dir: Path, thumbnail_dir: Path) -> None:
         for name in filenames:
 
             if (
-                re.fullmatch(r"[0-9a-f]{16}-[0-9a-f]{8}(?:-[1-5])?\.jpg", name) is None or
+                re.fullmatch(r"[0-9a-f]{16}-[0-9a-f]{8}(?:-[1-5])?\.(?:jpg|png)", name) is None or
                 name[:16] in source_ids
             ):
                 continue
@@ -83,7 +83,7 @@ def fast_hash(path: Path) -> str:
 
     digest = hashlib.sha256()
     # 將縮圖演算法版本納入識別碼計算
-    digest.update(b"thumbnail-v4\0")
+    digest.update(b"thumbnail-v5\0")
 
     with path.open("rb") as file:
 
@@ -392,7 +392,7 @@ def ensure_thumbnail(
     preview_size: int = 3
 ) -> Path:
     """
-    驗證指定尺寸的縮圖或產生 JPEG; 成功後才清除同來源舊版本的各尺寸縮圖
+    驗證指定尺寸的縮圖或產生 PNG; 成功後才清除同來源舊版本的各尺寸縮圖
     """
 
     path = path.resolve(strict=True)
@@ -410,7 +410,7 @@ def ensure_thumbnail(
     source_id = hashlib.sha256(path.name.encode("utf-8")).hexdigest()[:16]
     prefix = f"{source_id}-"
     directory = thumbnail_dir / relative_path.parent
-    destination = directory / f"{prefix}{digest}-{preview_size}.jpg"
+    destination = directory / f"{prefix}{digest}-{preview_size}.png"
     thumbnail_width = preview_size * 100
 
     if cancelled():
@@ -466,8 +466,7 @@ def ensure_thumbnail(
 
     try:
 
-        writer = QImageWriter(str(temp_path), b"JPG")
-        writer.setQuality(85)
+        writer = QImageWriter(str(temp_path), b"PNG")
 
         try:
             if not writer.write(image):
@@ -491,8 +490,8 @@ def ensure_thumbnail(
 
             if (
                 old_path.name.startswith(prefix) and
-                re.fullmatch(r"[0-9a-f]{8}(?:-[1-5])?\.jpg", suffix) is not None and
-                (len(suffix) == 12 or suffix[:8] != digest) and
+                re.fullmatch(r"[0-9a-f]{8}(?:-[1-5])?\.(?:jpg|png)", suffix) is not None and
+                (old_path.suffix == ".jpg" or len(suffix) == 12 or suffix[:8] != digest) and
                 old_path.is_file()
             ):
                 old_path.unlink()

@@ -264,6 +264,45 @@ class ThumbnailTests(unittest.TestCase):
                 self.assertEqual(list(self.thumbnail_dir.iterdir()), [previous])
 
 
+    def test_jpeg_upgrade_preserves_old_cache_until_png_is_saved(self) -> None:
+        """
+        舊 JPEG 不再使用, PNG 寫入或替換失敗時保留舊快取, 成功後才清除
+        """
+
+        source = self.media_dir / "transparent.png"
+        image = QImage(32, 18, QImage.Format.Format_ARGB32)
+        image.fill(QColor(255, 0, 0, 128))
+        image.setPixelColor(0, 0, QColor(0, 0, 255, 0))
+        self.assertTrue(image.save(str(source)))
+
+        destination = self.thumbnail(source)
+        previous = destination.with_suffix(".jpg")
+        self.assertTrue(QImage(str(destination)).save(str(previous), "JPG", 85))
+        destination.unlink()
+        previous_content = previous.read_bytes()
+        original_write = QImageWriter.write
+
+        def fail_after_write(writer, image):
+            self.assertTrue(original_write(writer, image))
+            return False
+
+        for stage, patcher, expected_error in (
+            ("write", mock.patch.object(QImageWriter, "write", fail_after_write),
+             self.assertRaisesRegex(OSError, "無法儲存縮圖")),
+            ("replace", mock.patch.object(os, "replace", side_effect=PermissionError),
+             self.assertRaises(PermissionError)),
+        ):
+            with self.subTest(stage=stage):
+                with patcher, expected_error:
+                    self.thumbnail(source)
+                self.assertEqual(previous.read_bytes(), previous_content)
+                self.assertEqual(list(self.thumbnail_dir.iterdir()), [previous])
+
+        self.assertEqual(self.thumbnail(source), destination)
+        self.assertFalse(previous.exists())
+        self.assertEqual(QImage(str(destination)).pixelColor(0, 0).alpha(), 0)
+
+
     def test_cleanup_preserves_directory_after_partial_scan_failure(self) -> None:
         """
         來源清單讀取途中失敗時, 不以不完整清單刪除縮圖

@@ -154,7 +154,7 @@ Preview padding |  | 4 px
 Gap between the preview and menu |  | 8 px, preferably on the left; moves to the right if there is not enough space
 Fallback when the loading image cannot be loaded |  | Width `previewSize * 100` px, height rounded to 16:9, dark gray (`Qt.GlobalColor.darkGray`)
 Thumbnail width |  | `previewSize * 100` px, height follows the media aspect ratio; sizes are generated on demand and cached separately
-Thumbnail format and quality |  | JPEG 85
+Thumbnail format and quality |  | PNG
 VLC thumbnail options |  | Hardware decoding (`--avcodec-hw=none`), audio, video titles, and OSD disabled; `--quiet` enabled
 Video metadata parsing timeout |  | 5 s
 Video frame capture timeout |  | 10 s
