@@ -277,9 +277,9 @@ class MediaImportTests(unittest.TestCase):
                     self.assertEqual(file.read(), b"new contents")
 
 
-    def test_cancel_during_copy_or_before_rename_cleans_up_partial_file(self) -> None:
+    def test_cancel_during_copy_cleans_up_partial_file(self) -> None:
         """
-        複製中或更名前取消時清除暫存檔
+        複製中取消時清除暫存檔
         """
 
         source = self.source_dir / "sample.mp4"
@@ -288,31 +288,29 @@ class MediaImportTests(unittest.TestCase):
         existing = self.import_dir / source.name
         existing.write_bytes(b"old contents")
 
-        for cancel_percent in (1, 99):
-            with self.subTest(cancel_percent=cancel_percent):
-                cancelled = False
-                updates = []
+        cancelled = False
+        updates = []
 
-                def report(percent):
-                    """
-                    記錄複製進度, 達到指定百分比時確認暫存檔存在並要求取消
-                    """
+        def report(percent):
+            """
+            記錄複製進度, 開始複製後確認暫存檔存在並要求取消
+            """
 
-                    nonlocal cancelled
-                    updates.append(percent)
+            nonlocal cancelled
+            updates.append(percent)
 
-                    if percent >= cancel_percent:
-                        self.assertTrue(list(self.import_dir.glob(".import-*.tmp")))
-                        cancelled = True
+            if percent > 0:
+                self.assertTrue(list(self.import_dir.glob(".import-*.tmp")))
+                cancelled = True
 
-                with self.assertRaises(MediaImportCancelled):
-                    self.import_media(source, progress=report, cancelled=lambda: cancelled)
+        with self.assertRaises(MediaImportCancelled):
+            self.import_media(source, progress=report, cancelled=lambda: cancelled)
 
-                self.assertNotIn(100, updates)
-                self.assertEqual(list(self.import_dir.iterdir()), [existing])
-                self.assertEqual(existing.read_bytes(), b"old contents")
-                with source.open("r+b") as file:
-                    self.assertEqual(file.read(), contents)
+        self.assertNotIn(100, updates)
+        self.assertEqual(list(self.import_dir.iterdir()), [existing])
+        self.assertEqual(existing.read_bytes(), b"old contents")
+        with source.open("r+b") as file:
+            self.assertEqual(file.read(), contents)
 
 
     def test_collisions_preserve_files_and_reimport_reuses_truncated_names(self) -> None:

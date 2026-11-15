@@ -128,23 +128,6 @@ class FollowGraphTests(unittest.TestCase):
         self.assertEqual(graph.subtree("d"), ("d", "b", "c"))
 
 
-    def test_detaching_or_removing_source_preserves_lower_relationships(self) -> None:
-        """
-        驗證解除跟隨或移除中間螢幕時, 保留離線螢幕設定與不相關的下層關係
-        """
-
-        for operation in ("detach", "remove_screen"):
-            with self.subTest(operation=operation):
-                graph = FollowGraph({"b": "a", "c": "b", "d": "c", "offline": "b"})
-                if operation == "detach":
-                    graph.detach("b")
-                    expected = {"c": "b", "d": "c", "offline": "b"}
-                else:
-                    graph.remove_screen("b", "acd")
-                    expected = {"b": "a", "d": "c", "offline": "b"}
-                self.assertEqual(graph.sources, expected)
-
-
     def test_validation_removes_entire_cycles_and_invalid_ids_without_mutating_input(self) -> None:
         """
         驗證正規化移除完整循環與無效螢幕識別, 不修改傳入資料

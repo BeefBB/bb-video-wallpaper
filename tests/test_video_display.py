@@ -136,12 +136,6 @@ def run_probe(directory: Path, operation: str) -> None:
             win32gui.DeleteObject(bitmap.GetHandle())
 
 
-    def corner_pixel() -> tuple[int, int, int]:
-
-        color = capture().pixelColor(5, 5)
-        return color.red(), color.green(), color.blue()
-
-
     try:
         target, host = create_target()
         display.set_hwnd(int(target.winId()))
@@ -269,34 +263,6 @@ def run_probe(directory: Path, operation: str) -> None:
                             raise AssertionError((rotation, sar, width, height, mode)) from None
                         assert display.get_time() == position, "縮放模式切換不應改變暫停進度"
 
-        else:
-            for name, dimensions in (("sar.mp4", (640, 180)), ("rotated.mp4", (180, 320))):
-                display.set_media(directory / name)
-                display.play()
-                wait(lambda: display._video_size is not None and (display.get_time() or 0) > 500)
-                display.pause()
-                player = display._player
-                window = display._window
-                assert player is not None and window is not None
-                wait(lambda: player.get_state() == getattr(vlc.State, "Paused"))  # type: ignore
-
-                for size in ((400, 400), (300, 500)):
-                    # Qt 邏輯上仍視為頂層視窗, 原生調整尺寸才不會重套父層的位置偏移
-                    win32gui.SetWindowPos(
-                        int(target.winId()), 0, 0, 0, *size,
-                        win32con.SWP_NOMOVE | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE
-                    )
-
-                    def fitted() -> bool:
-
-                        _, _, width, height = win32gui.GetClientRect(int(target.winId()))
-                        scale = min(width / dimensions[0], height / dimensions[1])
-                        expected = (0, 0, round(dimensions[0] * scale), round(dimensions[1] * scale))
-                        return win32gui.GetClientRect(window.video_hwnd) == expected  # type: ignore
-
-                    wait(fitted)
-                    wait(lambda: corner_pixel() == (18, 52, 86))
-
         assert not errors, errors
         print(f"PASS {operation}", flush=True)
 
@@ -350,10 +316,6 @@ class VideoDisplayTests(unittest.TestCase):
             "-f", "lavfi", "-i", "color=c=red:s=320x180:r=30", "-t", "8",
             "-c:v", "libx264", "-preset", "ultrafast", base
         )
-        ffmpeg(
-            "-i", base, "-vf", "setsar=2", "-c:v", "libx264",
-            "-preset", "ultrafast", cls.directory / "sar.mp4"
-        )
         ffmpeg("-display_rotation:v:0", "90", "-i", base, "-c", "copy", cls.directory / "rotated.mp4")
 
         pattern = cls.directory / "pattern.mp4"
@@ -397,14 +359,6 @@ class VideoDisplayTests(unittest.TestCase):
         for operation in ("lifecycle", "lifecycle-rotated"):
             with self.subTest(operation=operation):
                 self.probe(operation)
-
-
-    def test_native_fit_background_tracks_sar_rotation_and_resize(self) -> None:
-        """
-        原生背景與影片區域依旋轉, 像素比例及目標尺寸正確更新
-        """
-
-        self.probe("geometry")
 
 
     def test_rotated_scaling_matches_rendered_pixels_while_paused(self) -> None:

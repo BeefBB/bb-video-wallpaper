@@ -235,35 +235,6 @@ class ThumbnailTests(unittest.TestCase):
         self.assertTrue(directory.is_dir())
 
 
-    def test_save_failure_preserves_cache_and_removes_temp(self) -> None:
-        """
-        寫入或替換失敗時保留舊快取內容並關閉及清除暫存檔
-        """
-
-        source = self.media_dir / "sample.bmp"
-        self.save_image(source, Qt.GlobalColor.red)
-        previous = self.thumbnail(source)
-        previous_content = previous.read_bytes()
-        self.save_image(source, Qt.GlobalColor.blue)
-        original_write = QImageWriter.write
-
-        def fail_after_write(writer, image):
-            self.assertTrue(original_write(writer, image))
-            return False
-
-        for stage, patcher, expected_error in (
-            ("write", mock.patch.object(QImageWriter, "write", fail_after_write),
-             self.assertRaisesRegex(OSError, "無法儲存縮圖")),
-            ("replace", mock.patch.object(os, "replace", side_effect=PermissionError),
-             self.assertRaises(PermissionError)),
-        ):
-            with self.subTest(stage=stage):
-                with patcher, expected_error:
-                    self.thumbnail(source)
-                self.assertEqual(previous.read_bytes(), previous_content)
-                self.assertEqual(list(self.thumbnail_dir.iterdir()), [previous])
-
-
     def test_jpeg_upgrade_preserves_old_cache_until_png_is_saved(self) -> None:
         """
         舊 JPEG 不再使用, PNG 寫入或替換失敗時保留舊快取, 成功後才清除

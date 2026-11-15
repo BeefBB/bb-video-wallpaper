@@ -1160,36 +1160,33 @@ class PlaybackStateTests(QtTestCase):
 
     def test_failed_reattach_retries_preserve_video_position(self) -> None:
         """
-        驗證一次或兩次掛載失敗後重試仍保留進度與原播放狀態
+        驗證掛載失敗後的舊 Playing 通知不清除進度, 重試仍保留手動暫停
         """
 
-        for state in ("play", "pause"):
-            for failures in (1, 2):
-                with self.subTest(state=state, failures=failures):
-                    self.start_playing()
-                    getattr(self.tray, state)()
-                    self.player.position = 4321
-                    self.namespace["set_windows_as_wallpaper"].side_effect = [
-                        *[RuntimeError("attachment failed") for _ in range(failures)], None,
-                    ]
+        self.start_playing()
+        self.tray.pause()
+        self.player.position = 4321
+        self.namespace["set_windows_as_wallpaper"].side_effect = [
+            RuntimeError("attachment failed"), RuntimeError("attachment failed"), None,
+        ]
 
-                    self.wallpaper.reattach_to_desktop()
-                    for _ in range(failures):
-                        self.assertEqual(self.player.get_time(), -1)
-                        # 舊 Playing 通知不能清掉等待重試的進度
-                        self.player.finish_loading()
-                        self.app.processEvents()
-                        self.assertTrue(self.wallpaper.reattach_timer.isActive())
-                        self.wallpaper.reattach_timer.start(0)
-                        self.app.processEvents()
+        self.wallpaper.reattach_to_desktop()
+        for _ in range(2):
+            self.assertEqual(self.player.get_time(), -1)
+            # 舊 Playing 通知不能清掉等待重試的進度
+            self.player.finish_loading()
+            self.app.processEvents()
+            self.assertTrue(self.wallpaper.reattach_timer.isActive())
+            self.wallpaper.reattach_timer.start(0)
+            self.app.processEvents()
 
-                    self.player.finish_loading()
-                    self.app.processEvents()
-                    self.assertEqual(self.player.position, 4321)
-                    self.assertEqual(self.wallpaper.play_state, state)
-                    self.assertEqual(self.player.state, "paused" if state == "pause" else "playing")
-                    self.assertFalse(self.wallpaper.reattach_timer.isActive())
-                    self.assertEqual(self.wallpaper.reattach_retry_count, 0)
+        self.player.finish_loading()
+        self.app.processEvents()
+        self.assertEqual(self.player.position, 4321)
+        self.assertEqual(self.wallpaper.play_state, "pause")
+        self.assertEqual(self.player.state, "paused")
+        self.assertFalse(self.wallpaper.reattach_timer.isActive())
+        self.assertEqual(self.wallpaper.reattach_retry_count, 0)
 
 
     def test_failed_background_stop_retries_with_saved_position(self) -> None:

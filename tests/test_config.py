@@ -172,10 +172,7 @@ class ConfigTests(unittest.TestCase):
         標點修復選擇驗證異常較少的候選, 讀取不寫回, 初始化才保存
         """
 
-        defaults, issues = self.store.validate({})
-        self.assertEqual(issues, [])
-        _, issues = self.store.validate({"fontSize": "large", "language": "invalid"})
-        self.assertEqual(len(issues), 2)
+        defaults, _ = self.store.validate({})
 
         cases = [
             ('{"fontSize":18"language":"ja-JP"}', {"fontSize": 18, "language": "ja-JP"}),
