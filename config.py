@@ -25,7 +25,7 @@ CONFIG_DEFAULTS = {
 
 CONFIG_KEYS = set(CONFIG_DEFAULTS) | {
     "fontSize", "recentDisplayCount", "previewSize", "language", "recentVideo",
-    "screenWallpapers", "screenFollows",
+    "screenWallpapers", "screenFollows", "scalingMode", "backgroundColor",
 }
 
 SUPPORTED_LANGUAGES = {
@@ -35,6 +35,15 @@ SUPPORTED_LANGUAGES = {
     "한국어": "ko-KR",
     "English": "en-US",
 }
+
+
+def get_scaling_mode(config: dict, media_path: str, orientation: str) -> str:
+    """
+    優先使用目前方向, 再沿用另一方向, 沒有紀錄時填滿
+    """
+
+    modes = config.get("scalingMode", {}).get(media_path, {})
+    return modes.get(orientation, next(iter(modes.values()), "fill"))
 
 
 def _punctuation_candidates(text: str, position: int) -> set[str]:
@@ -397,6 +406,43 @@ class ConfigStore:
             report("設定欄位 screenWallpapers 必須是物件, 使用空物件")
 
         config["screenWallpapers"] = normalized_wallpapers
+
+
+        for key in ("scalingMode", "backgroundColor"):
+            entries = config.get(key, {})
+            normalized_entries = {}
+
+            if not isinstance(entries, dict):
+                report("設定欄位 %s 必須是物件, 使用空物件", key)
+                entries = {}
+
+            for media_path, value in entries.items():
+                normalized = self._normalize_media_path(media_path)
+                if normalized is None:
+                    report("設定欄位 %s.%s 媒體路徑無效, 已移除", key, media_path)
+                    continue
+
+                if key == "scalingMode":
+                    if not isinstance(value, dict):
+                        report("設定欄位 scalingMode.%s 必須是物件, 已移除", media_path)
+                        continue
+
+                    modes = {}
+                    for orientation, mode in value.items():
+                        if orientation in ("landscape", "portrait") and mode in ("fill", "fit", "stretch"):
+                            modes[orientation] = mode
+                        else:
+                            report("設定欄位 scalingMode.%s.%s 無效, 已移除", media_path, orientation)
+                    if modes:
+                        normalized_entries[normalized] = modes
+
+                elif isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+                    normalized_entries[normalized] = value.lower()
+
+                else:
+                    report("設定欄位 backgroundColor.%s 必須是六位色碼, 已移除", media_path)
+
+            config[key] = normalized_entries
 
 
         screen_follows = config.get("screenFollows", {})

@@ -1,6 +1,6 @@
 # BB 影片桌布
 
-**繁體中文 | [简体中文](README.cn.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [English](README.en.md)**
+**繁體中文 | [简体中文](docs/README.cn.md) | [日本語](docs/README.ja.md) | [한국어](docs/README.ko.md) | [English](docs/README.en.md)**
 
 能在桌布播放影片, 同時也是一個極輕量的桌布管理軟體  
 將桌布保存在一個資料夾中, 以便隨時切換  
@@ -56,6 +56,7 @@ bb-video-wallpaper/
  │   └─ ...
  ├─ bb-video-wallpaper.py
  ├─ bb_image_display.py
+ ├─ bb_video_display.py
  ├─ config.py
  ├─ media_import.py
  ├─ media_preview.py
@@ -114,6 +115,8 @@ Folder/
 最近使用紀錄             | "recentVideo"           | [], 0-20
 各螢幕桌布               | "screenWallpapers"      | {}
 螢幕跟隨關係             | "screenFollows"         | {}
+素材縮放模式             | "scalingMode"           | {}, 無紀錄時使用 fill
+素材留白顏色             | "backgroundColor"       | {}, 完整顯示時自動取色並保存
 
 語言代碼須完全符合 `zh-TW`, `zh-CN`, `ja-JP`, `ko-KR`, `en-US`; 例如系統語言為 `en-GB` 時不會自動對應 `en-US`
 
@@ -151,7 +154,7 @@ VLC 桌布播放參數         |                            | 關閉音訊, 不�
 預覽與選單間距           |                            | 8 px, 優先放左側, 空間不足時改放右側
 載入圖片失敗時的替代圖   |                            | 寬 `previewSize * 100` px, 高依 16:9 四捨五入, 深灰色 (`Qt.GlobalColor.darkGray`)
 縮圖 寬度                |                            | `previewSize * 100` px, 高度依媒體比例, 各尺寸按需產生並共存
-縮圖 格式, 品質          |                            | JPEG 85
+縮圖 格式, 品質          |                            | PNG
 縮圖 VLC 參數            |                            | 關閉硬體解碼 (`--avcodec-hw=none`), 音訊, 影片標題與 OSD, 啟用 `--quiet`
 影片資訊解析逾時         |                            | 5 s
 影片畫面擷取逾時         |                            | 10 s

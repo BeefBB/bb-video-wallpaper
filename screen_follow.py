@@ -194,6 +194,7 @@ class FollowController:
 
         self.graph = FollowGraph(sources)
         self.graph.retain_screens(self.wallpapers)
+
         if self.graph.sources != sources:
             self.save()
 
@@ -205,6 +206,7 @@ class FollowController:
 
         target = self.wallpapers.get(follower)
         origin = self.wallpapers.get(source)
+
         return bool(
             not self.is_exiting and target is not None and origin is not None and
             not target.is_exiting and not origin.is_exiting and origin.current_media and
@@ -220,8 +222,10 @@ class FollowController:
         self.graph.follow(follower, source)
         self._pending_selection.update(self.graph.subtree(follower))
         self.save()
+
         self.synchronize(source)
         self.check_auto_pause(self.wallpapers[source])
+
         return True
 
 
@@ -277,6 +281,7 @@ class FollowController:
 
         source = self.wallpapers.get(root)
         followers = self.graph.subtree(root)[1:]
+
         if (
             source is None or source.is_exiting or source.is_recreating or
             source.current_media is None or not followers
@@ -284,13 +289,16 @@ class FollowController:
             return
 
         source_media = source.current_media
+
         for screen_id in followers:
             target = self.wallpapers.get(screen_id)
+
             if target is None or target.is_exiting or target.is_recreating:
                 continue
 
             try:
                 changed_media = target.current_media != source_media
+
                 if changed_media:
                     target.set_play_media(source_media)
 
@@ -305,11 +313,13 @@ class FollowController:
 
                 source_time = source.get_playback_time()
                 target_time = target.get_playback_time()
+
                 if source_time is None or target_time is None:
                     continue
 
                 difference = abs(source_time - target_time)
                 length = source.get_playback_length()
+
                 if length > 0 and difference <= length:
                     difference = min(difference, length - difference)
 
@@ -330,6 +340,7 @@ class FollowController:
 
         root = self.graph.root(wallpaper.screen_id)
         members = [self.wallpapers[screen_id] for screen_id in self.graph.subtree(root) if screen_id in self.wallpapers]
+
         # 跟隨者的計時通知不重複掃描同一群組
         if from_timer and wallpaper.screen_id != root:
             return True

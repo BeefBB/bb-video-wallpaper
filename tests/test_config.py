@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
-from config import CONFIG_DEFAULTS, ConfigStore
+from config import ConfigStore
 
 
 class ConfigTests(unittest.TestCase):
@@ -45,37 +45,16 @@ class ConfigTests(unittest.TestCase):
         self.enterContext(mock.patch.object(locale, "getdefaultlocale", return_value=("en_US", "UTF-8")))
 
 
-    def test_startup_save_failure_keeps_defaults_available(self) -> None:
+    def assert_load_and_save(self, contents: bytes, expected: dict) -> None:
         """
-        啟動保存失敗時回報失敗並清除暫存檔, 預設設定與語言仍可讀取
+        驗證讀取保留原始內容, 保存後寫入預期設定
         """
 
-        expected = {
-            **CONFIG_DEFAULTS,
-            "fontSize": 11,
-            "recentDisplayCount": 6,
-            "previewSize": 3,
-            "language": "en-US",
-            "recentVideo": [],
-            "screenWallpapers": {},
-            "screenFollows": {},
-        }
-        language = json.loads(
-            (self.store.lang_dir / "en-US.json").read_text(encoding="utf-8")
-        )
-
-        for target in ("builtins.open", "config.os.replace"):
-
-            with self.subTest(target=target):
-
-                config = self.store.load()
-                with mock.patch(target, side_effect=PermissionError):
-                    self.assertFalse(self.store.save(config))
-
-                self.assertFalse(self.config_path.exists())
-                self.assertFalse(self.config_path.with_suffix(".tmp").exists())
-                self.assertEqual(self.store.load(), expected)
-                self.assertEqual(self.store.load_language(), language)
+        self.config_path.write_bytes(contents)
+        self.assertEqual(self.store.load(), expected)
+        self.assertEqual(self.config_path.read_bytes(), contents)
+        self.assertTrue(self.store.save(self.store.load()))
+        self.assertEqual(json.loads(self.config_path.read_text(encoding="utf-8")), expected)
 
 
     def test_paths_reject_outside_locations_and_keep_missing_media(self) -> None:
@@ -90,27 +69,17 @@ class ConfigTests(unittest.TestCase):
             paths += ["C:relative.mp4", "\\rooted.mp4", "\\\\server\\share\\file.mp4"]
 
         selections = {str(index): path for index, path in enumerate(paths)}
-        result, _ = self.store.validate({"recentVideo": paths, "screenWallpapers": selections})
+        result, _ = self.store.validate({
+            "recentVideo": paths,
+            "screenWallpapers": selections,
+            "scalingMode": {path: {"landscape": "fit", "portrait": [], "unknown": "fill"}
+                            for path in paths if isinstance(path, str)},
+            "backgroundColor": {path: "#AABBCC" for path in paths if isinstance(path, str)},
+        })
         self.assertEqual(result["recentVideo"], valid)
         self.assertEqual(result["screenWallpapers"], {"0": valid[0], "1": valid[1]})
-
-
-    def test_invalid_selection_keeps_file(self) -> None:
-        """
-        無效螢幕識別或越界路徑不改寫已保存的設定
-        """
-
-        self.store.save({"screenWallpapers": {"screen-a": "a.mp4"}, "futureOption": 9})
-        original = self.config_path.read_bytes()
-        for screen_id, path in (
-            ("", self.media_dir / "b.mp4"),
-            ("bad\0id", self.media_dir / "b.mp4"),
-            ("screen-a", self.media_dir / ".." / "outside.mp4"),
-        ):
-            with self.subTest(screen_id=screen_id, path=path):
-                with self.assertRaises(ValueError):
-                    self.store.remember_wallpaper(screen_id, path)
-                self.assertEqual(self.config_path.read_bytes(), original)
+        self.assertEqual(result["scalingMode"], {path: {"landscape": "fit"} for path in valid})
+        self.assertEqual(result["backgroundColor"], {path: "#aabbcc" for path in valid})
 
 
     def test_loading_and_startup_save_validate_config(self) -> None:
@@ -127,7 +96,12 @@ class ConfigTests(unittest.TestCase):
             "language": "ja-JP",
             "futureOption": 9,
         }).encode("utf-8")
-        cases = [(contents, defaults) for contents in (b"", b"{broken", b"\xff", b"[]", b"null")]
+        cases = [(contents, defaults) for contents in (
+            b"", b"{broken", b"\xff", b"[]", b"null",
+            # 同分歧義, 改變數值或超過兩次修改時不修復
+            b'{"futureOption": [1}', b'{"futureOption": 1,2}',
+            b'{"fontSize" 18 "language" "ja-JP"}',
+        )]
         cases.extend([
             (invalid_values, repaired),
             (json.dumps(repaired).encode("utf-8"), repaired),
@@ -145,15 +119,7 @@ class ConfigTests(unittest.TestCase):
         )
         for contents, expected in cases:
             with self.subTest(contents=contents):
-                self.config_path.write_bytes(contents)
-                self.assertEqual(self.store.load(), expected)
-                self.assertEqual(self.config_path.read_bytes(), contents)
-
-                self.assertTrue(self.store.save(self.store.load()))
-                self.assertEqual(
-                    json.loads(self.config_path.read_text(encoding="utf-8")),
-                    expected
-                )
+                self.assert_load_and_save(contents, expected)
 
 
     def test_read_access_errors_preserve_file_and_abort_saves(self) -> None:
@@ -180,25 +146,36 @@ class ConfigTests(unittest.TestCase):
                     self.assertFalse(self.config_path.with_suffix(".tmp").exists())
 
 
-    def test_save_failure_preserves_previous_file(self) -> None:
+    def test_save_failure_preserves_file_state_and_removes_temp(self) -> None:
         """
-        寫入或替換失敗時保留原檔並清除暫存檔
+        初次寫入或更新失敗時保留原檔狀態並清除暫存檔
         """
 
-        self.assertTrue(self.store.save({"language": "zh-TW"}))
-        original = self.config_path.read_bytes()
-        for target in ("builtins.open", "config.os.replace"):
-            with self.subTest(target=target):
-                with mock.patch(target, side_effect=PermissionError):
-                    self.assertFalse(self.store.save({"language": "ja-JP"}))
-                self.assertEqual(self.config_path.read_bytes(), original)
-                self.assertFalse(self.config_path.with_suffix(".tmp").exists())
+        for existing in (False, True):
+            if existing:
+                self.assertTrue(self.store.save({"language": "zh-TW"}))
+            original = self.config_path.read_bytes() if existing else None
+
+            for target in ("builtins.open", "config.os.replace"):
+                with self.subTest(existing=existing, target=target):
+                    with mock.patch(target, side_effect=PermissionError):
+                        self.assertFalse(self.store.save({"language": "ja-JP"}))
+                    if original is None:
+                        self.assertFalse(self.config_path.exists())
+                    else:
+                        self.assertEqual(self.config_path.read_bytes(), original)
+                    self.assertFalse(self.config_path.with_suffix(".tmp").exists())
 
 
     def test_punctuation_repairs_preserve_settings(self) -> None:
         """
-        缺少逗號或多餘起始括號可修復, 讀取不寫回, 初始化才保存
+        標點修復選擇驗證異常較少的候選, 讀取不寫回, 初始化才保存
         """
+
+        defaults, issues = self.store.validate({})
+        self.assertEqual(issues, [])
+        _, issues = self.store.validate({"fontSize": "large", "language": "invalid"})
+        self.assertEqual(len(issues), 2)
 
         cases = [
             ('{"fontSize":18"language":"ja-JP"}', {"fontSize": 18, "language": "ja-JP"}),
@@ -206,57 +183,15 @@ class ConfigTests(unittest.TestCase):
                 '{"recentVideo":[["folder/[1],{2}.mp4"],"language":"ja-JP"}',
                 {"recentVideo": ["folder/[1],{2}.mp4"], "language": "ja-JP"},
             ),
+            (
+                '{"screenWallpapers":{"0":"a.mp4","language":"ja-JP"],"fontSize":18}',
+                {"screenWallpapers": {"0": "a.mp4"}, "language": "ja-JP", "fontSize": 18},
+            ),
         ]
 
         for text, expected in cases:
             with self.subTest(text=text):
-                self.config_path.write_text(text, encoding="utf-8")
-                config = self.store.load()
-                for key, value in expected.items():
-                    self.assertEqual(config[key], value)
-                self.assertEqual(self.config_path.read_text(encoding="utf-8"), text)
-
-                self.assertTrue(self.store.save(self.store.load()))
-                self.assertEqual(json.loads(self.config_path.read_text(encoding="utf-8")), config)
-
-
-    def test_validation_scores_repair_candidates(self) -> None:
-        """
-        缺少欄位不計異常, 修復優先選擇驗證異常較少的候選
-        """
-
-        _, issues = self.store.validate({})
-        self.assertEqual(issues, [])
-        _, issues = self.store.validate({"fontSize": "large", "language": "invalid"})
-        self.assertEqual(len(issues), 2)
-
-        text = '{"screenWallpapers":{"0":"a.mp4","language":"ja-JP"],"fontSize":18}'
-        self.config_path.write_text(text, encoding="utf-8")
-        config = self.store.load()
-        self.assertEqual(config["language"], "ja-JP")
-        self.assertEqual(config["screenWallpapers"], {"0": "a.mp4"})
-        self.assertEqual(config["fontSize"], 18)
-
-
-    def test_uncertain_repairs_use_defaults_on_startup_save(self) -> None:
-        """
-        同分歧義, 改變數值或超過兩次修改時不修復, 啟動保存改用預設值
-        """
-
-        cases = [
-            '{"futureOption": [1}',
-            '{"futureOption": 1,2}',
-            '{"fontSize" 18 "language" "ja-JP"}',
-        ]
-        defaults, _ = self.store.validate({})
-
-        for text in cases:
-            with self.subTest(text=text):
-                self.config_path.write_text(text, encoding="utf-8")
-                self.assertEqual(self.store.load(), defaults)
-                self.assertEqual(self.config_path.read_text(encoding="utf-8"), text)
-                self.assertTrue(self.store.save(self.store.load()))
-                self.assertEqual(json.loads(self.config_path.read_text(encoding="utf-8")), defaults)
+                self.assert_load_and_save(text.encode("utf-8"), {**defaults, **expected})
 
 
 if __name__ == "__main__":

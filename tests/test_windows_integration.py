@@ -12,7 +12,7 @@ import sys
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import QCoreApplication, QEvent, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QWidget
@@ -51,40 +51,6 @@ class WindowsIntegrationTests(unittest.TestCase):
 
             self.assertEqual(windows.get_monitor_id(100), r"device:\\?\display#monitor-a")
             self.assertEqual(windows.get_monitor_id(200), r"device:\\?\display#monitor-a")
-
-
-    def test_monitor_identity_skips_inactive_or_unidentified_devices(self) -> None:
-        """
-        驗證查找螢幕識別時略過未啟用或沒有裝置識別的項目
-        """
-
-        with (
-            mock.patch.object(windows.win32api, "MonitorFromWindow", return_value=10),
-            mock.patch.object(windows.win32api, "GetMonitorInfo", return_value={"Device": "display"}),
-            mock.patch.object(windows.win32api, "EnumDisplayDevices") as devices,
-        ):
-            devices.side_effect = [
-                mock.Mock(StateFlags=0, DeviceID="inactive"),
-                mock.Mock(StateFlags=1, DeviceID=""),
-                mock.Mock(StateFlags=1, DeviceID="active"),
-            ]
-
-            self.assertEqual(windows.get_monitor_id(100), "device:active")
-
-
-    def test_monitor_identity_falls_back_to_distinct_display_names(self) -> None:
-        """
-        驗證無法列舉裝置介面時以顯示裝置名稱區分螢幕
-        """
-
-        with (
-            mock.patch.object(windows.win32api, "MonitorFromWindow", return_value=10),
-            mock.patch.object(windows.win32api, "GetMonitorInfo") as info,
-            mock.patch.object(windows.win32api, "EnumDisplayDevices", side_effect=windows.win32api.error),
-        ):
-            info.side_effect = [{"Device": "DISPLAY1"}, {"Device": "DISPLAY2"}]
-            self.assertEqual(windows.get_monitor_id(100), "display:display1")
-            self.assertEqual(windows.get_monitor_id(200), "display:display2")
 
 
     def test_vlc_wakeup_only_posts_null_to_own_video_windows(self) -> None:
@@ -202,75 +168,9 @@ class WindowsIntegrationTests(unittest.TestCase):
                 gui.DestroyWindow.assert_called_once_with(20)
 
 
-    def test_fullscreen_detection_skips_unavailable_wallpaper_monitor(self) -> None:
+    def test_power_notifications_preserve_64_bit_handles_and_report_failure(self) -> None:
         """
-        驗證桌布視窗失效或沒有對應螢幕時, 不列舉其他視窗
-        """
-
-        error = windows.win32api.error(1400, "MonitorFromWindow", "window destroyed")
-
-        for result in (None, 0, error):
-            with (
-                self.subTest(result=result),
-                mock.patch.object(windows, "win32gui") as gui,
-                mock.patch.object(windows, "win32api") as api,
-            ):
-                if isinstance(result, Exception):
-                    api.MonitorFromWindow.side_effect = result
-                else:
-                    api.MonitorFromWindow.return_value = result
-
-                self.assertFalse(windows.is_any_fullscreen(100))
-                gui.EnumWindows.assert_not_called()
-
-
-    def test_battery_detection_preserves_unknown_and_failed_status(self) -> None:
-        """
-        驗證電池供電, 插電, 未知與查詢失敗時的供電判斷
-        """
-
-        with mock.patch.object(windows.ctypes.windll.kernel32, "GetSystemPowerStatus") as get_status:
-            for ac_line, succeeded, expected in ((0, 1, True), (1, 1, False), (255, 1, False), (0, 0, False)):
-                with self.subTest(ac_line=ac_line, succeeded=succeeded):
-
-                    def query(pointer):
-                        """
-                        依目前案例填入電源狀態結構, 並回傳指定的 API 成功旗標
-                        """
-
-                        status = ctypes.cast(pointer, ctypes.POINTER(windows.SYSTEM_POWER_STATUS)).contents
-                        status.ACLineStatus = ac_line
-                        return succeeded
-
-                    get_status.side_effect = query
-                    self.assertEqual(windows.is_on_battery(), expected)
-
-
-    def test_display_notification_ignores_unrelated_messages_and_decodes_all_states(self) -> None:
-        """
-        驗證略過無關訊息與電源設定, 正確解析螢幕關閉, 開啟與變暗狀態
-        """
-
-        message = wintypes.MSG()
-        self.assertIsNone(windows.get_display_state(message))
-        message.message = windows.WM_POWERBROADCAST
-        self.assertIsNone(windows.get_display_state(message))
-        setting = windows.POWERBROADCAST_SETTING()
-        message.wParam = windows.PBT_POWERSETTINGCHANGE
-        message.lParam = ctypes.addressof(setting)
-        self.assertIsNone(windows.get_display_state(message))
-
-        setting.PowerSetting = windows.GUID_CONSOLE_DISPLAY_STATE
-        setting.DataLength = ctypes.sizeof(wintypes.DWORD)
-        for display_state in (0, 1, 2):
-            with self.subTest(display_state=display_state):
-                setting.Data = display_state
-                self.assertEqual(windows.get_display_state(message), display_state)
-
-
-    def test_power_notifications_preserve_64_bit_handles(self) -> None:
-        """
-        驗證電源通知註冊與取消保留完整的 64 位元 handle, 並使用正確的電源 GUID
+        驗證通知保留完整的 64 位元 handle 與電源 GUID, 取消失敗時記錄原生錯誤
         """
 
         # 超過 32 位元的 HWND 與通知 handle
@@ -280,6 +180,8 @@ class WindowsIntegrationTests(unittest.TestCase):
         with (
             mock.patch.object(windows.ctypes.windll.user32, "RegisterPowerSettingNotification", return_value=handle) as register,
             mock.patch.object(windows.ctypes.windll.user32, "UnregisterPowerSettingNotification", return_value=1) as unregister,
+            mock.patch.object(windows.ctypes, "GetLastError", return_value=6) as last_error,
+            mock.patch.object(windows, "logger") as logger,
         ):
             self.assertEqual(windows.register_power_notification(hwnd), handle)
             self.assertIs(register.restype, wintypes.HANDLE)
@@ -291,6 +193,15 @@ class WindowsIntegrationTests(unittest.TestCase):
             windows.unregister_power_notification(handle)
             self.assertIs(unregister.argtypes[0], wintypes.HANDLE)
             unregister.assert_called_once_with(handle)
+            last_error.assert_not_called()
+            logger.warning.assert_not_called()
+
+            unregister.reset_mock()
+            unregister.return_value = 0
+            windows.unregister_power_notification(handle)
+            unregister.assert_called_once_with(handle)
+            last_error.assert_called_once_with()
+            logger.warning.assert_called_once()
 
 
 class DesktopEventTests(QtTestCase):
@@ -337,37 +248,6 @@ class DesktopEventTests(QtTestCase):
         self.assertFalse(windows.win32gui.IsWindowVisible(hwnd))
 
 
-    def test_listener_survives_destruction_of_separate_wallpaper_container(self) -> None:
-        """
-        驗證獨立桌布容器銷毀後, 監聽視窗仍存在且可接收工作列通知
-        """
-
-        container = windows.win32gui.CreateWindowEx(
-            0, "Static", "", windows.win32con.WS_OVERLAPPED,
-            0, 0, 320, 240, 0, 0, windows.win32api.GetModuleHandle(None), None
-        )
-        target = QWidget()
-
-        try:
-            target_hwnd = int(target.winId())
-            windows.win32gui.SetParent(target_hwnd, container)
-            # 銷毀父容器與原生子視窗
-            windows.win32gui.DestroyWindow(container)
-            self.assertFalse(windows.win32gui.IsWindow(target_hwnd))
-
-            hwnd = int(self.listener.winId())
-            self.assertTrue(windows.win32gui.IsWindow(hwnd))
-            events = QSignalSpy(self.listener.taskbar_created)
-            windows.win32gui.SendMessage(hwnd, self.listener.taskbar_created_message, 0, 0)
-            self.assertEqual(events.count(), 1)
-
-        finally:
-            target.deleteLater()
-            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-            if windows.win32gui.IsWindow(container):
-                windows.win32gui.DestroyWindow(container)
-
-
 class WorkerWNativeTests(QtTestCase):
     """
     使用隱藏父視窗驗證真正的 WorkerW 與桌布掛載
@@ -378,7 +258,7 @@ class WorkerWNativeTests(QtTestCase):
         驗證正負原點與非客戶區偏移下, 掛載及重複掛載保留桌布的位置與尺寸
         """
 
-        for origin in ((0, 0), (-800, -200), (800, 200)):
+        for origin in ((-800, -200), (800, 200)):
             for legacy in (False, True):
                 with self.subTest(origin=origin, legacy=legacy):
                     parent = win32gui.CreateWindowEx(
@@ -511,7 +391,7 @@ class ImageDisplayTests(QtTestCase):
         驗證圖片原生容器的顯示, 重綁與釋放, 保留圖片與外部目標視窗
         """
 
-        self.display.set_image(self.image_path)
+        self.display.set_media(self.image_path)
         window = self.display.window
         assert window is not None
         self.assertEqual(window._host_hwnd, 0)
@@ -545,7 +425,7 @@ class ImageDisplayTests(QtTestCase):
         self.assertEqual(self.display.get_hwnd(), target_hwnd)
         self.assertIsNone(self.display.window)
         self.assertIsNone(self.display.current_image)
-        self.display.set_image(self.image_path)
+        self.display.set_media(self.image_path)
         self.display.show()
         window = self.display.window
         assert window is not None

@@ -5,10 +5,11 @@
 
 from pathlib import Path
 
-from PySide6.QtWidgets import QApplication, QLabel, QMenu, QWidget
-from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Slot
-from PySide6.QtGui import QAction, QCursor, QImage, QPainter, QPixmap, QScreen
+from PySide6.QtWidgets import QApplication, QLabel, QMenu, QToolTip, QWidget
+from PySide6.QtCore import QEvent, QRectF, QSize, Qt, QTimer, Slot
+from PySide6.QtGui import QAction, QColor, QCursor, QImage, QPainter, QPixmap, QScreen
 
+from config import get_scaling_mode
 from thumbnails import ThumbnailThread
 
 
@@ -32,6 +33,8 @@ class MediaPreviewMenu(QMenu):
         super().__init__(title, parent)
         self.setMouseTracking(True)
         self.target_screen: QScreen | None = None
+        self.media_dir = media_dir
+        self.display_config: dict = {}
 
 
         # 預覽視窗不搶焦點, 也不攔截滑鼠事件
@@ -90,6 +93,19 @@ class MediaPreviewMenu(QMenu):
             width, Qt.TransformationMode.SmoothTransformation
         )
         self.preview_pixmap = self.loading_pixmap
+
+
+    def event(self, event) -> bool:
+
+        if event.type() == QEvent.Type.ToolTip:
+            action = self.actionAt(event.pos())
+
+            # 空提示會回退到項目文字, 因此直接略過未截斷項目的提示事件
+            if action is None or action.data() is None or action.text() == action.toolTip():
+                QToolTip.hideText()
+                return True
+
+        return super().event(event)
 
 
     def mouseMoveEvent(self, event) -> None:
@@ -218,25 +234,37 @@ class MediaPreviewMenu(QMenu):
         )
         size = QSize(max(1, size.width()), max(1, size.height()))
 
-        # 直接繪製置中裁切範圍, 避免先放大整張極寬或極高的縮圖
-        scale = max(
-            size.width() / self.preview_pixmap.width(),
-            size.height() / self.preview_pixmap.height()
-        )
-        width = size.width() / scale
-        height = size.height() / scale
-        source = QRectF(
-            (self.preview_pixmap.width() - width) / 2,
-            (self.preview_pixmap.height() - height) / 2,
-            width,
-            height
-        )
+        mode, color = "fill", "#000000"
+        if self.preview_pixmap.cacheKey() != self.loading_pixmap.cacheKey():
+            media_path = Path(action.data()).relative_to(self.media_dir).as_posix()
+            geometry = (self.target_screen or screen).geometry()
+            orientation = "landscape" if geometry.width() >= geometry.height() else "portrait"
+            mode = get_scaling_mode(self.display_config, media_path, orientation)
+            colors = self.display_config.get("backgroundColor", {})
+            color = colors.get(media_path, "#000000")
+            if mode == "fit" and media_path not in colors:
+                average = self.preview_pixmap.toImage().scaled(
+                    1, 1, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation
+                )
+                color = average.pixelColor(0, 0).name()
+
+        source = QRectF(self.preview_pixmap.rect())
+        destination = QRectF(0, 0, size.width(), size.height())
+        if mode == "fill":
+            # 直接繪製置中裁切範圍, 避免先放大整張極寬或極高的縮圖
+            scale = max(size.width() / source.width(), size.height() / source.height())
+            width, height = size.width() / scale, size.height() / scale
+            source = QRectF((source.width() - width) / 2, (source.height() - height) / 2, width, height)
+        elif mode == "fit":
+            fitted = source.size().scaled(destination.size(), Qt.AspectRatioMode.KeepAspectRatio)
+            destination = QRectF(0, 0, fitted.width(), fitted.height())
+            destination.moveCenter(QRectF(0, 0, size.width(), size.height()).center())
 
         pixmap = QPixmap(size)
-        pixmap.fill(Qt.GlobalColor.black)
+        pixmap.fill(QColor(color))
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        painter.drawPixmap(QRectF(pixmap.rect()), self.preview_pixmap, source)
+        painter.drawPixmap(destination, self.preview_pixmap, source)
         painter.end()
 
         self.preview.setPixmap(pixmap)

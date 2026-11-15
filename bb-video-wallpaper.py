@@ -4,24 +4,21 @@ import sys
 import os
 from ctypes import wintypes
 from pathlib import Path
-import threading
 import time
 import subprocess
 import logging
 from logging.handlers import RotatingFileHandler
-from typing import TYPE_CHECKING, cast
-
-if TYPE_CHECKING:
-    import vlc
+from typing import cast
 
 from win32con import WM_DESTROY
 
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog
-from PySide6.QtCore import QByteArray, QEventLoop, Qt, QTimer, QThread, Slot, Signal
-from PySide6.QtGui import QAction, QActionGroup, QIcon, QFont, QScreen, QCursor
+from PySide6.QtCore import QByteArray, Qt, QTimer, QThread, Signal
+from PySide6.QtGui import QAction, QActionGroup, QIcon, QFont, QImage, QScreen, QCursor
 
 import bb_image_display
-from config import CONFIG_DEFAULTS, ConfigStore, SUPPORTED_LANGUAGES
+import bb_video_display
+from config import CONFIG_DEFAULTS, ConfigStore, SUPPORTED_LANGUAGES, get_scaling_mode
 from media_import import MediaImportCancelled, import_media
 from media_preview import MediaPreviewMenu
 from playback import AutoPauseReason, PlaybackState, update_auto_pause
@@ -48,7 +45,6 @@ from windows_integration import (
     set_windows_as_wallpaper,
     task_exists,
     unregister_power_notification,
-    wake_vlc_video_windows,
 )
 
 
@@ -126,10 +122,10 @@ def initialize_logging() -> None:
 
 def initialize_vlc() -> bool:
     """
-    先設定 DLL 搜尋位置與載入原生函式庫, 再匯入 VLC
+    設定 VLC DLL 搜尋位置並載入原生函式庫
     """
 
-    global vlc, _vlc_dll_directory
+    global _vlc_dll_directory
 
     vlc_dir = next(
         (path for path in (ROOT_DIR / "VLC-lite", ROOT_DIR / "VLC") if path.is_dir()),
@@ -151,8 +147,6 @@ def initialize_vlc() -> bool:
     except OSError:
         logger.exception("VLC 載入失敗")
         return False
-
-    import vlc
 
     return True
 
@@ -241,28 +235,6 @@ class MediaImportThread(QThread):
             self.error = str(e)
 
 
-class VlcStopThread(QThread):
-    """
-    停止影片輸出時讓 Qt 主執行緒仍能處理原生視窗訊息
-    """
-
-    def __init__(self, player, parent=None) -> None:
-
-        super().__init__(parent)
-
-        self.player = player
-        self.error = None
-
-
-    def run(self) -> None:
-
-        try:
-            self.player.stop()
-
-        except Exception as error:
-            self.error = error
-
-
 class DesktopEventWindow(QWidget):
     """
     用獨立的隱藏頂層視窗接收通知, 避免隨 Explorer 的桌布容器一起失效
@@ -305,6 +277,8 @@ class Wallpaper(QWidget):
 
     # 影片開始播放訊號
     playback_started = Signal()
+    # 桌布媒體變更訊號
+    media_changed = Signal()
     # 重掛完成訊號
     reattach_finished = Signal()
 
@@ -319,9 +293,6 @@ class Wallpaper(QWidget):
         self.power_notify = None
         # 不掛在桌布視窗或 Explorer 之下的獨立頂層 HWND
         self.desktop_events = None
-
-        self.playback_started.connect(self.apply_pending_reattach_time, Qt.ConnectionType.QueuedConnection)
-        self.playback_started.connect(self.apply_pending_pause, Qt.ConnectionType.QueuedConnection)
 
         try:
             self._initialize(target_screen)
@@ -356,7 +327,6 @@ class Wallpaper(QWidget):
         self.is_recreating = False
         # 重掛失敗重試次數
         self.reattach_retry_count = 0
-        self._video_stop_thread: VlcStopThread | None = None
 
         # 重掛用計時器
         self.reattach_timer = QTimer(self)
@@ -373,10 +343,7 @@ class Wallpaper(QWidget):
         # 播放狀態: "play", "pause", "stop"
         self.play_state = "stop"
         self.playback_state = PlaybackState()
-        # 等待影片輸出就緒後套用的進度
-        self.pending_reattach_time: int | None = None
-        # 重掛失敗重試時保留的進度
-        self._reattach_time: int | None = None
+        self.scaling_mode = "fill"
         self.auto_pause_handler: AutoPauseHandler | None = None
 
         # 全螢幕檢測就緒
@@ -423,29 +390,14 @@ class Wallpaper(QWidget):
             initial_media = media_files[0]
 
 
-        # VLC 播放器物件
-        instance_vlc = vlc.Instance(
-            "--no-video-title-show",
-            "--input-repeat=65535",
-            "--no-audio"
-        )
-
-        if instance_vlc is None:
-            raise RuntimeError("無法建立 VLC 實例")
-
-        self.instance_vlc = instance_vlc
-        self.instance_vlc_player = self.instance_vlc.media_player_new()
+        # 影片物件隨桌布刪除, 重掛中的清理不會過早刪除仍在等待的 Qt 物件
+        self.instance_video = bb_video_display.Instance()
+        self.instance_video.setParent(self)
+        self.instance_video.playback_started.connect(self.playback_started)
 
         # 圖片顯示物件
         # 圖片共用主程式的 QApplication 與桌布 HWND
         self.instance_image = bb_image_display.Instance()
-
-
-        self.player_events = self.instance_vlc_player.event_manager()
-        self.player_events.event_attach(
-            getattr(vlc.EventType, "MediaPlayerPlaying"),
-            lambda event: self.playback_started.emit()
-        )
 
 
         # 掛載到桌布
@@ -557,55 +509,27 @@ class Wallpaper(QWidget):
         if self.is_image():
             self.instance_image.show()
 
-        elif target == "play" or self.play_state == "stop" or force:
-            self.instance_vlc_player.play()
+        elif target == "pause":
+            self.instance_video.pause()
+
+        else:
+            self.instance_video.play()
 
         self.play_state = target
-        if target == "pause":
-            self.apply_pending_pause()
 
 
-    def _stop_media_output(self, *, preserve_reattach_time: bool = False) -> None:
+    def _stop_media_output(self) -> None:
         """
         停止目前輸出, 媒體切換時保留播放意圖
         """
-
-        self.pending_reattach_time = None
-        if not preserve_reattach_time:
-            self._reattach_time = None
 
         if self.is_image():
             self.instance_image.hide()
 
         else:
-            self._stop_video_with_wakeup()
+            self.instance_video.stop()
 
         self.play_state = "stop"
-
-
-    def _stop_video_with_wakeup(self) -> None:
-        """
-        同步停止影片, 背景只喚醒原生視窗, 避免 Qt 事件插入目前操作
-        """
-
-        finished = threading.Event()
-
-        def wake() -> None:
-            while not finished.wait(0.05):
-                try:
-                    wake_vlc_video_windows()
-                except Exception:
-                    logger.exception("喚醒 VLC 原生視窗失敗")
-
-        worker = threading.Thread(target=wake, daemon=True)
-        worker.start()
-
-        try:
-            self.instance_vlc_player.stop()
-
-        finally:
-            finished.set()
-            worker.join()
 
 
     def manual_play(self) -> None:
@@ -644,31 +568,6 @@ class Wallpaper(QWidget):
         logger.info("manual - stop")
 
 
-    @Slot()
-    def apply_pending_reattach_time(self) -> None:
-        """
-        新影片輸出開始後補套重掛前的播放進度
-        """
-
-        if self.is_exiting or self.is_recreating or self.is_image() or self.play_state == "stop":
-            return
-
-        if self.pending_reattach_time is not None:
-            self.instance_vlc_player.set_time(self.pending_reattach_time)
-            self.pending_reattach_time = None
-
-
-    @Slot()
-    def apply_pending_pause(self) -> None:
-        """
-        VLC 播放器在 MediaPlayerPlaying 事件發生前不會接受暫停指令, 所以要等到播放開始後再套用暫停
-        """
-
-        # 載入完成後依最新狀態補套暫停, 不覆蓋後續的播放或停止要求
-        if not self.is_exiting and not self.is_recreating and not self.is_image() and self.play_state == "pause":
-            self.instance_vlc_player.set_pause(1)
-
-
     def get_playback_time(self) -> int | None:
         """
         取得播放中或暫停中的進度, 尚未就緒時回傳 None
@@ -676,36 +575,26 @@ class Wallpaper(QWidget):
 
         if (
             self.is_exiting or self.is_recreating or self.is_image() or not self.current_media or
-            self.play_state == "stop" or self.pending_reattach_time is not None or
-            self._reattach_time is not None
+            self.play_state == "stop"
         ):
             return None
 
-        # python-vlc 在執行時建立列舉成員
-        playing_state: vlc.State = getattr(vlc.State, "Playing")
-        paused_state: vlc.State = getattr(vlc.State, "Paused")
-        if self.instance_vlc_player.get_state() not in (playing_state, paused_state):
-            return None
-
-        position = self.instance_vlc_player.get_time()
-        return position if position >= 0 else None
+        return self.instance_video.get_time()
 
 
     def get_playback_length(self) -> int:
 
-        return self.instance_vlc_player.get_length()
+        return self.instance_video.get_length()
 
 
     def seek_time(self, position: int) -> bool:
 
-        if position < 0 or self.get_playback_time() is None or not self.instance_vlc_player.is_seekable():
+        if position < 0 or self.get_playback_time() is None:
             return False
 
-        self.instance_vlc_player.set_time(position)
-        return True
+        return self.instance_video.set_time(position)
 
 
-    @Slot()
     def on_taskbar_created(self) -> None:
         """
         工作列重建後啟動新的恢復嘗試, 實際掛載交給共用計時器
@@ -728,46 +617,6 @@ class Wallpaper(QWidget):
             return
 
         self.reattach_timer.start(delay_ms)
-
-
-    def stop_video_output(self) -> None:
-        """
-        等待舊影片輸出停止, 期間處理視窗訊息並暫緩使用者輸入
-        """
-
-        loop = QEventLoop(self)
-        # 重掛等待期間可能收到關閉要求, 共用同一次停止工作
-        worker = self._video_stop_thread
-        owns_worker = worker is None
-
-        if worker is None:
-            worker = VlcStopThread(self.instance_vlc_player, self)
-            self._video_stop_thread = worker
-
-        worker.finished.connect(loop.quit)
-        wake_timer = QTimer(self)
-        wake_timer.timeout.connect(wake_vlc_video_windows)
-        wake_timer.start(50)
-        if owns_worker:
-            worker.start()
-
-        if worker.isRunning():
-            loop.exec(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
-
-        worker.wait()
-        wake_timer.stop()
-        wake_timer.deleteLater()
-        error = worker.error
-        worker.finished.disconnect(loop.quit)
-
-        if owns_worker:
-            self._video_stop_thread = None
-            worker.deleteLater()
-
-        loop.deleteLater()
-
-        if error is not None:
-            raise error
 
 
     def reattach_to_desktop(self) -> None:
@@ -799,20 +648,8 @@ class Wallpaper(QWidget):
             logger.info("reattach_to_desktop - start")
 
 
-            # 先停止舊影片輸出再換綁 HWND, 避免 VLC 在換綁後停止時卡住
-            # 直接停止播放器, 保留 play_state 供重掛後恢復
-            if not self.is_image():
-                if self.current_media and self._reattach_time is None:
-                    # 尚未完成的 seek 比新輸出回報的起始進度優先
-                    curr_time = self.pending_reattach_time
-                    if curr_time is None:
-                        curr_time = self.instance_vlc_player.get_time()
-                    if curr_time >= 0:
-                        self._reattach_time = curr_time
-
-                # 舊輸出的 Playing 通知不能消耗等待重試的進度
-                self.pending_reattach_time = None
-                self.stop_video_output()
+            # 解除輸出時保留模組內的播放意圖與進度, 等待期間繼續處理 Qt 事件
+            self.instance_video.set_hwnd(0, process_events=True)
 
             # 停止輸出的事件迴圈可能已處理關閉要求
             if self.is_exiting:
@@ -843,31 +680,16 @@ class Wallpaper(QWidget):
             self.show()
 
 
+            # 重新掛載前套用目前螢幕方向的縮放設定
+            self.apply_scaling()
+
             # 掛載到桌布
             self.attach_to_desktop()
 
 
-            # 恢復播放與時間進度
+            # 模組已在重新綁定時恢復進度, 依目前操作意圖恢復顯示
             if self.current_media:
-
-                if self.is_image():
-
-                    if self.play_state == "play":
-                        self.apply_playback_state(force=True)
-
-                else:
-
-                    self.set_play_media(self.current_media, preserve_reattach_time=True)
-
-                    curr_time = self._reattach_time
-                    if curr_time is not None and curr_time > 0:
-                        self.instance_vlc_player.set_time(curr_time)
-                        # VLC 尚在啟動時可能略過 seek, 等 Playing 事件再補套
-                        if self.play_state != "stop":
-                            self.pending_reattach_time = curr_time
-
-
-            self._reattach_time = None
+                self.apply_playback_state(force=True)
             logger.info("reattach_to_desktop - finish")
             self.is_recreating = False
             self.reattach_retry_count = 0
@@ -906,9 +728,9 @@ class Wallpaper(QWidget):
         self.schedule_reattach()
 
 
-    def set_play_media(self, path: Path, *, preserve_reattach_time: bool = False) -> None:
+    def set_play_media(self, path: Path) -> None:
         """
-        圖片交給 Qt 顯示, 影片交給 VLC, 保留原本的播放或停止狀態
+        圖片與影片交給各自的顯示模組, 保留原本的播放或停止狀態
         """
 
         if self.is_exiting:
@@ -918,32 +740,48 @@ class Wallpaper(QWidget):
 
         # 先讀取圖片, 失敗時保留原本的輸出與播放狀態
         if is_image:
-            self.instance_image.set_image(path)
+            self.instance_image.set_media(path)
 
 
-        self._stop_media_output(preserve_reattach_time=preserve_reattach_time)
+        self._stop_media_output()
         logger.debug("set_play_media - stop")
 
 
         if not is_image:
 
-            media = self.instance_vlc.media_new(str(path))
-
-            try:
-                self.instance_vlc_player.set_media(media)
-
-            finally:
-                media.release()
-
-            # 裁切填滿螢幕, 並釋放已不再使用的圖片
-            self.instance_vlc_player.video_set_crop_geometry(self.get_screen_aspect_ratio())
+            self.instance_video.set_media(path)
             self.instance_image.close()
 
 
         self.current_media = path
+        self.apply_scaling()
         logger.info("set_play_media - %s", path)
 
         self.apply_playback_state()
+        self.media_changed.emit()
+
+
+    def get_orientation(self) -> str:
+
+        geometry = self.target_screen.geometry()
+        return "landscape" if geometry.width() >= geometry.height() else "portrait"
+
+
+    def apply_scaling(self, config: dict | None = None) -> None:
+        """
+        套用目前素材與螢幕方向的顯示選項
+        """
+
+        if self.is_exiting or self.current_media is None:
+            return
+
+        if config is None:
+            config = config_store.load()
+        media_path = self.current_media.relative_to(MEDIA_DIR).as_posix()
+        self.scaling_mode = get_scaling_mode(config, media_path, self.get_orientation())
+        color = config.get("backgroundColor", {}).get(media_path, "#000000")
+        self.instance_image.set_scaling(self.scaling_mode, color)
+        self.instance_video.set_scaling(self.scaling_mode, color)
 
 
     def select_media(self, path: Path) -> None:
@@ -976,7 +814,7 @@ class Wallpaper(QWidget):
 
 
         # 重新設定圖片與影片輸出的目標 HWND
-        self.instance_vlc_player.set_hwnd(hwnd)
+        self.instance_video.set_hwnd(hwnd)
         self.instance_image.set_hwnd(hwnd)
 
 
@@ -984,19 +822,6 @@ class Wallpaper(QWidget):
 
         if not self.power_notify:
             logger.error("螢幕電源通知註冊失敗")
-
-
-    def get_screen_aspect_ratio(self) -> str:
-        """
-        取得螢幕解析度的寬高比
-        """
-
-        geometry = self.target_screen.geometry()
-
-        width = geometry.width()
-        height = geometry.height()
-
-        return f"{width}:{height}"
 
 
     def enable_fullscreen_detection(self) -> None:
@@ -1065,8 +890,6 @@ class Wallpaper(QWidget):
         self.auto_pause_handler = None
         self.playback_state = PlaybackState()
         self.fullscreen_detection_ready = False
-        self.pending_reattach_time = None
-        self._reattach_time = None
         self.play_state = "stop"
         self.current_media = None
 
@@ -1078,9 +901,7 @@ class Wallpaper(QWidget):
             ("停止自動暫停計時器", "check_auto_pause_timer", lambda: self.check_auto_pause_timer.stop()),
             ("停止全螢幕偵測等待", "fullscreen_detection_timer", lambda: self.fullscreen_detection_timer.stop()),
             ("解除螢幕訊號", "target_screen", lambda: self.target_screen.geometryChanged.disconnect(self.on_screen_changed)),
-            ("解除 VLC 回呼", "player_events", lambda: self.player_events.event_detach(getattr(vlc.EventType, "MediaPlayerPlaying"))),
-            ("解除進度恢復訊號", None, lambda: self.playback_started.disconnect(self.apply_pending_reattach_time)),
-            ("解除暫停恢復訊號", None, lambda: self.playback_started.disconnect(self.apply_pending_pause)),
+            ("解除影片訊號", "instance_video", lambda: self.instance_video.playback_started.disconnect(self.playback_started)),
         ]
 
         if desktop_events is not None:
@@ -1092,13 +913,10 @@ class Wallpaper(QWidget):
 
         steps.extend([
             ("取消電源通知", None, self.unregister_power_notification),
-            ("停止影片輸出", "instance_vlc_player", self.stop_video_output),
+            ("關閉影片輸出", "instance_video", lambda: self.instance_video.close(process_events=True)),
             ("關閉圖片輸出", "instance_image", lambda: self.instance_image.close()),
             ("解除圖片目標視窗", "instance_image", lambda: self.instance_image.set_hwnd(0)),
             ("釋放圖片物件", "instance_image", lambda: self.instance_image.deleteLater()),
-            ("解除影片目標視窗", "instance_vlc_player", lambda: self.instance_vlc_player.set_hwnd(0)),
-            ("釋放 VLC 播放器", "instance_vlc_player", lambda: self.instance_vlc_player.release()),
-            ("釋放 VLC 實例", "instance_vlc", lambda: self.instance_vlc.release()),
             ("隱藏桌布視窗", None, self.hide),
             ("釋放桌布視窗", None, lambda: self.destroy(True, True)),
         ])
@@ -1136,10 +954,12 @@ class Tray:
         self.import_thread: MediaImportThread | None = None
         self.import_screen_id: str | None = None
         self.import_applies_to_all = False
+        self.import_stopped_screens: set[str] = set()
         self.app.aboutToQuit.connect(self.shutdown)
 
         # 共用縮圖工作
         self.thumbnail_thread = ThumbnailThread(MEDIA_DIR, THUMBNAIL_DIR)
+        self.thumbnail_thread.thumbnail_ready.connect(self.apply_background_color, Qt.ConnectionType.QueuedConnection)
 
         # 設定檔
         config = config_store.load()
@@ -1236,9 +1056,14 @@ class Tray:
             action = QAction(tr(text_key), self.options_menu)
             action.setCheckable(True)
             action.setChecked(config.get(config_key, CONFIG_DEFAULTS[config_key]))
+
+            # triggered 前已切換勾選, 保存失敗時還原
             action.triggered.connect(
-                lambda checked, key=config_key, attr=attribute: self.set_auto_pause_option(key, attr, checked)
+                lambda checked, key=config_key, attr=attribute, item=action: item.setChecked(
+                    checked if self.set_auto_pause_option(key, attr, checked) else not checked
+                )
             )
+
             self.options_menu.addAction(action)
 
         self.options_menu.addSeparator()
@@ -1255,7 +1080,9 @@ class Tray:
             action.setCheckable(True)
             action.setChecked(size == self.font_size)
             font_size_group.addAction(action)
+
             action.triggered.connect(lambda checked, value=size: self.set_font_size(value))
+
             font_size_menu.addAction(action)
             self.font_size_actions[size] = action
 
@@ -1271,7 +1098,9 @@ class Tray:
             action.setCheckable(True)
             action.setChecked(size == self.preview_size)
             preview_size_group.addAction(action)
+
             action.triggered.connect(lambda checked, value=size: self.set_preview_size(value))
+
             preview_size_menu.addAction(action)
             self.preview_size_actions[size] = action
 
@@ -1373,12 +1202,17 @@ class Tray:
 
         self.wallpapers[wallpaper.screen_id] = wallpaper
         wallpaper.auto_pause_handler = self.follow_controller.check_auto_pause
+        wallpaper.media_changed.connect(self.refresh_tooltip, Qt.ConnectionType.QueuedConnection)
+        wallpaper.media_changed.connect(self.request_background_colors, Qt.ConnectionType.QueuedConnection)
+        wallpaper.reattach_finished.connect(self.request_background_colors, Qt.ConnectionType.QueuedConnection)
+
         for signal in (wallpaper.playback_started, wallpaper.reattach_finished):
             signal.connect(
                 lambda s=wallpaper.screen_id, w=wallpaper: self.follow_controller.on_ready(s, w),
                 Qt.ConnectionType.QueuedConnection
             )
         wallpaper.show()
+        self.request_background_colors()
 
         if refresh:
             self.follow_controller.restore(self.follow_controller.graph.sources)
@@ -1455,13 +1289,41 @@ class Tray:
                     preview_size=self.preview_size,
                     thumbnail_thread=self.thumbnail_thread
                 )
+
                 menu.aboutToShow.connect(
                     lambda s=screen_id, m=menu: self.refresh_screen_menu(s, m)
                 )
+
                 self.screen_menus[screen_id] = menu
                 self.menu.insertMenu(self.add_media_action, menu)
 
         self.refresh_playback_actions()
+        self.refresh_tooltip()
+
+
+    def refresh_tooltip(self) -> None:
+        """
+        所有螢幕使用同一媒體時, 在系統匣提示顯示桌布名稱
+        """
+
+        if self.is_exiting:
+            return
+
+        text = tr("app_name")
+        media_paths = {wallpaper.current_media for wallpaper in self.wallpapers.values()}
+
+        if len(media_paths) == 1:
+            path = next(iter(media_paths))
+
+            if path is not None:
+                name = path.stem
+
+                if len(name) > 40:
+                    name = name[:32] + ".."
+
+                text = f"{text} - {name}"
+
+        self.tray.setToolTip(text)
 
 
     def refresh_playback_actions(
@@ -1529,7 +1391,12 @@ class Tray:
     def stop(self, screen_id: str | None = None) -> None:
 
         if screen_id is not None:
+            self.import_stopped_screens.update(self.follow_controller.graph.subtree(screen_id))
             self.follow_controller.detach(screen_id)
+
+        else:
+            self.import_screen_id = None
+            self.import_applies_to_all = False
 
         for wallpaper in self.get_wallpapers(screen_id):
             wallpaper.manual_stop()
@@ -1578,9 +1445,195 @@ class Tray:
 
         if len(self.wallpapers) > 1:
             self.add_follow_menu(menu, screen_id)
-            menu.addSeparator()
+
+        self.add_scaling_menu(menu, screen_id)
+        menu.addSeparator()
 
         self.add_media_menu_actions(menu, screen_id)
+
+
+    def add_scaling_menu(self, menu: QMenu, screen_id: str | None) -> None:
+
+        wallpaper = self.wallpapers.get(screen_id) if screen_id is not None else None
+        scaling_menu = menu.addMenu(tr("scaling_mode"))
+        scaling_menu.setEnabled(bool(wallpaper and wallpaper.current_media))
+        group = QActionGroup(scaling_menu)
+
+        for mode in ("fill", "fit", "stretch"):
+            action = scaling_menu.addAction(tr(f"scaling_{mode}"))
+            action.setCheckable(True)
+            action.setChecked(bool(wallpaper and wallpaper.scaling_mode == mode))
+            group.addAction(action)
+
+            action.triggered.connect(
+                lambda checked=False, value=mode: self.set_scaling(screen_id, value)
+            )
+
+
+        if wallpaper is None or wallpaper.current_media is None or wallpaper.scaling_mode != "fit":
+            return
+
+        scaling_menu.addSeparator()
+
+        color_menu = scaling_menu.addMenu(tr("background_color"))
+        color_group = QActionGroup(color_menu)
+
+        colors = {
+            None: "background_color_auto",
+            "#000000": "color_black",
+            "#212322": "color_PMS419_moonless_night",
+            "#54575a": "color_PMS425_sesame",
+            "#8a8d8e": "color_PMS423_metal",
+            "#d0d3d5": "color_PMS427_concrete",
+            "#e6e1e7": "color_PMS663_cloud",
+            "#ffffff": "color_white",
+            "#483729": "color_PMS7533_cocoa",
+            "#8f292b": "color_PMS7623_brick",
+            "#ffb3bb": "color_PMS176_cherry_blossom",
+            "#f98e2c": "color_PMS715_orange",
+            "#facfa9": "color_PMS2015_wood_plank",
+            "#f7e1a5": "color_PMS7401_sand",
+            "#f6cf3f": "color_PMS129_sunflower",
+            "#eaeb6c": "color_PMS386_lemon",
+            "#75d87e": "color_PMS2268_leaf",
+            "#7d9c91": "color_PMS5565_sage",
+            "#0e7f6f": "color_PMS2244_forest",
+            "#8ab8e9": "color_PMS278_sky",
+            "#002554": "color_PMS655_deep_sea",
+            "#a8a2c3": "color_PMS7445_taro",
+            "#6f40a2": "color_PMS2077_grape",
+        }
+
+        media_path = wallpaper.current_media.relative_to(MEDIA_DIR).as_posix()
+        color = config_store.load().get("backgroundColor", {}).get(media_path)
+        selected_color = color if color in colors else None
+
+        for color, label in colors.items():
+            action = color_menu.addAction(tr(label))
+            action.setCheckable(True)
+            action.setChecked(color == selected_color)
+            color_group.addAction(action)
+
+            action.triggered.connect(
+                lambda checked=False, value=color: self.set_background_color(screen_id, value)
+            )
+
+
+    def set_scaling(self, screen_id: str | None, mode: str) -> None:
+        """
+        首次選擇記錄兩種方向, 後續只更新所選螢幕的方向
+        """
+
+        wallpaper = self.wallpapers.get(screen_id) if screen_id is not None else None
+        if self.is_exiting or wallpaper is None or wallpaper.is_exiting or wallpaper.current_media is None:
+            return
+
+        path = wallpaper.current_media
+        media_path = path.relative_to(MEDIA_DIR).as_posix()
+        config = config_store.load()
+        modes = config.setdefault("scalingMode", {}).setdefault(media_path, {})
+        if not modes:
+            modes.update(landscape=mode, portrait=mode)
+        else:
+            modes[wallpaper.get_orientation()] = mode
+
+        if not config_store.save(config):
+            return
+
+        for target in self.wallpapers.values():
+            if target.current_media == path:
+                target.apply_scaling(config)
+        self.request_background_colors()
+
+
+    def set_background_color(self, screen_id: str | None, color: str | None) -> None:
+        """
+        保存素材共用的背景色, None 表示重新自動取色
+        """
+
+        wallpaper = self.wallpapers.get(screen_id) if screen_id is not None else None
+        if (
+            self.is_exiting or wallpaper is None or
+            wallpaper.is_exiting or wallpaper.current_media is None
+        ):
+            return
+
+
+        path = wallpaper.current_media
+        media_path = path.relative_to(MEDIA_DIR).as_posix()
+        config = config_store.load()
+        colors = config.setdefault("backgroundColor", {})
+
+        if color is None:
+            colors.pop(media_path, None)
+
+        else:
+            colors[media_path] = color
+
+
+        if not config_store.save(config):
+            return
+
+
+        for menu in (self.media_menu, *self.screen_menus.values()):
+            menu.display_config = config
+
+
+        if color is None:
+            self.request_background_colors()
+
+        else:
+            for target in self.wallpapers.values():
+                if target.current_media == path:
+                    target.apply_scaling(config)
+
+
+    def request_background_colors(self) -> None:
+        """
+        為尚無背景色的完整顯示桌布請求縮圖
+        """
+
+        if self.is_exiting:
+            return
+
+        config = config_store.load()
+        colors = config.get("backgroundColor", {})
+        for wallpaper in self.wallpapers.values():
+            path = wallpaper.current_media
+            if wallpaper.is_exiting or wallpaper.scaling_mode != "fit" or path is None:
+                continue
+            if path.relative_to(MEDIA_DIR).as_posix() not in colors:
+                self.thumbnail_thread.request(path)
+
+
+    def apply_background_color(self, media_path: str, preview_size: int, image: QImage) -> None:
+        """
+        從縮圖取得平均色, 保存並套用為背景色
+        """
+
+        if self.is_exiting or image.isNull():
+            return
+
+        path = Path(media_path)
+        targets = [w for w in self.wallpapers.values() if not w.is_exiting and w.current_media == path]
+        if not any(w.scaling_mode == "fit" for w in targets):
+            return
+
+        config = config_store.load()
+        colors = config.setdefault("backgroundColor", {})
+        key = path.relative_to(MEDIA_DIR).as_posix()
+        if key in colors:
+            return
+
+        color = image.scaled(1, 1, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        colors[key] = color.pixelColor(0, 0).name()
+        if not config_store.save(config):
+            return
+
+        for wallpaper in targets:
+            wallpaper.apply_scaling(config)
+        for menu in (self.media_menu, *self.screen_menus.values()):
+            menu.display_config = config
 
 
     def add_follow_menu(self, menu: QMenu, screen_id: str) -> None:
@@ -1632,8 +1685,14 @@ class Tray:
         """
 
         self.media_menu.reset_preview()
+        for action in self.media_menu.actions():
+            submenu = action.menu()
+            if submenu is not None:
+                submenu.deleteLater()
         self.media_menu.clear()
         screen_id = next(iter(self.wallpapers)) if len(self.wallpapers) == 1 else None
+        self.add_scaling_menu(self.media_menu, screen_id)
+        self.media_menu.addSeparator()
         self.add_media_menu_actions(self.media_menu, screen_id)
 
 
@@ -1646,6 +1705,7 @@ class Tray:
         menu.target_screen = wallpaper.target_screen if wallpaper is not None else None
 
         config = config_store.load()
+        menu.display_config = config
         recent = config["recentVideo"][:config["recentDisplayCount"]]
 
         for media_path in recent:
@@ -1692,8 +1752,13 @@ class Tray:
         """
 
         menu = self.media_menu if menu is None else menu
+        menu.setToolTipsVisible(True)
+
         wallpaper = self.wallpapers.get(screen_id) if screen_id is not None else None
-        action = QAction(media_path.name, menu)
+
+        name = media_path.name
+        action = QAction(name if len(name) <= 40 else name[:32] + "..", menu)
+        action.setToolTip(name)
         action.setData(str(media_path))
 
         action.triggered.connect(
@@ -1791,6 +1856,7 @@ class Tray:
         self.cancel_import_action.setVisible(True)
         self.import_screen_id = next(iter(self.wallpapers)) if len(self.wallpapers) == 1 else None
         self.import_applies_to_all = len(self.wallpapers) > 1 and not get_media()
+        self.import_stopped_screens.clear()
 
         self.import_thread = MediaImportThread(Path(filename))
         self.import_thread.progress.connect(self.update_import_progress, Qt.ConnectionType.QueuedConnection)
@@ -1825,6 +1891,8 @@ class Tray:
 
         elif self.import_screen_id is not None and self.import_screen_id in self.wallpapers:
             screen_ids = (self.import_screen_id,)
+
+        screen_ids = tuple(screen_id for screen_id in screen_ids if screen_id not in self.import_stopped_screens)
 
         # 巢狀事件迴圈仍會收到匯入完成訊號, 等當次重掛離開後才切換媒體
         if (
@@ -1909,14 +1977,24 @@ class Tray:
         self.restart()
 
 
-    def set_auto_pause_option(self, config_key: str, attribute: str, checked: bool) -> None:
+    def set_auto_pause_option(self, config_key: str, attribute: str, checked: bool) -> bool:
 
-        config = config_store.load()
+        if self.is_exiting:
+            return False
+
+        try:
+            config = config_store.load()
+        except OSError:
+            return False
+
         config[config_key] = checked
-        config_store.save(config)
+        if not config_store.save(config):
+            return False
 
         for wallpaper in self.get_wallpapers():
             setattr(wallpaper, attribute, checked)
+
+        return True
 
 
     def set_font_size(self, font_size: int) -> None:

@@ -126,7 +126,8 @@ def run_recovery_probe(media: Path, operation: str = "reattach") -> None:
         wallpaper.check_auto_pause_timer.stop()
         wallpaper.setGeometry(0, 0, 640, 360)
         wallpaper.show()
-        player = wallpaper.instance_vlc_player
+        player = wallpaper.instance_video._player
+        assert player is not None, "影片模組沒有建立播放器"
         wait_until(lambda: player.has_vout() > 0 and player.get_time() > 1000)
         # 重建途中不顯示尚未掛入測試容器的頂層視窗
         wallpaper.show = lambda: None
@@ -242,29 +243,46 @@ class VideoRecoveryTests(unittest.TestCase):
     真正的 VLC 輸出失效與重掛恢復
     """
 
+    @classmethod
+    def setUpClass(cls) -> None:
+        """
+        建立各探針共用的暫存影片, 結束後統一清理
+        """
+
+        if FFMPEG is None:
+            raise unittest.SkipTest("需要 ffmpeg")
+
+        directory = Path(cls.enterClassContext(tempfile.TemporaryDirectory()))
+        cls.media = directory / "recovery.mp4"
+        subprocess.run(
+            [FFMPEG, "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30",
+             "-t", "20", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(cls.media)],
+            check=True, capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW
+        )
+
+
+    def run_probe(self, operation: str = "reattach") -> str:
+        """
+        在獨立程序執行指定探針, 驗證結束狀態並回傳輸出
+        """
+
+        result = subprocess.run(
+            [sys.executable, "-X", "utf8", __file__, "--probe", str(self.media), operation], cwd=ROOT,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=30, creationflags=subprocess.CREATE_NO_WINDOW
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return result.stdout
+
+
     def test_playing_and_paused_video_recover_after_host_process_ends(self) -> None:
         """
         在獨立程序中驗證播放與暫停影片失去父視窗後恢復輸出及關閉
         """
 
-        if FFMPEG is None:
-            self.skipTest("需要 ffmpeg")
-
-        with tempfile.TemporaryDirectory() as directory:
-            media = Path(directory) / "recovery.mp4"
-            subprocess.run(
-                [FFMPEG, "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30",
-                 "-t", "20", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(media)],
-                check=True, capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW
-            )
-            result = subprocess.run(
-                [sys.executable, "-X", "utf8", __file__, "--probe", str(media)], cwd=ROOT,
-                capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=30, creationflags=subprocess.CREATE_NO_WINDOW
-            )
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            for stage in ("play", "pause", "shutdown"):
-                self.assertIn(f"PASS {stage}:", result.stdout)
+        output = self.run_probe()
+        for stage in ("play", "pause", "shutdown"):
+            self.assertIn(f"PASS {stage}:", output)
 
 
     def test_lost_video_output_stops_and_switches_media_without_qt_reentry(self) -> None:
@@ -274,29 +292,13 @@ class VideoRecoveryTests(unittest.TestCase):
 
         from PySide6.QtGui import QImage
 
-        if FFMPEG is None:
-            self.skipTest("需要 ffmpeg")
+        image = QImage(320, 180, QImage.Format.Format_RGB32)
+        image.fill(0xff336699)
+        self.assertTrue(image.save(str(self.media.with_suffix(".png"))))
 
-        with tempfile.TemporaryDirectory() as directory:
-            media = Path(directory) / "selection.mp4"
-            subprocess.run(
-                [FFMPEG, "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30",
-                 "-t", "20", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(media)],
-                check=True, capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW
-            )
-            image = QImage(320, 180, QImage.Format.Format_RGB32)
-            image.fill(0xff336699)
-            self.assertTrue(image.save(str(media.with_suffix(".png"))))
-
-            for operation in ("stop", "pause", "video", "image"):
-                with self.subTest(operation=operation):
-                    result = subprocess.run(
-                        [sys.executable, "-X", "utf8", __file__, "--probe", str(media), operation], cwd=ROOT,
-                        capture_output=True, text=True, encoding="utf-8", errors="replace",
-                        timeout=30, creationflags=subprocess.CREATE_NO_WINDOW
-                    )
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertIn(f"PASS {operation}:", result.stdout)
+        for operation in ("stop", "pause", "video", "image"):
+            with self.subTest(operation=operation):
+                self.assertIn(f"PASS {operation}:", self.run_probe(operation))
 
 
 
