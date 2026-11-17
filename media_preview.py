@@ -98,6 +98,7 @@ class MediaPreviewMenu(QMenu):
     def event(self, event) -> bool:
 
         if event.type() == QEvent.Type.ToolTip:
+
             action = self.actionAt(event.pos())
 
             # 空提示會回退到項目文字, 因此直接略過未截斷項目的提示事件

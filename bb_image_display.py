@@ -393,7 +393,6 @@ class Instance(QObject):
 
             self.window.image = image
 
-
         self.current_image = source
         self.set_scaling(self._scaling_mode, self._background_color)
 
@@ -448,11 +447,9 @@ class Instance(QObject):
         """
 
         try:
-
             if self.window is not None:
                 self.window.close()
 
         finally:
-
             self.window = None
             self.current_image = None

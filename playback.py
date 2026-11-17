@@ -14,6 +14,9 @@ AutoPauseReason = Literal["screen_off", "battery", "fullscreen"]
 
 @dataclass(frozen=True)
 class PlaybackState:
+    """
+    播放意圖與自動暫停狀態
+    """
 
     requested_state: PlaybackCommand = "stop"
     # 群組全部需要暫停時, 保存各螢幕的原因

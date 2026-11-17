@@ -34,6 +34,9 @@ class FollowWallpaper(PlaybackTarget, Protocol):
 
 
 class AutoPauseHandler(Protocol):
+    """
+    依跟隨關係檢查自動暫停狀態
+    """
 
     def __call__(self, wallpaper: FollowWallpaper, *, from_timer: bool = False) -> bool: ...
 

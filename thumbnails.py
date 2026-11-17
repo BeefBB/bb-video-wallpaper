@@ -519,6 +519,7 @@ class ThumbnailThread(QThread):
 
         self.media_dir = media_dir
         self.thumbnail_dir = thumbnail_dir
+
         self.queue: deque[tuple[Path, int]] = deque()
         self.pending: set[tuple[Path, int]] = set()
         self.pending_lock = threading.Condition()

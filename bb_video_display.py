@@ -659,7 +659,7 @@ class Instance(QObject):
 
     def get_time(self) -> int | None:
         """
-        停止, 載入中或等待定位時回傳 None
+        取得播放進度
         """
 
         if (
@@ -673,6 +673,9 @@ class Instance(QObject):
 
 
     def get_length(self) -> int:
+        """
+        取得影片長度
+        """
 
         return max(0, self._player.get_length()) if self._player is not None else 0
 

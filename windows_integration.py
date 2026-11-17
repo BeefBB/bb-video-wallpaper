@@ -67,11 +67,9 @@ def is_already_running() -> tuple[bool, object]:
     # 建立全域 Mutex
     mutex = win32event.CreateMutex(None, False, MUTEX_NAME)  # type: ignore
 
-
     # 檢查錯誤碼
     if win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS:
         return True, mutex
-
 
     return False, mutex
 
@@ -126,7 +124,6 @@ def register_power_notification(hwnd: int) -> int | None:
     register = ctypes.windll.user32.RegisterPowerSettingNotification
     register.restype = wintypes.HANDLE
     register.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD]
-
 
     return register(hwnd, ctypes.byref(GUID_CONSOLE_DISPLAY_STATE), DEVICE_NOTIFY_WINDOW_HANDLE)
 
@@ -332,7 +329,6 @@ def task_exists() -> bool:
         creationflags=subprocess.CREATE_NO_WINDOW
     )
 
-
     return result.returncode == 0
 
 
@@ -385,7 +381,6 @@ def create_workerw(parent_hwnd) -> int:
             logger.exception("清理未完成初始化的 WorkerW 失敗 - hwnd=%#x", hwnd)
 
         raise
-
 
     return hwnd
 

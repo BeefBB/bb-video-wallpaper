@@ -51,7 +51,7 @@ from windows_integration import (
 logger = logging.getLogger(__name__)
 
 
-# 由啟動流程設定的路徑與共用物件
+# 由啟動流程設定的路徑
 FILE: Path
 ROOT_DIR: Path
 ICON_PATH: Path
@@ -62,14 +62,17 @@ SINGLE_IMPORT_DIR: Path
 THUMBNAIL_DIR: Path
 CONFIG_PATH: Path
 LOG_DIR: Path
+
+# 共用物件
 config_store: ConfigStore
 LANG: dict[str, str] = {}
+
 _vlc_dll_directory: os._AddedDllDirectory | None = None
 
 
 def initialize_paths() -> None:
     """
-    依原始碼或打包位置設定執行路徑
+    初始化路徑
     """
 
     global FILE, ROOT_DIR, ICON_PATH, LOADING_IMAGE_PATH
@@ -97,13 +100,15 @@ def initialize_paths() -> None:
     CONFIG_PATH = APPDATA_DIR / "config.json"
     LOG_DIR = APPDATA_DIR / "log"
 
+    APPDATA_DIR.mkdir(parents=True, exist_ok=True)
+    MEDIA_DIR.mkdir(exist_ok=True)
+    LOG_DIR.mkdir(exist_ok=True)
+
 
 def initialize_logging() -> None:
     """
-    建立日誌資料夾並設定輪替日誌
+    初始化日誌
     """
-
-    LOG_DIR.mkdir(exist_ok=True)
 
     handler = RotatingFileHandler(
         LOG_DIR / "log.log",
@@ -308,20 +313,14 @@ class Wallpaper(QWidget):
         建立桌布資源
         """
 
-        # 未指定時使用建立當下的主螢幕, 重掛時保留同一個目標
+        # 目標螢幕(這個桌布將掛載到的螢幕), 重掛時保留同一個目標
+        # 未指定時使用建立當下的主螢幕
         if target_screen is None:
             target_screen = QApplication.primaryScreen()
-
-        if target_screen is None:
-            raise RuntimeError("找不到可用的目標螢幕")
-
-
-        # 這個桌布將掛載到的螢幕
+            if target_screen is None:
+                raise RuntimeError("找不到可用的目標螢幕")
         self.target_screen = target_screen
         self.target_screen.geometryChanged.connect(self.on_screen_changed)
-
-        # 設定檔
-        config = config_store.load()
 
         # 正在重建
         self.is_recreating = False
@@ -342,8 +341,11 @@ class Wallpaper(QWidget):
 
         # 播放狀態: "play", "pause", "stop"
         self.play_state = "stop"
+        # 播放意圖與自動暫停狀態
         self.playback_state = PlaybackState()
+        # 縮放模式: "fill", "fit", "stretch"
         self.scaling_mode = "fill"
+        # 自訂自動暫停檢查函式, 回傳 True 表示已處理, False 表示交給內建檢查
         self.auto_pause_handler: AutoPauseHandler | None = None
 
         # 全螢幕檢測就緒
@@ -352,11 +354,14 @@ class Wallpaper(QWidget):
         # 螢幕亮滅
         self.screen_off = False
 
+        # 設定檔
+        config = config_store.load()
         # 自動暫停設定
         self.auto_pause_if_fullscreen = config.get("autoPauseIfFullscreen", True)
         self.auto_pause_if_screen_off = config.get("autoPauseIfScreenOff", True)
         self.auto_pause_if_on_battery = config.get("autoPauseIfOnBattery", False)
-
+        # 每個螢幕的桌布設定, 螢幕ID -> 媒體路徑
+        screen_wallpapers = config.get("screenWallpapers", {})
 
         # 建立視窗
         self.setWindowFlags(
@@ -364,45 +369,37 @@ class Wallpaper(QWidget):
             Qt.WindowType.Tool |
             Qt.WindowType.WindowDoesNotAcceptFocus
         )
-
         # 不接受滑鼠事件
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-
         # 設成螢幕大小
         self.setGeometry(self.target_screen.geometry())
 
-
-        # 視窗定位後再取得螢幕 ID, 避免讀到預設位置的螢幕
+        # 此螢幕ID(視窗定位後再取得(避免讀到預設位置的螢幕))
         self.screen_id = get_monitor_id(int(self.winId()))
-        screen_wallpapers = config.get("screenWallpapers", {})
-        saved_media = screen_wallpapers.get(self.screen_id)
 
+        # 此螢幕記憶中的桌布
+        saved_media = screen_wallpapers.get(self.screen_id)
         if saved_media and (MEDIA_DIR / saved_media).is_file():
             initial_media = MEDIA_DIR / saved_media
-
+        # 記憶中的桌布不存在, 使用最近使用的影片
         if initial_media is None:
             recent = config.get("recentVideo", [])
 
             if recent and (MEDIA_DIR / recent[0]).is_file():
                 initial_media = MEDIA_DIR / recent[0]
-
+        # 最近使用的影片不存在, 使用媒體清單的第一個
         if initial_media is None and media_files:
             initial_media = media_files[0]
 
-
-        # 影片物件隨桌布刪除, 重掛中的清理不會過早刪除仍在等待的 Qt 物件
+        # 影片顯示物件
         self.instance_video = bb_video_display.Instance()
         self.instance_video.setParent(self)
         self.instance_video.playback_started.connect(self.playback_started)
-
         # 圖片顯示物件
-        # 圖片共用主程式的 QApplication 與桌布 HWND
         self.instance_image = bb_image_display.Instance()
-
 
         # 掛載到桌布
         self.attach_to_desktop()
-
 
         # 播放
         if initial_media:
@@ -419,23 +416,20 @@ class Wallpaper(QWidget):
             except Exception:
                 logger.exception("載入初始桌布時發生錯誤 - %s", initial_media)
 
-
-        # 計算程式執行 10s 後啟用全螢幕檢測
+        # 啟用全螢幕檢測用計時器
         self.fullscreen_detection_timer = QTimer(self)
         self.fullscreen_detection_timer.setSingleShot(True)
         self.fullscreen_detection_timer.timeout.connect(self.enable_fullscreen_detection)
         self.fullscreen_detection_timer.start(10000)
 
-        # 自動暫停檢測計時器, 每 500ms 檢查一次
+        # 自動暫停計時器
         self.check_auto_pause_timer = QTimer(self)
         self.check_auto_pause_timer.timeout.connect(lambda: self.check_auto_pause(from_timer=True))
         self.check_auto_pause_timer.start(500)
 
-
         try:
             self.desktop_events = DesktopEventWindow()
             self.desktop_events.taskbar_created.connect(self.on_taskbar_created, Qt.ConnectionType.QueuedConnection)
-
         except Exception:
             logger.exception("建立工作列重建通知視窗失敗")
 
@@ -457,13 +451,11 @@ class Wallpaper(QWidget):
                 self.check_auto_pause()
                 return True, 0
 
-
             # 監聽 切換虛擬桌面/用戶 時的 WM_DESTROY 訊息
             if msg.message == WM_DESTROY:
 
                 self.schedule_reattach()
                 return True, 0
-
 
         return cast(tuple[bool, int], super().nativeEvent(eventType, message))
 
@@ -496,6 +488,7 @@ class Wallpaper(QWidget):
             self.playback_state = PlaybackState(requested)
 
         target = self.playback_state.effective_state
+
         if not force and target == self.play_state:
             return
 
@@ -520,7 +513,7 @@ class Wallpaper(QWidget):
 
     def _stop_media_output(self) -> None:
         """
-        停止目前輸出, 媒體切換時保留播放意圖
+        停止目前輸出
         """
 
         if self.is_image():
@@ -534,7 +527,7 @@ class Wallpaper(QWidget):
 
     def manual_play(self) -> None:
         """
-        手動播放, 清除先前的自動暫停判斷
+        手動播放
         """
 
         if not self.current_media:
@@ -546,7 +539,7 @@ class Wallpaper(QWidget):
 
     def manual_pause(self) -> None:
         """
-        手動暫停, 不由自動暫停條件恢復
+        手動暫停
         """
 
         if (
@@ -561,7 +554,7 @@ class Wallpaper(QWidget):
 
     def manual_stop(self) -> None:
         """
-        手動停止, 清除進度恢復與自動暫停
+        手動停止
         """
 
         self.apply_playback_state(PlaybackState("stop"), force=True)
@@ -570,7 +563,7 @@ class Wallpaper(QWidget):
 
     def get_playback_time(self) -> int | None:
         """
-        取得播放中或暫停中的進度, 尚未就緒時回傳 None
+        取得播放進度
         """
 
         if (
@@ -583,11 +576,17 @@ class Wallpaper(QWidget):
 
 
     def get_playback_length(self) -> int:
+        """
+        取得影片長度
+        """
 
         return self.instance_video.get_length()
 
 
     def seek_time(self, position: int) -> bool:
+        """
+        設定影片進度
+        """
 
         if position < 0 or self.get_playback_time() is None:
             return False
@@ -597,20 +596,20 @@ class Wallpaper(QWidget):
 
     def on_taskbar_created(self) -> None:
         """
-        工作列重建後啟動新的恢復嘗試, 實際掛載交給共用計時器
+        工作列重建後啟動, "全新的"重掛嘗試
         """
 
         if self.is_exiting:
             return
 
-        logger.info("收到 TaskbarCreated, 安排重新掛載桌布")
         self.reattach_retry_count = 0
         self.schedule_reattach()
+        logger.info("收到 TaskbarCreated, 安排重新掛載桌布")
 
 
     def schedule_reattach(self, delay_ms: int = 200) -> None:
         """
-        安排一次重掛, 已有排程時保留原本的執行時間
+        安排一次重掛嘗試, 已有排程時保留原本的執行時間
         """
 
         if self.is_exiting or self.is_recreating or self.reattach_timer.isActive():
@@ -624,16 +623,12 @@ class Wallpaper(QWidget):
         重新建立視窗並掛載桌布
         """
 
-        if self.is_exiting:
+        if self.is_exiting or self.is_recreating:
             return
 
-        if self.is_recreating:
-            return
-
-        # 直接呼叫重掛時, 也取消尚未執行的排程
+        # 取消排程
         self.reattach_timer.stop()
         self.is_recreating = True
-
 
         try:
 
@@ -647,52 +642,46 @@ class Wallpaper(QWidget):
 
             logger.info("reattach_to_desktop - start")
 
-
             # 解除輸出時保留模組內的播放意圖與進度, 等待期間繼續處理 Qt 事件
             self.instance_video.set_hwnd(0, process_events=True)
 
-            # 停止輸出的事件迴圈可能已處理關閉要求
             if self.is_exiting:
                 self.is_recreating = False
                 return
 
-
             self.unregister_power_notification()
-            self.instance_image.set_hwnd(0)
-            self.hide()
 
+            self.instance_image.set_hwnd(0)
 
             # 銷毀失效的 HWND, 重新向 Windows 申請新的 HWND
+            self.hide()
             self.destroy(True, True)
             self.create()
 
-
             # 建立視窗
-            self.setGeometry(self.target_screen.geometry())
-
             self.setWindowFlags(
                 Qt.WindowType.FramelessWindowHint |
                 Qt.WindowType.Tool |
                 Qt.WindowType.WindowDoesNotAcceptFocus
             )
-
             self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-            self.show()
+            self.setGeometry(self.target_screen.geometry())
 
+            self.show()
 
             # 重新掛載前套用目前螢幕方向的縮放設定
             self.apply_scaling()
-
             # 掛載到桌布
             self.attach_to_desktop()
 
-
-            # 模組已在重新綁定時恢復進度, 依目前操作意圖恢復顯示
+            # 恢復進度
             if self.current_media:
                 self.apply_playback_state(force=True)
-            logger.info("reattach_to_desktop - finish")
+
             self.is_recreating = False
             self.reattach_retry_count = 0
+
+            logger.info("reattach_to_desktop - finish")
 
         except Exception:
 
@@ -703,9 +692,9 @@ class Wallpaper(QWidget):
             if self.reattach_retry_count < 2:
 
                 self.reattach_retry_count += 1
+                self.schedule_reattach(2000)
 
                 logger.warning("正在重試重新掛載桌布（第 %s 次）", self.reattach_retry_count)
-                self.schedule_reattach(2000)
 
             else:
                 logger.error("重新掛載桌布失敗")
@@ -717,20 +706,19 @@ class Wallpaper(QWidget):
 
     def on_screen_changed(self, geometry) -> None:
         """
-        螢幕解析度變更時重整
+        螢幕解析度變更後啟動, 重掛嘗試
         """
 
         if self.is_exiting or self.is_recreating:
             return
 
-
-        logger.info("screen_changed - %s", geometry)
         self.schedule_reattach()
+        logger.info("螢幕解析度變更 - %s, 安排重新掛載桌布", geometry)
 
 
     def set_play_media(self, path: Path) -> None:
         """
-        圖片與影片交給各自的顯示模組, 保留原本的播放或停止狀態
+        設定播放的媒體檔案, 停止目前的輸出, 保留原本的播放或停止狀態
         """
 
         if self.is_exiting:
@@ -738,30 +726,28 @@ class Wallpaper(QWidget):
 
         is_image = path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS
 
-        # 先讀取圖片, 失敗時保留原本的輸出與播放狀態
+        self._stop_media_output()
+        logger.debug("設定播放的媒體檔案 - stop")
+
         if is_image:
             self.instance_image.set_media(path)
 
-
-        self._stop_media_output()
-        logger.debug("set_play_media - stop")
-
-
-        if not is_image:
-
+        else:
             self.instance_video.set_media(path)
             self.instance_image.close()
 
-
         self.current_media = path
         self.apply_scaling()
-        logger.info("set_play_media - %s", path)
+        logger.info("設定播放的媒體檔案 - %s", path)
 
         self.apply_playback_state()
         self.media_changed.emit()
 
 
     def get_orientation(self) -> str:
+        """
+        取得螢幕方向(橫向landscape/直向portrait)
+        """
 
         geometry = self.target_screen.geometry()
         return "landscape" if geometry.width() >= geometry.height() else "portrait"
@@ -777,6 +763,7 @@ class Wallpaper(QWidget):
 
         if config is None:
             config = config_store.load()
+
         media_path = self.current_media.relative_to(MEDIA_DIR).as_posix()
         self.scaling_mode = get_scaling_mode(config, media_path, self.get_orientation())
         color = config.get("backgroundColor", {}).get(media_path, "#000000")
@@ -809,17 +796,13 @@ class Wallpaper(QWidget):
 
         hwnd = int(self.winId())
 
-
         set_windows_as_wallpaper(hwnd)
-
 
         # 重新設定圖片與影片輸出的目標 HWND
         self.instance_video.set_hwnd(hwnd)
         self.instance_image.set_hwnd(hwnd)
 
-
         self.power_notify = register_power_notification(hwnd)
-
         if not self.power_notify:
             logger.error("螢幕電源通知註冊失敗")
 
@@ -833,7 +816,7 @@ class Wallpaper(QWidget):
             return
 
         self.fullscreen_detection_ready = True
-        logger.debug("fullscreen detection - ready")
+        logger.debug("啟動全螢幕視窗偵測 - ready")
 
 
     def check_auto_pause(self, *, from_timer: bool = False) -> None:
@@ -848,12 +831,12 @@ class Wallpaper(QWidget):
             return
 
         if update_auto_pause((self,)):
-            logger.info("auto_pause - %s", self.play_state)
+            logger.info("自動暫停 - %s", self.play_state)
 
 
     def get_auto_pause_reason(self) -> AutoPauseReason | None:
         """
-        優先回報不需掃描視窗的暫停原因
+        回報不需掃描視窗的暫停原因(螢幕關閉screen_off/筆電電池battery/全螢幕fullscreen)
         """
 
         if self.auto_pause_if_screen_off and self.screen_off:
@@ -880,18 +863,18 @@ class Wallpaper(QWidget):
 
     def shutdown(self) -> None:
         """
-        釋放此桌布的資源, 可重複呼叫且不退出 QApplication
+        釋放此桌布的資源
         """
 
         if self.is_exiting:
             return
 
         self.is_exiting = True
-        self.auto_pause_handler = None
-        self.playback_state = PlaybackState()
-        self.fullscreen_detection_ready = False
-        self.play_state = "stop"
         self.current_media = None
+        self.play_state = "stop"
+        self.playback_state = PlaybackState()
+        self.auto_pause_handler = None
+        self.fullscreen_detection_ready = False
 
         desktop_events = self.desktop_events
         self.desktop_events = None
@@ -921,9 +904,9 @@ class Wallpaper(QWidget):
             ("釋放桌布視窗", None, lambda: self.destroy(True, True)),
         ])
 
-        # 單一步驟失敗時仍繼續釋放其餘資源
         for description, resource, cleanup in steps:
-            # 建構失敗時只清理已建立的資源
+
+            # 只清理已建立的資源
             if resource is not None and getattr(self, resource, None) is None:
                 continue
 
@@ -939,55 +922,60 @@ class Tray:
     def __init__(self, app: QApplication) -> None:
 
         self.app = app
+        self.app.aboutToQuit.connect(self.shutdown)
+
+        # 螢幕 ID -> Wallpaper
         self.wallpapers: dict[str, Wallpaper] = {}
+        # 螢幕 ID -> MediaPreviewMenu
         self.screen_menus: dict[str, MediaPreviewMenu] = {}
+
         self.is_exiting = False
         self.restart_requested = False
         self.reset_requested = False
 
-        # 系統匣圖示與選單
+        # 系統匣圖示
         self.tray = QSystemTrayIcon()
         self.tray.setIcon(QIcon(str(ICON_PATH)))
         self.tray.setToolTip(tr("app_name"))
 
         # 匯入媒體的背景執行緒
         self.import_thread: MediaImportThread | None = None
+        # 匯入媒體的目標螢幕 ID, None 表示匯入完成後套用到所有螢幕
         self.import_screen_id: str | None = None
+        # 匯入媒體的目標螢幕 ID 集合, 用於取消匯入時避免套用到已停止匯入的螢幕
         self.import_applies_to_all = False
+        # 匯入已停止的螢幕 ID 集合
         self.import_stopped_screens: set[str] = set()
-        self.app.aboutToQuit.connect(self.shutdown)
 
-        # 共用縮圖工作
+        # 處理縮圖生成的背景執行緒
         self.thumbnail_thread = ThumbnailThread(MEDIA_DIR, THUMBNAIL_DIR)
         self.thumbnail_thread.thumbnail_ready.connect(self.apply_background_color, Qt.ConnectionType.QueuedConnection)
 
         # 設定檔
         config = config_store.load()
-
+        # 語言代碼, 字型大小, 縮圖預覽大小, 螢幕跟隨設定
+        self.current_language_code = config.get("language", "zh-TW")
         self.font_size = config.get("fontSize", 11)
         self.preview_size = config.get("previewSize", 3)
-        self.follow_controller = FollowController(self.wallpapers, config_store)
         self.saved_follows: dict[str, str] = config.get("screenFollows", {})
+
+        # 螢幕跟隨控制器, 會在桌布建立後啟動, 以避免在桌布尚未就緒時就嘗試跟隨
+        self.follow_controller = FollowController(self.wallpapers, config_store)
+
+        # 如果有已保存的螢幕跟隨設定, 在啟動時等待桌布建立完成後再啟動跟隨
         self.waiting_for_screens = bool(self.saved_follows)
-
-        # 語言代碼
-        self.current_language_code = config.get("language", "zh-TW")
-
 
         self.menu = menu = QMenu()
 
         self.playback_actions = self.add_playback_actions(menu)
         exit_action = QAction(tr("exit"), menu)
 
-
         menu.aboutToShow.connect(self.refresh_playback_actions)
-
-        # 等選單顯示後再取得焦點, 避免首次開啟時點外部無法關閉
         menu.aboutToShow.connect(
+            # 選單顯示後取得焦點(避免首次開啟時點外部無法關閉)
             lambda: menu.activateWindow() if menu.isVisible() else None,
             Qt.ConnectionType.QueuedConnection
         )
-
 
         self.media_menu = MediaPreviewMenu(
             tr("select_video"),
@@ -1000,7 +988,6 @@ class Tray:
         )
         self.media_menu.aboutToShow.connect(self.refresh_media_menu)
 
-
         self.add_media_action = QAction(tr("add_media"), menu)
         self.add_media_action.triggered.connect(self.add_media)
 
@@ -1011,19 +998,15 @@ class Tray:
         open_media_action = QAction(tr("open_video_folder"), menu)
         open_media_action.triggered.connect(self.open_media_folder)
 
-
         startup_action = QAction(tr("startup"), menu)
         startup_action.setCheckable(True)
         startup_action.setChecked(task_exists())
 
-
         exit_action.triggered.connect(self.exit)
-
 
         startup_action.triggered.connect(self.toggle_startup)
 
-
-        # 主要選單
+        # 主選單
         # ################
         menu.addSeparator()
 
@@ -1045,8 +1028,7 @@ class Tray:
         menu.addAction(exit_action)
         # ################
 
-
-        # 選項子選單
+        # "選項"選單
         # ################
         for text_key, config_key, attribute in (
             ("auto_pause_fullscreen", "autoPauseIfFullscreen", "auto_pause_if_fullscreen"),
@@ -1107,14 +1089,14 @@ class Tray:
         self.options_menu.addSeparator()
 
         self.options_language_menu = self.options_menu.addMenu(tr("language"))
+        self.options_language_menu.aboutToShow.connect(self.refresh_language_menu)
 
         self.options_menu.addSeparator()
 
         self.options_menu.addAction(startup_action)
         # ################
 
-
-        # 進階子選單
+        # "進階"選單
         # ################
         open_config_action = QAction(tr("open_config_file"), self.advanced_menu)
         open_config_action.triggered.connect(self.open_config_file)
@@ -1130,10 +1112,6 @@ class Tray:
         reset_menu.addAction(reset_action)
         # ################
 
-
-        # 每次開啟選單時, 重新建立語言選單
-        self.options_language_menu.aboutToShow.connect(self.refresh_language_menu)
-
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(
             lambda reason: menu.popup(QCursor.pos())
@@ -1141,19 +1119,22 @@ class Tray:
             else None
         )
 
+        # 螢幕跟隨同步計時器
         self.follow_sync_timer = QTimer(menu)
         self.follow_sync_timer.timeout.connect(self.follow_controller.synchronize)
         self.follow_sync_timer.start(SYNC_INTERVAL_MS)
 
+        # 螢幕跟隨還原計時器, 避免螢幕列舉尚未穩定就嘗試還原跟隨關係
         self.follow_restore_timer = QTimer(menu)
         self.follow_restore_timer.setSingleShot(True)
         self.follow_restore_timer.timeout.connect(self.initialize_screens)
 
+        # 新增螢幕, 移除螢幕
         self.app.screenAdded.connect(self.add_screen)
         self.app.screenRemoved.connect(self.remove_screen)
 
         if self.waiting_for_screens:
-            # 等待螢幕列舉穩定後再建立桌布
+            # 等待螢幕列舉穩定後再建立桌布(單純等一小段時間)
             self.follow_restore_timer.start(RESTORE_DELAY_MS)
         else:
             self.initialize_screens()
@@ -1182,7 +1163,7 @@ class Tray:
 
     def add_screen(self, screen: QScreen, *, refresh: bool = True) -> None:
         """
-        為新螢幕建立桌布, 重複通知不重建既有桌布
+        為新螢幕建立桌布
         """
 
         if self.is_exiting or self.waiting_for_screens or any(w.target_screen is screen for w in self.wallpapers.values()):
@@ -1261,7 +1242,7 @@ class Tray:
 
     def rebuild_screen_menus(self) -> None:
         """
-        依目前螢幕數切換單螢幕選單與各螢幕子選單
+        建立單螢幕選單與各螢幕子選單
         """
 
         self.media_menu.reset_preview()
@@ -1331,11 +1312,17 @@ class Tray:
         actions: Sequence[tuple[QAction, str]] | None = None,
         screen_id: str | None = None
     ) -> None:
+        """
+        建立主選單
+        """
 
         wallpapers = self.get_wallpapers(screen_id)
-        multiple = screen_id is None and len(wallpapers) > 1
         wallpaper = wallpapers[0] if wallpapers else None
+
+        multiple = screen_id is None and len(wallpapers) > 1
+
         following = screen_id in self.follow_controller.graph.sources
+
         has_video = any(
             w.current_media and w.current_media.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
             for w in wallpapers
@@ -1350,6 +1337,9 @@ class Tray:
 
 
     def get_wallpapers(self, screen_id: str | None = None) -> tuple[Wallpaper, ...]:
+        """
+        取得指定螢幕的 Wallpaper, 未指定時回傳所有螢幕
+        """
 
         if self.is_exiting:
             return ()
@@ -1406,7 +1396,7 @@ class Tray:
 
     def refresh_language_menu(self) -> None:
         """
-        重新建立語言選單
+        建立語言選單
         """
 
         self.options_language_menu.clear()
@@ -1414,11 +1404,9 @@ class Tray:
         for language_display, language_code in SUPPORTED_LANGUAGES.items():
 
             action = QAction(language_display, self.options_language_menu)
-
             action.triggered.connect(
                 lambda checked=False, c=language_code: self.set_language(c)
             )
-
             action.setCheckable(True)
             action.setChecked(language_code == self.current_language_code)
 
@@ -1427,7 +1415,7 @@ class Tray:
 
     def refresh_screen_menu(self, screen_id: str, menu: MediaPreviewMenu) -> None:
         """
-        重新建立指定螢幕的操作與媒體選單
+        建立指定螢幕的操作與媒體選單
         """
 
         menu.reset_preview()
@@ -1468,7 +1456,6 @@ class Tray:
             action.triggered.connect(
                 lambda checked=False, value=mode: self.set_scaling(screen_id, value)
             )
-
 
         if wallpaper is None or wallpaper.current_media is None or wallpaper.scaling_mode != "fit":
             return
@@ -1521,7 +1508,7 @@ class Tray:
 
     def set_scaling(self, screen_id: str | None, mode: str) -> None:
         """
-        首次選擇記錄兩種方向, 後續只更新所選螢幕的方向
+        設定並保存素材的縮放模式
         """
 
         wallpaper = self.wallpapers.get(screen_id) if screen_id is not None else None
@@ -1543,6 +1530,7 @@ class Tray:
         for target in self.wallpapers.values():
             if target.current_media == path:
                 target.apply_scaling(config)
+
         self.request_background_colors()
 
 
@@ -1598,10 +1586,13 @@ class Tray:
 
         config = config_store.load()
         colors = config.get("backgroundColor", {})
+
         for wallpaper in self.wallpapers.values():
+
             path = wallpaper.current_media
             if wallpaper.is_exiting or wallpaper.scaling_mode != "fit" or path is None:
                 continue
+
             if path.relative_to(MEDIA_DIR).as_posix() not in colors:
                 self.thumbnail_thread.request(path)
 
@@ -1681,16 +1672,20 @@ class Tray:
 
     def refresh_media_menu(self) -> None:
         """
-        重新建立單螢幕的媒體選單
+        重新建立媒體選單
         """
 
         self.media_menu.reset_preview()
+
         for action in self.media_menu.actions():
             submenu = action.menu()
             if submenu is not None:
                 submenu.deleteLater()
+
         self.media_menu.clear()
+
         screen_id = next(iter(self.wallpapers)) if len(self.wallpapers) == 1 else None
+
         self.add_scaling_menu(self.media_menu, screen_id)
         self.media_menu.addSeparator()
         self.add_media_menu_actions(self.media_menu, screen_id)
@@ -1723,6 +1718,7 @@ class Tray:
             action = QAction(tr("no_video"), menu)
             action.setEnabled(False)
             menu.addAction(action)
+
             return
 
         for media_path in media_files:
@@ -1770,6 +1766,7 @@ class Tray:
             wallpaper and media_path == wallpaper.current_media and
             screen_id not in self.follow_controller.graph.sources
         ))
+
         action.setEnabled(wallpaper is not None and media_path.is_file())
 
         menu.addAction(action)
@@ -1852,8 +1849,10 @@ class Tray:
             return
 
         self.add_media_action.setText(tr("comparing_media"))
+
         self.cancel_import_action.setEnabled(True)
         self.cancel_import_action.setVisible(True)
+
         self.import_screen_id = next(iter(self.wallpapers)) if len(self.wallpapers) == 1 else None
         self.import_applies_to_all = len(self.wallpapers) > 1 and not get_media()
         self.import_stopped_screens.clear()
@@ -2108,36 +2107,30 @@ def main() -> int:
 
     global config_store, LANG
 
-    initialize_paths()
     already_running, mutex = is_already_running()
+
+    initialize_paths()
+
     config_store = ConfigStore(CONFIG_PATH, MEDIA_DIR, ROOT_DIR / "lang")
+    LANG = config_store.load_language()
 
     if already_running:
-
         mutex.Close()  # type: ignore
-
-        LANG = config_store.load_language()
-
         show_already_running_toast()
-
         return 0
 
-
-    APPDATA_DIR.mkdir(parents=True, exist_ok=True)
-    MEDIA_DIR.mkdir(exist_ok=True)
     initialize_logging()
 
     if not initialize_vlc():
         return 1
 
+    # 修復設定檔
     try:
         if not config_store.save(config_store.load()):
             return 1
 
     except OSError:
         return 1
-
-    LANG = config_store.load_language()
 
     cleanup_orphaned_thumbnails(MEDIA_DIR, THUMBNAIL_DIR)
 
@@ -2159,26 +2152,23 @@ def main() -> int:
     # 系統匣程式在關閉選檔視窗後仍需繼續執行
     app.setQuitOnLastWindowClosed(False)
 
-
     font = QFont()
     font.setPointSize(config_store.load()["fontSize"])
     app.setFont(font)
 
-
     # 建立系統匣
     tray = Tray(app)
 
-
     # Qt 主迴圈
     exit_code = app.exec()
-
 
     if tray.restart_requested:
 
         tray.shutdown()
 
         if tray.reset_requested:
-            # 背景工作結束後才清除設定, 避免舊回呼寫回
+
+            # 除了語言設定, 其他都清除
             config = {"language": config_store.load()["language"]}
             if not config_store.save(config):
                 return 1
@@ -2190,7 +2180,6 @@ def main() -> int:
 
         logging.shutdown()
 
-        # 新程序啟動前先釋放單例鎖
         mutex.Close()  # type: ignore
 
         command = [sys.executable]
