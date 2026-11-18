@@ -58,7 +58,6 @@ def cleanup_orphaned_thumbnails(media_dir: Path, thumbnail_dir: Path) -> None:
             logger.warning("讀取縮圖來源目錄失敗 - %s", source_directory, exc_info=True)
             continue
 
-
         for name in filenames:
 
             if (

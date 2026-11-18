@@ -694,7 +694,7 @@ class Wallpaper(QWidget):
                 self.reattach_retry_count += 1
                 self.schedule_reattach(2000)
 
-                logger.warning("正在重試重新掛載桌布（第 %s 次）", self.reattach_retry_count)
+                logger.warning("正在重試重新掛載桌布(第 %s 次)", self.reattach_retry_count)
 
             else:
                 logger.error("重新掛載桌布失敗")

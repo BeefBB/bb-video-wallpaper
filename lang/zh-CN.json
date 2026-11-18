@@ -43,7 +43,7 @@
   "comparing_media": "比对中…",
   "importing_media": "导入中 {percent}%",
   "cancel_media_import": "取消导入",
-  "media_add_failed": "添加视频失败：{error}",
+  "media_add_failed": "添加视频失败: {error}",
   "media_load_failed": "加载壁纸失败",
   "media_insufficient_space": "磁盘空间不足\n需要 {required:,} MB, 当前可用 {available:,} MB",
   "media_source_busy": "源文件正在使用中, 请完成下载或编辑后再导入",
