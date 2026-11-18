@@ -242,7 +242,7 @@ class MediaImportThread(QThread):
 
 class DesktopEventWindow(QWidget):
     """
-    用獨立的隱藏頂層視窗接收通知, 避免隨 Explorer 的桌布容器一起失效
+    獨立的隱藏頂層視窗, 用以接收通知, 避免隨 Explorer 的桌布容器一起失效
     """
 
     taskbar_created = Signal()
@@ -2134,17 +2134,14 @@ def main() -> int:
 
     cleanup_orphaned_thumbnails(MEDIA_DIR, THUMBNAIL_DIR)
 
-
     while True:
         time.sleep(1)
 
         if check_desktop_ready():
             break
 
-
     if "--task" not in sys.argv:
         run_as_admin()
-
 
     # 建立 Qt 應用程式
     app = QApplication(sys.argv)
@@ -2176,7 +2173,6 @@ def main() -> int:
             delete_task()
 
             logger.info("reset_defaults")
-
 
         logging.shutdown()
 

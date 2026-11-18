@@ -265,7 +265,7 @@ class FollowController:
 
     def synchronize(self, screen_id: str | None = None) -> None:
         """
-        在 Qt 主執行緒連續套用群組, 不處理事件佇列
+        在 Qt 主執行緒連續套用群組
         """
 
         if self.is_exiting:

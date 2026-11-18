@@ -33,7 +33,7 @@ __all__ = ["Instance"]
 
 class _TargetEvents(QAbstractNativeEventFilter):
     """
-    接收目標視窗的尺寸與銷毀事件, 不使用輪詢計時器
+    接收目標視窗的尺寸與銷毀事件
     """
 
     def __init__(self, window: "ImageWallpaper") -> None:
@@ -65,7 +65,7 @@ class _TargetEvents(QAbstractNativeEventFilter):
 
 class ImageWallpaper(QRasterWindow):
     """
-    在指定視窗內繪製圖片與背景, 自行管理繪圖所需的內部容器
+    繪圖所需的內部容器, 在指定視窗內繪製圖片與背景
     """
 
     def __init__(self, image_path: Path, target_hwnd: int) -> None:
@@ -86,7 +86,6 @@ class ImageWallpaper(QRasterWindow):
 
         if self.image.isNull():
             raise RuntimeError(f"無法讀取圖片: {reader.errorString()}")
-
 
         self.setTitle("Qt image display")
 
@@ -115,7 +114,6 @@ class ImageWallpaper(QRasterWindow):
         self.create()
         left, top, right, bottom = win32gui.GetClientRect(self._target_hwnd)
 
-
         try:
 
             self._host_hwnd = win32gui.CreateWindowEx(
@@ -138,7 +136,6 @@ class ImageWallpaper(QRasterWindow):
             if parent != self._target_hwnd:
                 raise RuntimeError("圖片容器未掛載到指定視窗")
 
-
             # 保持完全不透明, 由 Windows 重導向並合成容器內的繪圖
             win32gui.SetLayeredWindowAttributes(self._host_hwnd, 0, 255, win32con.LWA_ALPHA)
 
@@ -155,7 +152,6 @@ class ImageWallpaper(QRasterWindow):
             app.installNativeEventFilter(self._target_events)
 
         except Exception:
-
             self._release_host()
             raise
 
@@ -186,7 +182,7 @@ class ImageWallpaper(QRasterWindow):
 
     def set_hwnd(self, hwnd: int) -> None:
         """
-        改用新的目標視窗, 保留圖片與原本的顯示狀態
+        改用新的目標視窗
         """
 
         if hwnd == self._target_hwnd:
@@ -203,7 +199,7 @@ class ImageWallpaper(QRasterWindow):
 
     def show(self) -> None:
         """
-        在指定視窗中顯示圖片, 第一次顯示時才建立內部容器
+        顯示圖片, 第一次顯示時才建立內部容器
         """
 
         if not self._target_hwnd or not win32gui.IsWindow(self._target_hwnd):
@@ -215,7 +211,6 @@ class ImageWallpaper(QRasterWindow):
 
         if not self._host_hwnd:
             self._create_host()
-
 
         try:
 
@@ -243,14 +238,13 @@ class ImageWallpaper(QRasterWindow):
             self._sync_geometry()
 
         except Exception:
-
             self._release_host()
             raise
 
 
     def hide(self) -> None:
         """
-        隱藏圖片與內部容器, 保留主程式目標視窗的顯示狀態
+        隱藏圖片與內部容器
         """
 
         if self._host_hwnd and win32gui.IsWindow(self._host_hwnd):
@@ -261,7 +255,7 @@ class ImageWallpaper(QRasterWindow):
 
     def _release_host(self) -> None:
         """
-        釋放內部原生視窗, 保留圖片及主程式提供的視窗
+        釋放內部原生容器
         """
 
         if self._target_events is not None:
@@ -292,7 +286,7 @@ class ImageWallpaper(QRasterWindow):
 
     def close(self) -> bool:
         """
-        關閉圖片視窗並釋放內部容器, 不關閉目標視窗
+        關閉圖片視窗並釋放內部容器
         """
 
         try:
@@ -341,7 +335,6 @@ class Instance(QObject):
 
         super().__init__(app)
 
-
         self.window: ImageWallpaper | None = None
         self._hwnd = 0
         self.current_image: Path | None = None
@@ -353,11 +346,10 @@ class Instance(QObject):
 
     def set_hwnd(self, hwnd: int) -> None:
         """
-        設定主程式提供的視窗控制代碼, 0 表示解除目標視窗
+        設定目標視窗控制代碼, 0 表示解除掛載
         """
 
         hwnd = int(hwnd)
-
         if hwnd and not win32gui.IsWindow(hwnd):
             raise ValueError("無效的目標視窗控制代碼")
 
@@ -368,6 +360,9 @@ class Instance(QObject):
 
 
     def get_hwnd(self) -> int:
+        """
+        取得視窗控制代碼
+        """
 
         return self._hwnd
 
@@ -399,8 +394,7 @@ class Instance(QObject):
 
     def set_scaling(self, mode: str, background_color: QColor | str = "#000000") -> None:
         """
-        設定 fill, fit 或 stretch 與不透明背景色, 可在載入前設定
-        換圖, 關閉及重新掛載時保留顯示選項
+        設定 fill, fit 或 stretch 與不透明背景色
         """
 
         if mode not in ("fill", "fit", "stretch"):
@@ -412,6 +406,7 @@ class Instance(QObject):
 
         self._scaling_mode = mode
         self._background_color = color
+
         if self.window is not None:
             self.window.scaling_mode = mode
             self.window.background_color = QColor(color)
@@ -421,7 +416,7 @@ class Instance(QObject):
     @Slot()
     def show(self) -> None:
         """
-        在指定視窗顯示已載入的圖片
+        顯示圖片
         """
 
         if self.window is None:
@@ -433,7 +428,7 @@ class Instance(QObject):
     @Slot()
     def hide(self) -> None:
         """
-        隱藏圖片輸出, 保留已載入的圖片與主程式提供的視窗
+        隱藏圖片
         """
 
         if self.window is not None:
@@ -443,7 +438,7 @@ class Instance(QObject):
     @Slot()
     def close(self) -> None:
         """
-        釋放圖片及內部容器, 保留目標 HWND 供重新載入圖片
+        釋放圖片及內部容器, 保留目標 HWND
         """
 
         try:

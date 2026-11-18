@@ -36,18 +36,15 @@ class MediaPreviewMenu(QMenu):
         self.media_dir = media_dir
         self.display_config: dict = {}
 
-
-        # 預覽視窗不搶焦點, 也不攔截滑鼠事件
+        # 預覽視窗不搶焦點, 不攔截滑鼠事件
         self.preview = QLabel(self, Qt.WindowType.ToolTip)
         self.preview.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.preview.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.preview.setStyleSheet("background: #202020; padding: 4px;")
 
-
         self.loading_image_path = loading_image_path
         self.preview_mode = False
         self.preview_action: QAction | None = None
-
 
         self.thumbnail_thread: ThumbnailThread = (
             thumbnail_thread if thumbnail_thread is not None
@@ -55,13 +52,11 @@ class MediaPreviewMenu(QMenu):
         )
         self.thumbnail_thread.thumbnail_ready.connect(self.update_preview)
 
-
         # 首次懸停 0.5 秒後顯示預覽
         self.preview_timer = QTimer(self)
         self.preview_timer.setSingleShot(True)
         self.preview_timer.setInterval(500)
         self.preview_timer.timeout.connect(self.show_preview)
-
 
         # 離開所有桌布選項滿 1 秒後退出預覽模式
         self.reset_timer = QTimer(self)
@@ -100,7 +95,6 @@ class MediaPreviewMenu(QMenu):
         if event.type() == QEvent.Type.ToolTip:
 
             action = self.actionAt(event.pos())
-
             # 空提示會回退到項目文字, 因此直接略過未截斷項目的提示事件
             if action is None or action.data() is None or action.text() == action.toolTip():
                 QToolTip.hideText()
@@ -112,17 +106,15 @@ class MediaPreviewMenu(QMenu):
     def mouseMoveEvent(self, event) -> None:
 
         super().mouseMoveEvent(event)
-        action = self.actionAt(event.position().toPoint())
 
+        action = self.actionAt(event.position().toPoint())
         if (
             action is None or
             not action.isEnabled() or
             action.data() is None
         ):
-
             self.leave_preview()
             return
-
 
         self.reset_timer.stop()
 
@@ -141,12 +133,14 @@ class MediaPreviewMenu(QMenu):
     def leaveEvent(self, event) -> None:
 
         self.leave_preview()
+
         super().leaveEvent(event)
 
 
     def hideEvent(self, event) -> None:
 
         self.reset_preview()
+
         super().hideEvent(event)
 
 
@@ -194,7 +188,6 @@ class MediaPreviewMenu(QMenu):
     def update_preview(self, media_path: str, preview_size: int, image: QImage) -> None:
 
         action = self.preview_action
-
         if (
             not self.preview_mode or
             action is None or
@@ -222,7 +215,6 @@ class MediaPreviewMenu(QMenu):
         ):
             return
 
-
         # 比例依目標螢幕, 尺寸與位置限制依選單所在螢幕
         screen = QApplication.screenAt(cursor) or self.screen()
         available = screen.availableGeometry()
@@ -236,13 +228,16 @@ class MediaPreviewMenu(QMenu):
         size = QSize(max(1, size.width()), max(1, size.height()))
 
         mode, color = "fill", "#000000"
+
         if self.preview_pixmap.cacheKey() != self.loading_pixmap.cacheKey():
+
             media_path = Path(action.data()).relative_to(self.media_dir).as_posix()
             geometry = (self.target_screen or screen).geometry()
             orientation = "landscape" if geometry.width() >= geometry.height() else "portrait"
             mode = get_scaling_mode(self.display_config, media_path, orientation)
             colors = self.display_config.get("backgroundColor", {})
             color = colors.get(media_path, "#000000")
+
             if mode == "fit" and media_path not in colors:
                 average = self.preview_pixmap.toImage().scaled(
                     1, 1, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation
@@ -251,11 +246,13 @@ class MediaPreviewMenu(QMenu):
 
         source = QRectF(self.preview_pixmap.rect())
         destination = QRectF(0, 0, size.width(), size.height())
+
         if mode == "fill":
             # 直接繪製置中裁切範圍, 避免先放大整張極寬或極高的縮圖
             scale = max(size.width() / source.width(), size.height() / source.height())
             width, height = size.width() / scale, size.height() / scale
             source = QRectF((source.width() - width) / 2, (source.height() - height) / 2, width, height)
+
         elif mode == "fit":
             fitted = source.size().scaled(destination.size(), Qt.AspectRatioMode.KeepAspectRatio)
             destination = QRectF(0, 0, fitted.width(), fitted.height())
@@ -271,7 +268,6 @@ class MediaPreviewMenu(QMenu):
         self.preview.setPixmap(pixmap)
         self.preview.setFixedSize(size + QSize(8, 8))
 
-
         # 優先放在選單左側, 空間不足時改放右側
         menu_rect = self.frameGeometry()
         x = menu_rect.left() - self.preview.width() - 8
@@ -279,11 +275,9 @@ class MediaPreviewMenu(QMenu):
         if x < available.left():
             x = menu_rect.right() + 8
 
-
         y = self.mapToGlobal(self.actionGeometry(action).topLeft()).y()
         x = max(available.left(), min(x, available.right() - self.preview.width() + 1))
         y = max(available.top(), min(y, available.bottom() - self.preview.height() + 1))
-
 
         self.preview.move(x, y)
         self.preview.show()

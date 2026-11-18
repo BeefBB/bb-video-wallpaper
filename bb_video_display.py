@@ -87,7 +87,7 @@ class _TargetEvents(QAbstractNativeEventFilter):
 
 class _StopThread(QThread):
     """
-    重掛時在背景停止 VLC, 讓 Qt 主執行緒繼續處理視窗訊息
+    "停止VLC"執行緒, 重掛時在背景執行以避免干擾 Qt 主執行緒
     """
 
     def __init__(self, stop: Callable[[], None], parent: QObject) -> None:
@@ -107,7 +107,7 @@ class _StopThread(QThread):
 
 class _VideoWindow(QRasterWindow):
     """
-    不透明背景與影片子視窗, VLC 停止後才可釋放
+    內部影片子視窗
     """
 
     def __init__(self, target_hwnd: int, color: QColor) -> None:
@@ -131,7 +131,7 @@ class _VideoWindow(QRasterWindow):
 
     def show(self) -> None:
         """
-        第一次顯示時建立不透明容器及影片子視窗
+        顯示影片, 第一次顯示時建立不透明容器及影片子視窗
         """
 
         if not win32gui.IsWindow(self.target_hwnd):
@@ -196,7 +196,7 @@ class _VideoWindow(QRasterWindow):
 
     def sync_geometry(self) -> None:
         """
-        依目標客戶區與 DPI 更新背景視窗尺寸
+        依目標視窗的客戶區與縮放比例更新圖片尺寸
         """
 
         if not win32gui.IsWindow(self.target_hwnd) or not win32gui.IsWindow(self.host_hwnd):
@@ -220,6 +220,9 @@ class _VideoWindow(QRasterWindow):
 
 
     def hide(self) -> None:
+        """
+        隱藏影片與內部容器
+        """
 
         if self.host_hwnd and win32gui.IsWindow(self.host_hwnd):
             win32gui.ShowWindow(self.host_hwnd, win32con.SW_HIDE)
@@ -292,7 +295,7 @@ class Instance(QObject):
 
     def _ensure_player(self) -> None:
         """
-        延後到載入媒體時才建立 VLC 資源
+        建立 VLC 資源
         """
 
         if self._player is not None:
@@ -408,7 +411,7 @@ class Instance(QObject):
 
     def set_media(self, path: Path | str) -> None:
         """
-        換片保留播放意圖, 清除舊進度; 非同步解碼失敗由 error 通知
+        載入影片, 保留播放意圖, 清除舊進度
         """
 
         source = Path(path).resolve(strict=True)
@@ -445,7 +448,7 @@ class Instance(QObject):
 
     def set_hwnd(self, hwnd: int, *, process_events: bool = False) -> None:
         """
-        停止舊輸出後換綁目標, 保留進度與播放意圖, 0 表示解除掛載
+        設定目標視窗控制代碼, 0 表示解除掛載
         """
 
         hwnd = int(hwnd)
@@ -491,13 +494,16 @@ class Instance(QObject):
 
 
     def get_hwnd(self) -> int:
+        """
+        取得視窗控制代碼
+        """
 
         return self._hwnd
 
 
     def set_scaling(self, mode: str, background_color: QColor | str = "#000000") -> None:
         """
-        設定 fill, fit 或 stretch 與不透明背景色, 可在載入前設定
+        設定 fill, fit 或 stretch 與 不透明背景色
         """
 
         if mode not in ("fill", "fit", "stretch"):
@@ -598,7 +604,7 @@ class Instance(QObject):
 
     def play(self) -> None:
         """
-        顯示輸出並播放, 載入期間以最新的播放意圖為準
+        顯示輸出並播放
         """
 
         self._request_playback("play")
@@ -606,7 +612,7 @@ class Instance(QObject):
 
     def pause(self) -> None:
         """
-        顯示輸出並暫停, 尚未就緒時等播放通知後套用
+        顯示輸出並暫停
         """
 
         self._request_playback("pause")
@@ -614,7 +620,7 @@ class Instance(QObject):
 
     def _request_playback(self, state: str) -> None:
         """
-        等待重掛時只更新播放意圖, 有效目標綁定後再恢復輸出
+        請求播放控制, 若尚未就緒則保留意圖
         """
 
         if self._media is None:
@@ -648,6 +654,9 @@ class Instance(QObject):
 
 
     def _is_ready(self) -> bool:
+        """
+        VLC 播放器是否已就緒
+        """
 
         if self._player is None:
             return False
