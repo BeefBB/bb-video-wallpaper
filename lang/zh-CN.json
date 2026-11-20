@@ -72,6 +72,7 @@
   "auto_pause_battery": "未接通电源时自动暂停",
   "font_size": "文字大小",
   "preview_size": "预览大小",
+  "preview_disabled": "禁用预览",
   "size_largest": "极大",
   "size_large": "大",
   "size_normal": "普通",

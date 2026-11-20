@@ -17,8 +17,8 @@ import threading
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import QAbstractAnimation, QObject, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QImage, QImageWriter
+from PySide6.QtCore import QAbstractAnimation, QEvent, QObject, QPointF, Qt, Signal
+from PySide6.QtGui import QAction, QColor, QImage, QImageWriter, QMouseEvent
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -505,6 +505,47 @@ class MediaPreviewTests(QtTestCase):
 
         self.display_preview_mock.assert_called_once_with()
         self.assertEqual(self.menu.preview_pixmap.toImage().pixelColor(0, 0), QColor("blue"))
+
+
+    def test_disable_ignores_queued_result_and_hover_until_reenabled(self) -> None:
+        """
+        禁用時忽略佇列結果與懸停, 重新啟用後恢復首次等待與縮圖請求
+        """
+
+        self.worker.request = mock.Mock()
+        self.menu.popup(self.app.primaryScreen().availableGeometry().center())
+        position = self.menu.actionGeometry(self.first).center()
+        cursor_position = self.menu.mapToGlobal(position)
+        event = QMouseEvent(
+            QEvent.Type.MouseMove, QPointF(position), QPointF(cursor_position),
+            Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier
+        )
+        image = self.thumbnail()
+        media_path = self.first.data()
+        thread = threading.Thread(target=lambda: self.worker.thumbnail_ready.emit(media_path, 3, image))
+        thread.start()
+        thread.join(timeout=5)
+        self.assertFalse(thread.is_alive())
+
+        self.menu.preview_timer.start()
+        self.menu.set_preview_size(0)
+
+        with mock.patch.object(media_preview.QCursor, "pos", return_value=cursor_position):
+
+            self.menu.mouseMoveEvent(event)
+            self.menu.show_preview()
+            self.app.processEvents()
+            self.display_preview_mock.assert_not_called()
+            self.worker.request.assert_not_called()
+            self.assertFalse(self.menu.preview_timer.isActive())
+            self.assertFalse(self.menu.preview_mode)
+            self.assertTrue(self.menu.preview.isHidden())
+
+            self.menu.set_preview_size(3)
+            self.menu.mouseMoveEvent(event)
+            self.assertTrue(self.menu.preview_timer.isActive())
+            self.menu.show_preview()
+            self.worker.request.assert_called_once_with(Path(media_path), preview_size=3, priority=True)
 
 
     def test_background_result_updates_preview_on_qt_main_thread(self) -> None:

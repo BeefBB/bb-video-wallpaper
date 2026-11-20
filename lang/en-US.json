@@ -72,6 +72,7 @@
   "auto_pause_battery": "Pause when on battery",
   "font_size": "Text Size",
   "preview_size": "Preview Size",
+  "preview_disabled": "Disable Preview",
   "size_largest": "Extra Large",
   "size_large": "Large",
   "size_normal": "Normal",

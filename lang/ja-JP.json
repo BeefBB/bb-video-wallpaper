@@ -72,6 +72,7 @@
   "auto_pause_battery": "バッテリー駆動時に自動的に一時停止",
   "font_size": "文字サイズ",
   "preview_size": "プレビューサイズ",
+  "preview_disabled": "プレビューを無効化",
   "size_largest": "特大",
   "size_large": "大",
   "size_normal": "標準",

@@ -112,7 +112,7 @@ Automatically pause when on battery | "autoPauseIfOnBattery" | false
 Hardware decoding | "hardwareDecoding" | any (automatic), options: any, d3d11va, dxva2, none
 Font size | "fontSize" | 11 pt, 6-48
 Number of recent entries to display | "recentDisplayCount" | 6 entries, 0-20
-Preview size | "previewSize" | 3 (Normal), 1-5 maps to 100-500 px
+Preview size | "previewSize" | 3 (Normal), 0 disables previews, 1-5 maps to 100-500 px
 Delay before showing the first preview | "previewDelayMs" | 1000 ms, 0-10000
 Delay before leaving preview mode after moving away | "previewResetDelayMs" | 2000 ms, 0-10000
 Preview animation duration | "previewAnimationDurationMs" | 140 ms, 0-10000

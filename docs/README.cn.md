@@ -112,7 +112,7 @@ Folder/
 硬件解码 | "hardwareDecoding" | any (自动), 可选 any, d3d11va, dxva2, none
 字体大小 | "fontSize" | 11 pt, 6-48
 最近记录显示条数 | "recentDisplayCount" | 6 条, 0-20
-预览大小 | "previewSize" | 3 (普通), 1-5 对应 100-500 px
+预览大小 | "previewSize" | 3 (普通), 0 禁用预览, 1-5 对应 100-500 px
 首次显示预览的等待时间 | "previewDelayMs" | 1000 ms, 0-10000
 离开选项后退出预览模式的延迟 | "previewResetDelayMs" | 2000 ms, 0-10000
 预览动画时间 | "previewAnimationDurationMs" | 140 ms, 0-10000

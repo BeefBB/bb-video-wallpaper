@@ -120,6 +120,7 @@ class ConfigTests(unittest.TestCase):
         preserved = {
             **repaired,
             "fontSize": 24,
+            "previewSize": 0,
             "previewDelayMs": 500,
             "previewResetDelayMs": 1500,
             "previewAnimationDurationMs": 250,

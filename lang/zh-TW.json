@@ -72,6 +72,7 @@
   "auto_pause_battery": "沒插電時自動暫停",
   "font_size": "文字大小",
   "preview_size": "預覽大小",
+  "preview_disabled": "禁用預覽",
   "size_largest": "極大",
   "size_large": "大",
   "size_normal": "普通",

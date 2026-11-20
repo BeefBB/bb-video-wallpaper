@@ -287,21 +287,28 @@ class ImportMenuTests(QtTestCase):
         store.load.return_value = {"previewSize": 3, "futureOption": 9}
         store.save.return_value = False
 
-        self.tray.preview_size_actions[4].trigger()
+        self.tray.preview_size_actions[0].trigger()
 
-        store.save.assert_called_once_with({"previewSize": 4, "futureOption": 9})
+        store.save.assert_called_once_with({"previewSize": 0, "futureOption": 9})
         self.assertEqual(self.tray.preview_size, 3)
         self.assertTrue(self.tray.preview_size_actions[3].isChecked())
-        self.assertFalse(self.tray.preview_size_actions[4].isChecked())
+        self.assertFalse(self.tray.preview_size_actions[0].isChecked())
         for menu in menus:
             menu.set_preview_size.assert_not_called()
 
         store.save.return_value = True
-        self.tray.preview_size_actions[4].trigger()
+        self.tray.preview_size_actions[0].trigger()
 
-        self.assertEqual(self.tray.preview_size, 4)
+        self.assertEqual(self.tray.preview_size, 0)
         for menu in menus:
-            menu.set_preview_size.assert_called_once_with(4)
+            menu.set_preview_size.assert_called_once_with(0)
+
+        self.tray.preview_size_actions[4].trigger()
+        self.assertEqual(self.tray.preview_size, 4)
+        self.assertTrue(self.tray.preview_size_actions[4].isChecked())
+        self.assertFalse(self.tray.preview_size_actions[0].isChecked())
+        for menu in menus:
+            self.assertEqual(menu.set_preview_size.call_args_list, [mock.call(0), mock.call(4)])
 
 
     def test_hardware_decoding_failures_restore_selection_and_retry_restarts(self) -> None:
@@ -490,7 +497,7 @@ class ImportMenuTests(QtTestCase):
 
     def test_completed_import_waits_for_reattach_and_plays_only_once(self) -> None:
         """
-        驗證匯入結果等待重掛結束, 重複完成訊號也只套用一次
+        驗證匯入結果等待重掛結束, 重複完成訊號只套用一次且禁用後不預產縮圖
         """
 
         self.namespace["get_media"].return_value = [self.source]
@@ -501,6 +508,8 @@ class ImportMenuTests(QtTestCase):
         self.app.processEvents()
         self.assertIs(self.tray.import_thread, worker)
         self.tray.play_from_menu.assert_not_called()
+
+        self.tray.preview_size_actions[0].trigger()
 
         # 等待中的回呼若又遇上重掛, 繼續等下一次結束訊號
         self.reattach_notifier.reattach_finished.emit()
@@ -514,6 +523,7 @@ class ImportMenuTests(QtTestCase):
         self.assertIsNone(self.tray.import_thread)
         self.tray.play_from_menu.assert_called_once_with(self.destination, "screen-a")
         self.tray.refresh_media_menu.assert_called_once_with()
+        self.tray.thumbnail_thread.request.assert_not_called()
 
 
     def test_stop_overrides_queued_import_after_reattach_and_allows_new_import(self) -> None:

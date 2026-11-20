@@ -1186,6 +1186,7 @@ class Tray:
         for size, text_key in (
             (5, "size_largest"), (4, "size_large"),
             (3, "size_normal"), (2, "size_small"), (1, "size_smallest"),
+            (0, "preview_disabled"),
         ):
             action = QAction(tr(text_key), preview_size_menu)
             action.setCheckable(True)
@@ -2053,8 +2054,9 @@ class Tray:
 
         if worker.destinations:
 
-            for destination in dict.fromkeys(worker.destinations):
-                self.thumbnail_thread.request(destination, preview_size=self.preview_size)
+            if self.preview_size > 0:
+                for destination in dict.fromkeys(worker.destinations):
+                    self.thumbnail_thread.request(destination, preview_size=self.preview_size)
 
             if not worker.cancelled and worker.destination is not None:
                 config_store.remember_recent(worker.destination)

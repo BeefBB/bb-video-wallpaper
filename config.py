@@ -298,14 +298,14 @@ class ConfigStore:
             report("設定欄位 recentDisplayCount 超出 0 到 20, 已限制範圍")
         config["recentDisplayCount"] = max(0, min(20, recent_display_count))
 
-        # 預覽大小使用整數, 限制在 1 到 5
+        # 預覽大小使用整數, 0 表示禁用, 1 到 5 對應尺寸
         preview_size = config.get("previewSize", 3)
         if type(preview_size) is not int:
             report("設定欄位 previewSize 無效, 使用預設值")
             preview_size = 3
-        elif not 1 <= preview_size <= 5:
-            report("設定欄位 previewSize 超出 1 到 5, 已限制範圍")
-        config["previewSize"] = max(1, min(5, preview_size))
+        elif not 0 <= preview_size <= 5:
+            report("設定欄位 previewSize 超出 0 到 5, 已限制範圍")
+        config["previewSize"] = max(0, min(5, preview_size))
 
         # 預覽時間使用整數 ms, 限制在 0 到 10000
         for key, default in (

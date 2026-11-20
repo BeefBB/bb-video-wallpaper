@@ -81,6 +81,10 @@ class MediaPreviewMenu(QMenu):
 
         self.reset_preview()
         self.preview_size = preview_size
+
+        if preview_size == 0:
+            return
+
         width = preview_size * 100
         self.loading_pixmap = QPixmap(
             self.loading_image_path.with_name(f"loading{width}.jpg")
@@ -113,6 +117,9 @@ class MediaPreviewMenu(QMenu):
     def mouseMoveEvent(self, event) -> None:
 
         super().mouseMoveEvent(event)
+
+        if self.preview_size == 0:
+            return
 
         action = self.actionAt(event.position().toPoint())
         if (
@@ -178,6 +185,7 @@ class MediaPreviewMenu(QMenu):
         cursor = QCursor.pos()
 
         if (
+            self.preview_size == 0 or
             not self.isVisible() or
             action is None or
             self.actionAt(self.mapFromGlobal(cursor)) != action

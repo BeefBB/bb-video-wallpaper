@@ -112,7 +112,7 @@ Folder/
 ハードウェアデコード | "hardwareDecoding" | any (自動), 選択肢: any, d3d11va, dxva2, none
 フォントサイズ | "fontSize" | 11 pt, 6-48
 最近の使用履歴の表示件数 | "recentDisplayCount" | 6 件, 0-20
-プレビューサイズ | "previewSize" | 3 (標準), 1-5 は 100-500 px に対応
+プレビューサイズ | "previewSize" | 3 (標準), 0 はプレビューを無効化, 1-5 は 100-500 px に対応
 初回プレビュー表示までの待機時間 | "previewDelayMs" | 1000 ms, 0-10000
 項目から離れた後にプレビューモードを終了するまでの時間 | "previewResetDelayMs" | 2000 ms, 0-10000
 プレビューアニメーションの時間 | "previewAnimationDurationMs" | 140 ms, 0-10000

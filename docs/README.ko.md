@@ -112,7 +112,7 @@ Folder/
 하드웨어 디코딩 | "hardwareDecoding" | any (자동), 사용 가능한 값: any, d3d11va, dxva2, none
 글꼴 크기 | "fontSize" | 11 pt, 6-48
 최근 기록 표시 개수 | "recentDisplayCount" | 6개, 0-20
-미리보기 크기 | "previewSize" | 3 (보통), 1-5는 100-500 px에 대응
+미리보기 크기 | "previewSize" | 3 (보통), 0은 미리보기 사용 안 함, 1-5는 100-500 px에 대응
 첫 미리보기 표시 전 대기 시간 | "previewDelayMs" | 1000 ms, 0-10000
 항목을 벗어난 뒤 미리보기 모드를 종료하기까지의 시간 | "previewResetDelayMs" | 2000 ms, 0-10000
 미리보기 애니메이션 시간 | "previewAnimationDurationMs" | 140 ms, 0-10000
