@@ -103,22 +103,25 @@ Folder/
 
 ### config.json
 
-名稱                     | 項目                    | 預設值
----                      | ---                     | ---
-語言                     | "language"              | 缺少欄位時: 安裝語言 > 系統語言 > 繁體中文; 已有欄位但無效時: 繁體中文
-視窗最大化時自動暫停     | "autoPauseIfFullscreen" | true
-螢幕關閉時自動暫停       | "autoPauseIfScreenOff"  | true
-沒插電時自動暫停         | "autoPauseIfOnBattery"  | false
-硬體解碼                 | "hardwareDecoding"      | any (自動), 可選 any, d3d11va, dxva2, none
-文字大小                 | "fontSize"              | 11 pt, 6-48
-最近紀錄顯示筆數         | "recentDisplayCount"    | 6 筆, 0-20
-預覽大小                 | "previewSize"           | 3 (普通), 1-5 對應 100-500 px
-多選匯入總大小上限       | "maxBatchImportKiB"     | 31457280 KiB (30 GiB), 正整數
-最近使用紀錄             | "recentVideo"           | [], 0-20
-各螢幕桌布               | "screenWallpapers"      | {}
-螢幕跟隨關係             | "screenFollows"         | {}
-素材縮放模式             | "scalingMode"           | {}, 無紀錄時使用 fill
-素材留白顏色             | "backgroundColor"       | {}, 完整顯示時自動取色並保存
+名稱                     | 項目                         | 預設值
+---                      | ---                          | ---
+語言                     | "language"                   | 缺少欄位時: 安裝語言 > 系統語言 > 繁體中文; 已有欄位但無效時: 繁體中文
+視窗最大化時自動暫停     | "autoPauseIfFullscreen"      | true
+螢幕關閉時自動暫停       | "autoPauseIfScreenOff"       | true
+沒插電時自動暫停         | "autoPauseIfOnBattery"       | false
+硬體解碼                 | "hardwareDecoding"           | any (自動), 可選 any, d3d11va, dxva2, none
+文字大小                 | "fontSize"                   | 11 pt, 6-48
+最近紀錄顯示筆數         | "recentDisplayCount"         | 6 筆, 0-20
+預覽大小                 | "previewSize"                | 3 (普通), 1-5 對應 100-500 px
+首次顯示預覽的等待時間   | "previewDelayMs"             | 1000 ms, 0-10000
+離開選項後退出預覽模式   | "previewResetDelayMs"        | 2000 ms, 0-10000
+預覽動畫時間             | "previewAnimationDurationMs" | 140 ms, 0-10000
+多選匯入總大小上限       | "maxBatchImportKiB"          | 31457280 KiB (30 GiB), 正整數
+最近使用紀錄             | "recentVideo"                | [], 0-20
+各螢幕桌布               | "screenWallpapers"           | {}
+螢幕跟隨關係             | "screenFollows"              | {}
+素材縮放模式             | "scalingMode"                | {}, 無紀錄時使用 fill
+素材留白顏色             | "backgroundColor"            | {}, 完整顯示時自動取色並保存
 
 語言代碼須完全符合 `zh-TW`, `zh-CN`, `ja-JP`, `ko-KR`, `en-US`; 例如系統語言為 `en-GB` 時不會自動對應 `en-US`
 
@@ -148,8 +151,6 @@ VLC 桌布播放參數         |                            | 關閉音訊, 不�
 跟隨螢幕定期同步間隔     | SYNC_INTERVAL_MS           | 60 s
 跟隨螢幕同步誤差容許值   | SYNC_TOLERANCE_MS          | 0.5 s
 啟動時還原跟隨關係前等待 | RESTORE_DELAY_MS           | 3 s , 有已保存的跟隨關係時才等待
-首次顯示預覽的等待時間   | preview_timer              | 1 s
-離開選項後退出預覽模式   | reset_timer                | 2 s
 預覽圖片最長邊           |                            | `previewSize * 100` px, 不含左右各 4 px 內距, 螢幕空間不足時縮小
 預覽背景色               |                            | #202020
 預覽內距                 |                            | 4 px

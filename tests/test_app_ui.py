@@ -37,7 +37,8 @@ class PreviewMenu(QMenu):
 
     def __init__(
         self, title, parent, *, media_dir, thumbnail_dir, loading_image_path,
-        preview_size=3, thumbnail_thread=None
+        preview_size=3, preview_delay_ms=1000, preview_reset_delay_ms=2000,
+        preview_animation_duration_ms=140, thumbnail_thread=None
     ):
         """
         建立 Qt 選單, 保存共用縮圖工作物件並替換預覽重設操作

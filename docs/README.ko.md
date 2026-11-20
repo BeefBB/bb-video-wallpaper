@@ -113,6 +113,9 @@ Folder/
 글꼴 크기 | "fontSize" | 11 pt, 6-48
 최근 기록 표시 개수 | "recentDisplayCount" | 6개, 0-20
 미리보기 크기 | "previewSize" | 3 (보통), 1-5는 100-500 px에 대응
+첫 미리보기 표시 전 대기 시간 | "previewDelayMs" | 1000 ms, 0-10000
+항목을 벗어난 뒤 미리보기 모드를 종료하기까지의 시간 | "previewResetDelayMs" | 2000 ms, 0-10000
+미리보기 애니메이션 시간 | "previewAnimationDurationMs" | 140 ms, 0-10000
 여러 파일 선택 시 총 크기 제한 | "maxBatchImportKiB" | 31457280 KiB (30 GiB), 양의 정수
 최근 사용 기록 | "recentVideo" | [], 0-20개
 모니터별 배경화면 | "screenWallpapers" | {}
@@ -148,8 +151,6 @@ VLC 중지 시 깨우기 간격 |  | 0.05 s
 따라가는 모니터의 정기 동기화 간격 | SYNC_INTERVAL_MS | 60 s
 따라가는 모니터의 동기화 오차 허용값 | SYNC_TOLERANCE_MS | 0.5 s
 시작 시 모니터 따라가기 관계 복원 전 대기 시간 | RESTORE_DELAY_MS | 3 s, 저장된 따라가기 관계가 있을 때만 대기
-첫 미리보기 표시 전 대기 시간 | preview_timer | 1 s
-항목을 벗어난 뒤 미리보기 모드를 종료하기까지의 시간 | reset_timer | 2 s
 미리보기 이미지의 가장 긴 변 |  | `previewSize * 100` px, 좌우 각각 4 px의 안쪽 여백 제외, 화면 공간이 부족하면 축소
 미리보기 배경색 |  | #202020
 미리보기 안쪽 여백 |  | 4 px

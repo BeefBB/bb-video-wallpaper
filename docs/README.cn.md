@@ -113,6 +113,9 @@ Folder/
 字体大小 | "fontSize" | 11 pt, 6-48
 最近记录显示条数 | "recentDisplayCount" | 6 条, 0-20
 预览大小 | "previewSize" | 3 (普通), 1-5 对应 100-500 px
+首次显示预览的等待时间 | "previewDelayMs" | 1000 ms, 0-10000
+离开选项后退出预览模式的延迟 | "previewResetDelayMs" | 2000 ms, 0-10000
+预览动画时间 | "previewAnimationDurationMs" | 140 ms, 0-10000
 多选导入总大小上限 | "maxBatchImportKiB" | 31457280 KiB (30 GiB), 正整数
 最近使用记录 | "recentVideo" | [], 0-20 条
 各屏幕壁纸 | "screenWallpapers" | {}
@@ -148,8 +151,6 @@ VLC 壁纸播放参数 |  | 关闭音频, 不显示视频标题, 循环播放参
 跟随屏幕定期同步间隔 | SYNC_INTERVAL_MS | 60 s
 跟随屏幕同步误差容许值 | SYNC_TOLERANCE_MS | 0.5 s
 启动时恢复跟随关系前的等待 | RESTORE_DELAY_MS | 3 s, 仅在有已保存的跟随关系时等待
-首次显示预览的等待时间 | preview_timer | 1 s
-离开选项后退出预览模式的延迟 | reset_timer | 2 s
 预览图片最长边 |  | `previewSize * 100` px, 不含左右各 4 px 内边距, 屏幕空间不足时缩小
 预览背景色 |  | #202020
 预览内边距 |  | 4 px

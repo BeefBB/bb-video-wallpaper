@@ -1056,10 +1056,14 @@ class Tray:
 
         # 設定檔
         config = config_store.load()
-        # 語言代碼, 字型大小, 縮圖預覽大小, 硬體解碼, 螢幕跟隨設定
+        # 語言代碼, 字型大小, 縮圖預覽大小, 首次顯示預覽的等待時間, 
+        # 離開選項後退出預覽模式的時間, 預覽動畫時間, 硬體解碼, 螢幕跟隨設定
         self.current_language_code = config.get("language", "zh-TW")
         self.font_size = config.get("fontSize", 11)
         self.preview_size = config.get("previewSize", 3)
+        self.preview_delay_ms = config.get("previewDelayMs", 1000)
+        self.preview_reset_delay_ms = config.get("previewResetDelayMs", 2000)
+        self.preview_animation_duration_ms = config.get("previewAnimationDurationMs", 140)
         self.hardware_decoding = config.get("hardwareDecoding", "any")
         self.saved_follows: dict[str, str] = config.get("screenFollows", {})
 
@@ -1088,6 +1092,9 @@ class Tray:
             thumbnail_dir=THUMBNAIL_DIR,
             loading_image_path=LOADING_IMAGE_PATH,
             preview_size=self.preview_size,
+            preview_delay_ms=self.preview_delay_ms,
+            preview_reset_delay_ms=self.preview_reset_delay_ms,
+            preview_animation_duration_ms=self.preview_animation_duration_ms,
             thumbnail_thread=self.thumbnail_thread
         )
         self.media_menu.aboutToShow.connect(self.refresh_media_menu)
@@ -1388,6 +1395,9 @@ class Tray:
                     thumbnail_dir=THUMBNAIL_DIR,
                     loading_image_path=LOADING_IMAGE_PATH,
                     preview_size=self.preview_size,
+                    preview_delay_ms=self.preview_delay_ms,
+                    preview_reset_delay_ms=self.preview_reset_delay_ms,
+                    preview_animation_duration_ms=self.preview_animation_duration_ms,
                     thumbnail_thread=self.thumbnail_thread
                 )
 

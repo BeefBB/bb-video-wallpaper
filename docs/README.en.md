@@ -113,6 +113,9 @@ Hardware decoding | "hardwareDecoding" | any (automatic), options: any, d3d11va,
 Font size | "fontSize" | 11 pt, 6-48
 Number of recent entries to display | "recentDisplayCount" | 6 entries, 0-20
 Preview size | "previewSize" | 3 (Normal), 1-5 maps to 100-500 px
+Delay before showing the first preview | "previewDelayMs" | 1000 ms, 0-10000
+Delay before leaving preview mode after moving away | "previewResetDelayMs" | 2000 ms, 0-10000
+Preview animation duration | "previewAnimationDurationMs" | 140 ms, 0-10000
 Total size limit for multiple selections | "maxBatchImportKiB" | 31457280 KiB (30 GiB), positive integer
 Recently used media | "recentVideo" | [], 0-20 entries
 Wallpaper for each monitor | "screenWallpapers" | {}
@@ -148,8 +151,6 @@ Number of rotated logs to keep |  | 3 files
 Periodic synchronization interval for following monitors | SYNC_INTERVAL_MS | 60 s
 Playback synchronization tolerance for following monitors | SYNC_TOLERANCE_MS | 0.5 s
 Delay before restoring monitor follow relationships on startup | RESTORE_DELAY_MS | 3 s, only when saved follow relationships exist
-Delay before showing the first preview | preview_timer | 1 s
-Delay before leaving preview mode after moving away | reset_timer | 2 s
 Longest preview image edge |  | `previewSize * 100` px, excluding 4 px of padding on each side; shrinks when screen space is insufficient
 Preview background color |  | #202020
 Preview padding |  | 4 px

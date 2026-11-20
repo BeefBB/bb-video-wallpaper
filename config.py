@@ -26,7 +26,7 @@ CONFIG_DEFAULTS = {
 CONFIG_KEYS = set(CONFIG_DEFAULTS) | {
     "fontSize", "recentDisplayCount", "previewSize", "language", "recentVideo",
     "screenWallpapers", "screenFollows", "scalingMode", "backgroundColor", "hardwareDecoding",
-    "maxBatchImportKiB",
+    "maxBatchImportKiB", "previewDelayMs", "previewResetDelayMs", "previewAnimationDurationMs",
 }
 
 SUPPORTED_LANGUAGES = {
@@ -306,6 +306,20 @@ class ConfigStore:
         elif not 1 <= preview_size <= 5:
             report("設定欄位 previewSize 超出 1 到 5, 已限制範圍")
         config["previewSize"] = max(1, min(5, preview_size))
+
+        # 預覽時間使用整數 ms, 限制在 0 到 10000
+        for key, default in (
+            ("previewDelayMs", 1000),
+            ("previewResetDelayMs", 2000),
+            ("previewAnimationDurationMs", 140),
+        ):
+            value = config.get(key, default)
+            if type(value) is not int:
+                report("設定欄位 %s 無效, 使用預設值", key)
+                value = default
+            elif not 0 <= value <= 10000:
+                report("設定欄位 %s 超出 0 到 10000, 已限制範圍", key)
+            config[key] = max(0, min(10000, value))
 
         # 多選匯入總大小上限, 使用正整數 KiB
         max_batch_import_kib = config.get("maxBatchImportKiB", 30 * 1024 * 1024)

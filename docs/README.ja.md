@@ -113,6 +113,9 @@ Folder/
 フォントサイズ | "fontSize" | 11 pt, 6-48
 最近の使用履歴の表示件数 | "recentDisplayCount" | 6 件, 0-20
 プレビューサイズ | "previewSize" | 3 (標準), 1-5 は 100-500 px に対応
+初回プレビュー表示までの待機時間 | "previewDelayMs" | 1000 ms, 0-10000
+項目から離れた後にプレビューモードを終了するまでの時間 | "previewResetDelayMs" | 2000 ms, 0-10000
+プレビューアニメーションの時間 | "previewAnimationDurationMs" | 140 ms, 0-10000
 複数選択時の合計サイズ上限 | "maxBatchImportKiB" | 31457280 KiB (30 GiB), 正の整数
 最近の使用履歴 | "recentVideo" | [], 0-20 件
 各モニターの壁紙 | "screenWallpapers" | {}
@@ -148,8 +151,6 @@ VLC 停止時のウェイクアップ間隔 |  | 0.05 s
 追従モニターの定期同期間隔 | SYNC_INTERVAL_MS | 60 s
 追従モニターの同期誤差許容値 | SYNC_TOLERANCE_MS | 0.5 s
 起動時に追従関係を復元するまでの待機時間 | RESTORE_DELAY_MS | 3 s, 保存済みの追従関係がある場合のみ待機
-初回プレビュー表示までの待機時間 | preview_timer | 1 s
-項目から離れた後にプレビューモードを終了するまでの時間 | reset_timer | 2 s
 プレビュー画像の最長辺 |  | `previewSize * 100` px, 左右それぞれ 4 px の内側余白を除く; 画面の空き領域が足りない場合は縮小
 プレビュー背景色 |  | #202020
 プレビューの内側余白 |  | 4 px

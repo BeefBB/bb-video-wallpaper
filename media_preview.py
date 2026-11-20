@@ -27,6 +27,9 @@ class MediaPreviewMenu(QMenu):
         thumbnail_dir: Path,
         loading_image_path: Path,
         preview_size: int = 3,
+        preview_delay_ms: int = 1000,
+        preview_reset_delay_ms: int = 2000,
+        preview_animation_duration_ms: int = 140,
         thumbnail_thread: ThumbnailThread | None = None
     ) -> None:
 
@@ -43,7 +46,7 @@ class MediaPreviewMenu(QMenu):
         self.preview.setStyleSheet("background: #202020; padding: 4px;")
 
         self.preview_animation = QPropertyAnimation(self.preview, b"pos", self)
-        self.preview_animation.setDuration(140)
+        self.preview_animation.setDuration(preview_animation_duration_ms)
         self.preview_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
 
         self.loading_image_path = loading_image_path
@@ -56,16 +59,16 @@ class MediaPreviewMenu(QMenu):
         )
         self.thumbnail_thread.thumbnail_ready.connect(self.update_preview)
 
-        # 首次懸停 1 秒後顯示預覽
+        # 首次懸停達設定時間後顯示預覽
         self.preview_timer = QTimer(self)
         self.preview_timer.setSingleShot(True)
-        self.preview_timer.setInterval(1000)
+        self.preview_timer.setInterval(preview_delay_ms)
         self.preview_timer.timeout.connect(self.show_preview)
 
-        # 離開所有桌布選項滿 2 秒後退出預覽模式
+        # 離開所有桌布選項達設定時間後退出預覽模式
         self.reset_timer = QTimer(self)
         self.reset_timer.setSingleShot(True)
-        self.reset_timer.setInterval(2000)
+        self.reset_timer.setInterval(preview_reset_delay_ms)
         self.reset_timer.timeout.connect(self.reset_preview)
 
         self.set_preview_size(preview_size)
