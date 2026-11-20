@@ -85,7 +85,7 @@ class ImportMenuTests(QtTestCase):
         self.source.write_bytes(b"sample contents")
         self.destination = Path(self.temp_dir.name) / "imported.mp4"
         config_store = mock.Mock()
-        config_store.load.return_value = {}
+        config_store.load.return_value = {"maxBatchImportKiB": 30 * 1024 * 1024}
 
         self.namespace = {
             "QFileDialog": mock.Mock(),

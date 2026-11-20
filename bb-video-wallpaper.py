@@ -20,7 +20,7 @@ from PySide6.QtGui import QAction, QActionGroup, QIcon, QFont, QImage, QScreen, 
 import bb_image_display
 import bb_video_display
 from config import CONFIG_DEFAULTS, ConfigStore, SUPPORTED_LANGUAGES, get_scaling_mode
-from media_import import MAX_BATCH_IMPORT_BYTES, MediaImportCancelled, check_import_cancelled, import_media
+from media_import import MediaImportCancelled, check_import_cancelled, import_media
 from media_preview import MediaPreviewMenu
 from playback import AutoPauseReason, PlaybackState, update_auto_pause
 from screen_follow import AutoPauseHandler, FollowController, RESTORE_DELAY_MS, SYNC_INTERVAL_MS
@@ -257,12 +257,13 @@ class MediaImportThread(QThread):
 
             check_import_cancelled(self.isInterruptionRequested)
 
-            if len(self.sources) > 1 and total_size > MAX_BATCH_IMPORT_BYTES:
+            max_batch_import_bytes = config_store.load()["maxBatchImportKiB"] * 1024
+            if len(self.sources) > 1 and total_size > max_batch_import_bytes:
                 gigabyte = 1024 * 1024 * 1024
                 raise ValueError(tr("media_import_limit_exceeded").format(
                     # 向上取至小數點後兩位, 避免超限時仍顯示與上限相同的大小
                     size=(total_size * 100 + gigabyte - 1) // gigabyte / 100,
-                    limit=MAX_BATCH_IMPORT_BYTES / gigabyte
+                    limit=max_batch_import_bytes / gigabyte
                 ))
 
             completed_size = 0

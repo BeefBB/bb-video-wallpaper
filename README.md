@@ -113,6 +113,7 @@ Folder/
 文字大小                 | "fontSize"              | 11 pt, 6-48
 最近紀錄顯示筆數         | "recentDisplayCount"    | 6 筆, 0-20
 預覽大小                 | "previewSize"           | 3 (普通), 1-5 對應 100-500 px
+多選匯入總大小上限       | "maxBatchImportKiB"     | 31457280 KiB (30 GiB), 正整數
 最近使用紀錄             | "recentVideo"           | [], 0-20
 各螢幕桌布               | "screenWallpapers"      | {}
 螢幕跟隨關係             | "screenFollows"         | {}
@@ -164,7 +165,6 @@ VLC 桌布播放參數         |                            | 關閉音訊, 不�
 支援影片副檔名           | SUPPORTED_VIDEO_EXTENSIONS | .mp4, .mkv, .webm, .mov, .avi
 支援圖片副檔名           | SUPPORTED_IMAGE_EXTENSIONS | .jpg, .jpeg, .png, .bmp, .webp
 匯入時額外預留空間       | IMPORT_RESERVE_BYTES       | 200 MiB
-多選匯入總大小上限       | MAX_BATCH_IMPORT_BYTES     | 30 GiB, 含內容重複的素材
 匯入讀取區塊大小         |                            | SHA-256 計算與檔案複製皆為 1 MiB
 最大化偵測邊界容許值     | FULLSCREEN_MARGIN          | 4 px, 以螢幕工作區域判定
 最大化偵測排除視窗標題   | WINDOW_TITLE_BLACKLIST     | `""`, `default ime`, `msctfime ui`, `windows 輸入體驗`, `搜尋`, `search`, `開始`, `start`, `工作檢視`, `task view`

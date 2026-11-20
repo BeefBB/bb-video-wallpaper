@@ -113,6 +113,7 @@ Folder/
 글꼴 크기 | "fontSize" | 11 pt, 6-48
 최근 기록 표시 개수 | "recentDisplayCount" | 6개, 0-20
 미리보기 크기 | "previewSize" | 3 (보통), 1-5는 100-500 px에 대응
+여러 파일 선택 시 총 크기 제한 | "maxBatchImportKiB" | 31457280 KiB (30 GiB), 양의 정수
 최근 사용 기록 | "recentVideo" | [], 0-20개
 모니터별 배경화면 | "screenWallpapers" | {}
 모니터 따라가기 관계 | "screenFollows" | {}
@@ -164,7 +165,6 @@ VLC 중지 시 깨우기 간격 |  | 0.05 s
 지원하는 동영상 확장자 | SUPPORTED_VIDEO_EXTENSIONS | .mp4, .mkv, .webm, .mov, .avi
 지원하는 이미지 확장자 | SUPPORTED_IMAGE_EXTENSIONS | .jpg, .jpeg, .png, .bmp, .webp
 가져오기 시 추가로 확보할 여유 공간 | IMPORT_RESERVE_BYTES | 200 MiB
-여러 파일 선택 시 총 크기 제한 | MAX_BATCH_IMPORT_BYTES | 30 GiB, 내용이 중복된 미디어 포함
 가져오기 읽기 블록 크기 |  | SHA-256 계산과 파일 복사 모두 1 MiB
 최대화 감지 경계 허용값 | FULLSCREEN_MARGIN | 4 px, 모니터 작업 영역을 기준으로 판단
 최대화 감지에서 제외할 창 제목 | WINDOW_TITLE_BLACKLIST | `""`, `default ime`, `msctfime ui`, `windows 輸入體驗`, `搜尋`, `search`, `開始`, `start`, `工作檢視`, `task view`

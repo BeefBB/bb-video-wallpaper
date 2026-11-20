@@ -113,6 +113,7 @@ Folder/
 字体大小 | "fontSize" | 11 pt, 6-48
 最近记录显示条数 | "recentDisplayCount" | 6 条, 0-20
 预览大小 | "previewSize" | 3 (普通), 1-5 对应 100-500 px
+多选导入总大小上限 | "maxBatchImportKiB" | 31457280 KiB (30 GiB), 正整数
 最近使用记录 | "recentVideo" | [], 0-20 条
 各屏幕壁纸 | "screenWallpapers" | {}
 屏幕跟随关系 | "screenFollows" | {}
@@ -164,7 +165,6 @@ VLC 壁纸播放参数 |  | 关闭音频, 不显示视频标题, 循环播放参
 支持的视频扩展名 | SUPPORTED_VIDEO_EXTENSIONS | .mp4, .mkv, .webm, .mov, .avi
 支持的图片扩展名 | SUPPORTED_IMAGE_EXTENSIONS | .jpg, .jpeg, .png, .bmp, .webp
 导入时额外预留空间 | IMPORT_RESERVE_BYTES | 200 MiB
-多选导入总大小上限 | MAX_BATCH_IMPORT_BYTES | 30 GiB，包含内容重复的素材
 导入读取块大小 |  | SHA-256 计算和文件复制均为 1 MiB
 最大化检测边界容许值 | FULLSCREEN_MARGIN | 4 px, 按屏幕工作区域判断
 最大化检测排除的窗口标题 | WINDOW_TITLE_BLACKLIST | `""`, `default ime`, `msctfime ui`, `windows 輸入體驗`, `搜尋`, `search`, `開始`, `start`, `工作檢視`, `task view`

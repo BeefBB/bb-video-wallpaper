@@ -17,8 +17,6 @@ from thumbnails import SUPPORTED_MEDIA_EXTENSIONS
 
 # 匯入媒體時預留的額外空間(200 MB)
 IMPORT_RESERVE_BYTES = 200 * 1024 * 1024
-# 多選匯入上限(30 GiB)
-MAX_BATCH_IMPORT_BYTES = 30 * 1024 * 1024 * 1024
 
 
 class MediaImportCancelled(Exception):

@@ -113,6 +113,7 @@ Hardware decoding | "hardwareDecoding" | any (automatic), options: any, d3d11va,
 Font size | "fontSize" | 11 pt, 6-48
 Number of recent entries to display | "recentDisplayCount" | 6 entries, 0-20
 Preview size | "previewSize" | 3 (Normal), 1-5 maps to 100-500 px
+Total size limit for multiple selections | "maxBatchImportKiB" | 31457280 KiB (30 GiB), positive integer
 Recently used media | "recentVideo" | [], 0-20 entries
 Wallpaper for each monitor | "screenWallpapers" | {}
 Monitor follow relationships | "screenFollows" | {}
@@ -164,7 +165,6 @@ Frame used for video thumbnails |  | First decoded frame
 Supported video file extensions | SUPPORTED_VIDEO_EXTENSIONS | .mp4, .mkv, .webm, .mov, .avi
 Supported image file extensions | SUPPORTED_IMAGE_EXTENSIONS | .jpg, .jpeg, .png, .bmp, .webp
 Additional disk space reserved for imports | IMPORT_RESERVE_BYTES | 200 MiB
-Total size limit for multiple selections | MAX_BATCH_IMPORT_BYTES | 30 GiB, including media with duplicate contents
 Import read chunk size |  | 1 MiB for both SHA-256 calculation and file copying
 Maximized window detection edge tolerance | FULLSCREEN_MARGIN | 4 px, based on the monitor work area
 Window titles excluded from maximized window detection | WINDOW_TITLE_BLACKLIST | `""`, `default ime`, `msctfime ui`, `windows 輸入體驗`, `搜尋`, `search`, `開始`, `start`, `工作檢視`, `task view`

@@ -26,6 +26,7 @@ CONFIG_DEFAULTS = {
 CONFIG_KEYS = set(CONFIG_DEFAULTS) | {
     "fontSize", "recentDisplayCount", "previewSize", "language", "recentVideo",
     "screenWallpapers", "screenFollows", "scalingMode", "backgroundColor", "hardwareDecoding",
+    "maxBatchImportKiB",
 }
 
 SUPPORTED_LANGUAGES = {
@@ -305,6 +306,13 @@ class ConfigStore:
         elif not 1 <= preview_size <= 5:
             report("設定欄位 previewSize 超出 1 到 5, 已限制範圍")
         config["previewSize"] = max(1, min(5, preview_size))
+
+        # 多選匯入總大小上限, 使用正整數 KiB
+        max_batch_import_kib = config.get("maxBatchImportKiB", 30 * 1024 * 1024)
+        if type(max_batch_import_kib) is not int or max_batch_import_kib <= 0:
+            report("設定欄位 maxBatchImportKiB 無效, 使用預設值")
+            max_batch_import_kib = 30 * 1024 * 1024
+        config["maxBatchImportKiB"] = max_batch_import_kib
 
         # 順位: 指定語言 > 安裝語言 > 系統語言 > 繁體中文
         if "language" not in config:
