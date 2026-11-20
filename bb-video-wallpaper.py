@@ -113,7 +113,7 @@ def initialize_logging() -> None:
 
     handler = RotatingFileHandler(
         LOG_DIR / "log.log",
-        maxBytes=2 * 1024 * 1024,  # 每份最多約 2 MB
+        maxBytes=2 * 1024 * 1024,  # 每份最多約 2 MiB
         backupCount=3,             # 額外保留 3 份舊日誌
         encoding="utf-8"
     )
@@ -259,11 +259,11 @@ class MediaImportThread(QThread):
 
             max_batch_import_bytes = config_store.load()["maxBatchImportKiB"] * 1024
             if len(self.sources) > 1 and total_size > max_batch_import_bytes:
-                gigabyte = 1024 * 1024 * 1024
+                gibibyte = 1024 * 1024 * 1024
                 raise ValueError(tr("media_import_limit_exceeded").format(
                     # 向上取至小數點後兩位, 避免超限時仍顯示與上限相同的大小
-                    size=(total_size * 100 + gigabyte - 1) // gigabyte / 100,
-                    limit=max_batch_import_bytes / gigabyte
+                    size=(total_size * 100 + gibibyte - 1) // gibibyte / 100,
+                    limit=max_batch_import_bytes / gibibyte
                 ))
 
             completed_size = 0

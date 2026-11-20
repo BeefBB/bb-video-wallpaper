@@ -77,7 +77,7 @@ def cleanup_orphaned_thumbnails(media_dir: Path, thumbnail_dir: Path) -> None:
 
 def fast_hash(path: Path) -> str:
     """
-    以大小, 修改時間與頭尾各 16KB 計算縮圖識別碼
+    以大小, 修改時間與頭尾各 16 KiB 計算縮圖識別碼
     """
 
     digest = hashlib.sha256()

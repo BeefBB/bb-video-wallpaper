@@ -15,7 +15,7 @@ import winerror
 from thumbnails import SUPPORTED_MEDIA_EXTENSIONS
 
 
-# 匯入媒體時預留的額外空間(200 MB)
+# 匯入媒體時預留的額外空間(200 MiB)
 IMPORT_RESERVE_BYTES = 200 * 1024 * 1024
 
 
@@ -144,12 +144,12 @@ def _import_media(
 
     if free_space < required_space:
 
-        megabyte = 1024 * 1024
+        mebibyte = 1024 * 1024
 
         raise OSError(
             translate("media_insufficient_space").format(
-                required=(source_size + megabyte - 1) // megabyte,
-                available=max(0, free_space - IMPORT_RESERVE_BYTES) // megabyte
+                required=(source_size + mebibyte - 1) // mebibyte,
+                available=max(0, free_space - IMPORT_RESERVE_BYTES) // mebibyte
             )
         )
 

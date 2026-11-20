@@ -5,7 +5,7 @@
 Play videos as your desktop wallpaper while keeping it lightweight and simple to manage.  
 Store your wallpapers in a single folder, making it easy to switch between them at any time.  
 
-- Lightweight (~200 MB)
+- Lightweight (~200 MiB)
 - Keep a history of recently used wallpapers
 - Various automatic pause options (when a window is maximized, the screen is turned off, or the PC is running on battery)
 - Optional launch on system startup
