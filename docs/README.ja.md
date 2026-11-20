@@ -109,6 +109,7 @@ Folder/
 ウィンドウ最大化時に自動一時停止 | "autoPauseIfFullscreen" | true
 画面オフ時に自動一時停止 | "autoPauseIfScreenOff" | true
 バッテリー駆動時に自動一時停止 | "autoPauseIfOnBattery" | false
+ハードウェアデコード | "hardwareDecoding" | any (自動), 選択肢: any, d3d11va, dxva2, none
 フォントサイズ | "fontSize" | 11 pt, 6-48
 最近の使用履歴の表示件数 | "recentDisplayCount" | 6 件, 0-20
 プレビューサイズ | "previewSize" | 3 (標準), 1-5 は 100-500 px に対応

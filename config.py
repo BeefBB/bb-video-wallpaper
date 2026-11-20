@@ -25,7 +25,7 @@ CONFIG_DEFAULTS = {
 
 CONFIG_KEYS = set(CONFIG_DEFAULTS) | {
     "fontSize", "recentDisplayCount", "previewSize", "language", "recentVideo",
-    "screenWallpapers", "screenFollows", "scalingMode", "backgroundColor",
+    "screenWallpapers", "screenFollows", "scalingMode", "backgroundColor", "hardwareDecoding",
 }
 
 SUPPORTED_LANGUAGES = {
@@ -272,6 +272,12 @@ class ConfigStore:
             elif not isinstance(config[key], bool):
                 report("設定欄位 %s 型別錯誤, 使用預設值", key)
                 config[key] = default
+
+        hardware_decoding = config.get("hardwareDecoding", "any")
+        if not isinstance(hardware_decoding, str) or hardware_decoding not in ("any", "d3d11va", "dxva2", "none"):
+            report("設定欄位 hardwareDecoding 無效, 使用自動")
+            hardware_decoding = "any"
+        config["hardwareDecoding"] = hardware_decoding
 
         # 字體大小, 使用整數 pt, 限制在 6 到 48
         font_size = config.get("fontSize", 11)

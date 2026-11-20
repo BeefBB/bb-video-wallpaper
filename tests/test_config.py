@@ -93,6 +93,7 @@ class ConfigTests(unittest.TestCase):
             "autoPauseIfFullscreen": "false",
             "autoPauseIfOnBattery": True,
             "previewSize": True,
+            "hardwareDecoding": [],
             "language": "ja-JP",
             "futureOption": 9,
         }).encode("utf-8")
@@ -109,6 +110,7 @@ class ConfigTests(unittest.TestCase):
         preserved = {
             **repaired,
             "fontSize": 24,
+            "hardwareDecoding": "dxva2",
             "recentVideo": ["folder/桌布.mp4"],
             "screenWallpapers": {"screen-a": "folder/桌布.mp4"},
             "screenFollows": {"screen-b": "screen-a"},

@@ -109,6 +109,7 @@ Folder/
 視窗最大化時自動暫停     | "autoPauseIfFullscreen" | true
 螢幕關閉時自動暫停       | "autoPauseIfScreenOff"  | true
 沒插電時自動暫停         | "autoPauseIfOnBattery"  | false
+硬體解碼                 | "hardwareDecoding"      | any (自動), 可選 any, d3d11va, dxva2, none
 文字大小                 | "fontSize"              | 11 pt, 6-48
 最近紀錄顯示筆數         | "recentDisplayCount"    | 6 筆, 0-20
 預覽大小                 | "previewSize"           | 3 (普通), 1-5 對應 100-500 px

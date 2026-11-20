@@ -109,6 +109,7 @@ Folder/
 창 최대화 시 자동 일시 중지 | "autoPauseIfFullscreen" | true
 화면 꺼짐 시 자동 일시 중지 | "autoPauseIfScreenOff" | true
 배터리 사용 시 자동 일시 중지 | "autoPauseIfOnBattery" | false
+하드웨어 디코딩 | "hardwareDecoding" | any (자동), 사용 가능한 값: any, d3d11va, dxva2, none
 글꼴 크기 | "fontSize" | 11 pt, 6-48
 최근 기록 표시 개수 | "recentDisplayCount" | 6개, 0-20
 미리보기 크기 | "previewSize" | 3 (보통), 1-5는 100-500 px에 대응

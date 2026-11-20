@@ -109,6 +109,7 @@ Folder/
 窗口最大化时自动暂停 | "autoPauseIfFullscreen" | true
 屏幕关闭时自动暂停 | "autoPauseIfScreenOff" | true
 未接通电源时自动暂停 | "autoPauseIfOnBattery" | false
+硬件解码 | "hardwareDecoding" | any (自动), 可选 any, d3d11va, dxva2, none
 字体大小 | "fontSize" | 11 pt, 6-48
 最近记录显示条数 | "recentDisplayCount" | 6 条, 0-20
 预览大小 | "previewSize" | 3 (普通), 1-5 对应 100-500 px

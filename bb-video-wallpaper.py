@@ -392,7 +392,7 @@ class Wallpaper(QWidget):
             initial_media = media_files[0]
 
         # 影片顯示物件
-        self.instance_video = bb_video_display.Instance()
+        self.instance_video = bb_video_display.Instance(hardware_decoding=config.get("hardwareDecoding", "any"))
         self.instance_video.setParent(self)
         self.instance_video.playback_started.connect(self.playback_started)
         # 圖片顯示物件
@@ -953,10 +953,11 @@ class Tray:
 
         # 設定檔
         config = config_store.load()
-        # 語言代碼, 字型大小, 縮圖預覽大小, 螢幕跟隨設定
+        # 語言代碼, 字型大小, 縮圖預覽大小, 硬體解碼, 螢幕跟隨設定
         self.current_language_code = config.get("language", "zh-TW")
         self.font_size = config.get("fontSize", 11)
         self.preview_size = config.get("previewSize", 3)
+        self.hardware_decoding = config.get("hardwareDecoding", "any")
         self.saved_follows: dict[str, str] = config.get("screenFollows", {})
 
         # 螢幕跟隨控制器, 會在桌布建立後啟動, 以避免在桌布尚未就緒時就嘗試跟隨
@@ -1105,6 +1106,22 @@ class Tray:
         open_log_action = QAction(tr("open_log_folder"), self.advanced_menu)
         open_log_action.triggered.connect(self.open_log_folder)
         self.advanced_menu.addAction(open_log_action)
+
+        hardware_decoding_menu = self.advanced_menu.addMenu(tr("hardware_decoding"))
+        hardware_decoding_group = QActionGroup(hardware_decoding_menu)
+        self.hardware_decoding_actions: dict[str, QAction] = {}
+
+        for mode, text_key in (
+            ("any", "hardware_decoding_auto"), ("d3d11va", "hardware_decoding_d3d11"),
+            ("dxva2", "hardware_decoding_dxva2"), ("none", "hardware_decoding_disabled"),
+        ):
+            action = QAction(tr(text_key), hardware_decoding_menu)
+            action.setCheckable(True)
+            action.setChecked(mode == self.hardware_decoding)
+            hardware_decoding_group.addAction(action)
+            action.triggered.connect(lambda checked, value=mode: self.set_hardware_decoding(value))
+            hardware_decoding_menu.addAction(action)
+            self.hardware_decoding_actions[mode] = action
 
         reset_menu = self.advanced_menu.addMenu(tr("reset_defaults"))
         reset_action = QAction(tr("confirm_reset_defaults"), reset_menu)
@@ -1973,6 +1990,28 @@ class Tray:
             return
 
         self.reset_requested = True
+        self.restart()
+
+
+    def set_hardware_decoding(self, mode: str) -> None:
+
+        if self.is_exiting or mode == self.hardware_decoding:
+            self.hardware_decoding_actions[self.hardware_decoding].setChecked(True)
+            return
+
+        try:
+            config = config_store.load()
+        except OSError:
+            self.hardware_decoding_actions[self.hardware_decoding].setChecked(True)
+            return
+
+        config["hardwareDecoding"] = mode
+        if not config_store.save(config):
+            self.hardware_decoding_actions[self.hardware_decoding].setChecked(True)
+            return
+
+        self.hardware_decoding = mode
+        logger.info("set_hardware_decoding - %s", mode)
         self.restart()
 
 

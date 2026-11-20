@@ -11,6 +11,7 @@ Qt 影片顯示模組, 接收主程式提供的 HWND 並共用既有 QApplicatio
     display.play()
 
 預設為 fill 與黑色背景, 靜音並循環播放
+hardware_decoding 接受 any, d3d11va, dxva2, none, 預設 any
 show/hide 只改變可見性, stop 隱藏輸出並停止播放
 set_hwnd(0) 解除掛載但保留進度與播放意圖, 重新綁定後恢復
 close 釋放媒體及內部資源, 保留 HWND 與顯示選項供重新載入
@@ -253,7 +254,7 @@ class Instance(QObject):
     _player_event = Signal(int, str)
     _target_event = Signal(object, bool)
 
-    def __init__(self) -> None:
+    def __init__(self, hardware_decoding: str = "any") -> None:
 
         app = QApplication.instance()
         if app is None:
@@ -261,7 +262,7 @@ class Instance(QObject):
 
         super().__init__(app)
 
-
+        self._hardware_decoding = hardware_decoding
         self._hwnd = 0
         self._window: _VideoWindow | None = None
         self._target_events: _TargetEvents | None = None
@@ -425,6 +426,8 @@ class Instance(QObject):
             raise RuntimeError("無法建立 VLC 媒體")
 
         try:
+            # 套用硬體解碼(不要在"instance=vlc.Instance()"裡加, 不會生效)
+            media.add_option(f":avcodec-hw={self._hardware_decoding}")
             if not self._stop_player():
                 media.release()
                 return

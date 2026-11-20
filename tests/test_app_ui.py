@@ -298,6 +298,76 @@ class ImportMenuTests(QtTestCase):
             menu.set_preview_size.assert_called_once_with(4)
 
 
+    def test_hardware_decoding_failures_restore_selection_and_retry_restarts(self) -> None:
+        """
+        讀取或保存失敗時還原勾選, 重試成功才重啟且不覆寫其他設定
+        """
+
+        store = self.namespace["config_store"]
+        config = {"hardwareDecoding": "any", "futureOption": 9}
+        store.load.side_effect = lambda: config.copy()
+        store.save.return_value = True
+        actions = self.tray.hardware_decoding_actions
+
+        with mock.patch.object(self.tray, "restart") as restart:
+            actions["any"].trigger()
+            store.save.assert_not_called()
+            restart.assert_not_called()
+
+            for failure, patcher in (
+                ("read", mock.patch.object(store, "load", side_effect=PermissionError)),
+                ("save", mock.patch.object(store, "save", return_value=False)),
+            ):
+                with self.subTest(failure=failure), patcher:
+                    actions["dxva2"].trigger()
+                    self.assertEqual(self.tray.hardware_decoding, "any")
+                    self.assertTrue(actions["any"].isChecked())
+                    self.assertFalse(actions["dxva2"].isChecked())
+                    restart.assert_not_called()
+
+            actions["dxva2"].trigger()
+            actions["dxva2"].trigger()
+
+            store.save.assert_called_once_with({**config, "hardwareDecoding": "dxva2"})
+            self.assertEqual(self.tray.hardware_decoding, "dxva2")
+            self.assertTrue(actions["dxva2"].isChecked())
+            self.assertFalse(actions["any"].isChecked())
+            restart.assert_called_once_with()
+
+
+    def test_hardware_decoding_restart_ignores_queued_changes_during_shutdown(self) -> None:
+        """
+        重啟清理期間的延遲選單訊號不得覆寫解碼設定或轉為還原預設
+        """
+
+        store = self.namespace["config_store"]
+        config = {"hardwareDecoding": "any", "futureOption": 9}
+        store.load.return_value = config
+        store.save.return_value = True
+        action = QAction(self.menu)
+        action.triggered.connect(
+            lambda checked=False: self.tray.hardware_decoding_actions["none"].trigger(),
+            Qt.ConnectionType.QueuedConnection
+        )
+        action.triggered.connect(
+            lambda checked=False: self.tray.reset_defaults(),
+            Qt.ConnectionType.QueuedConnection
+        )
+        action.trigger()
+        self.wallpaper.shutdown.side_effect = self.app.processEvents
+
+        self.tray.hardware_decoding_actions["d3d11va"].trigger()
+
+        store.save.assert_called_once_with({**config, "hardwareDecoding": "d3d11va"})
+        self.assertEqual(self.tray.hardware_decoding, "d3d11va")
+        self.assertTrue(self.tray.hardware_decoding_actions["d3d11va"].isChecked())
+        self.assertFalse(self.tray.hardware_decoding_actions["none"].isChecked())
+        self.assertTrue(self.tray.restart_requested)
+        self.assertFalse(self.tray.reset_requested)
+        self.tray.app.quit.assert_called_once_with()
+        self.wallpaper.shutdown.assert_called_once_with()
+
+
     def test_language_restart_ignores_queued_changes_during_shutdown(self) -> None:
         """
         清理期間處理延遲選單訊號時, 不覆寫語言或轉為還原預設

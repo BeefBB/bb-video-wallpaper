@@ -109,6 +109,7 @@ Language | "language" | If the field is missing: installer language > system lan
 Automatically pause when a window is maximized | "autoPauseIfFullscreen" | true
 Automatically pause when the screen is off | "autoPauseIfScreenOff" | true
 Automatically pause when on battery | "autoPauseIfOnBattery" | false
+Hardware decoding | "hardwareDecoding" | any (automatic), options: any, d3d11va, dxva2, none
 Font size | "fontSize" | 11 pt, 6-48
 Number of recent entries to display | "recentDisplayCount" | 6 entries, 0-20
 Preview size | "previewSize" | 3 (Normal), 1-5 maps to 100-500 px
