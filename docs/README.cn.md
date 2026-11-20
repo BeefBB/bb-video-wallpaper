@@ -148,8 +148,8 @@ VLC 壁纸播放参数 |  | 关闭音频, 不显示视频标题, 循环播放参
 跟随屏幕定期同步间隔 | SYNC_INTERVAL_MS | 60 s
 跟随屏幕同步误差容许值 | SYNC_TOLERANCE_MS | 0.5 s
 启动时恢复跟随关系前的等待 | RESTORE_DELAY_MS | 3 s, 仅在有已保存的跟随关系时等待
-首次显示预览的等待时间 | preview_timer | 0.5 s
-离开选项后退出预览模式的延迟 | reset_timer | 1 s
+首次显示预览的等待时间 | preview_timer | 1 s
+离开选项后退出预览模式的延迟 | reset_timer | 2 s
 预览图片最长边 |  | `previewSize * 100` px, 不含左右各 4 px 内边距, 屏幕空间不足时缩小
 预览背景色 |  | #202020
 预览内边距 |  | 4 px

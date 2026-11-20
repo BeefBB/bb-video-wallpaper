@@ -6,7 +6,7 @@
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QLabel, QMenu, QToolTip, QWidget
-from PySide6.QtCore import QEvent, QRectF, QSize, Qt, QTimer, Slot
+from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QPropertyAnimation, QRectF, QSize, Qt, QTimer, Slot
 from PySide6.QtGui import QAction, QColor, QCursor, QImage, QPainter, QPixmap, QScreen
 
 from config import get_scaling_mode
@@ -42,6 +42,10 @@ class MediaPreviewMenu(QMenu):
         self.preview.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.preview.setStyleSheet("background: #202020; padding: 4px;")
 
+        self.preview_animation = QPropertyAnimation(self.preview, b"pos", self)
+        self.preview_animation.setDuration(140)
+        self.preview_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+
         self.loading_image_path = loading_image_path
         self.preview_mode = False
         self.preview_action: QAction | None = None
@@ -52,16 +56,16 @@ class MediaPreviewMenu(QMenu):
         )
         self.thumbnail_thread.thumbnail_ready.connect(self.update_preview)
 
-        # 首次懸停 0.5 秒後顯示預覽
+        # 首次懸停 1 秒後顯示預覽
         self.preview_timer = QTimer(self)
         self.preview_timer.setSingleShot(True)
-        self.preview_timer.setInterval(500)
+        self.preview_timer.setInterval(1000)
         self.preview_timer.timeout.connect(self.show_preview)
 
-        # 離開所有桌布選項滿 1 秒後退出預覽模式
+        # 離開所有桌布選項滿 2 秒後退出預覽模式
         self.reset_timer = QTimer(self)
         self.reset_timer.setSingleShot(True)
-        self.reset_timer.setInterval(1000)
+        self.reset_timer.setInterval(2000)
         self.reset_timer.timeout.connect(self.reset_preview)
 
         self.set_preview_size(preview_size)
@@ -147,6 +151,7 @@ class MediaPreviewMenu(QMenu):
     def leave_preview(self) -> None:
 
         self.preview_timer.stop()
+        self.preview_animation.stop()
         self.preview_action = None
         self.preview.hide()
 
@@ -158,6 +163,7 @@ class MediaPreviewMenu(QMenu):
 
         self.preview_timer.stop()
         self.reset_timer.stop()
+        self.preview_animation.stop()
         self.preview_action = None
         self.preview_mode = False
         self.preview.hide()
@@ -279,6 +285,23 @@ class MediaPreviewMenu(QMenu):
         x = max(available.left(), min(x, available.right() - self.preview.width() + 1))
         y = max(available.top(), min(y, available.bottom() - self.preview.height() + 1))
 
-        self.preview.move(x, y)
+        position = QPoint(x, y)
+        appearing = not self.preview.isVisible()
+
+        if appearing:
+
+            self.preview_animation.stop()
+            offset = 16 if x < menu_rect.left() else -16
+            start_x = max(available.left(), min(x + offset, available.right() - self.preview.width() + 1))
+            self.preview.move(start_x, y)
+
+        # 同一位置的縮圖更新不重播動畫, 換項目時從目前位置接續
+        if appearing or self.preview_animation.endValue() != position:
+
+            self.preview_animation.stop()
+            self.preview_animation.setStartValue(self.preview.pos())
+            self.preview_animation.setEndValue(position)
+            self.preview_animation.start()
+
         self.preview.show()
         self.preview_mode = True

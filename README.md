@@ -148,8 +148,8 @@ VLC 桌布播放參數         |                            | 關閉音訊, 不�
 跟隨螢幕定期同步間隔     | SYNC_INTERVAL_MS           | 60 s
 跟隨螢幕同步誤差容許值   | SYNC_TOLERANCE_MS          | 0.5 s
 啟動時還原跟隨關係前等待 | RESTORE_DELAY_MS           | 3 s , 有已保存的跟隨關係時才等待
-首次顯示預覽的等待時間   | preview_timer              | 0.5 s
-離開選項後退出預覽模式   | reset_timer                | 1 s
+首次顯示預覽的等待時間   | preview_timer              | 1 s
+離開選項後退出預覽模式   | reset_timer                | 2 s
 預覽圖片最長邊           |                            | `previewSize * 100` px, 不含左右各 4 px 內距, 螢幕空間不足時縮小
 預覽背景色               |                            | #202020
 預覽內距                 |                            | 4 px

@@ -17,7 +17,7 @@ import threading
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QAbstractAnimation, QObject, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QImage, QImageWriter
 
 
@@ -537,6 +537,59 @@ class MediaPreviewTests(QtTestCase):
 
         self.assertEqual(displayed_on, [threading.get_ident()])
         self.assertEqual(self.menu.preview_pixmap.toImage().pixelColor(0, 0), QColor("blue"))
+
+
+    def test_thumbnail_arrival_and_rapid_switch_preserve_animation_position(self) -> None:
+        """
+        動畫途中換圖不中斷進度, 快速換項目接續目前位置, 隱藏時停止
+        """
+
+        del self.menu.display_preview
+        self.worker.request = mock.Mock()
+        self.menu.popup(self.app.primaryScreen().availableGeometry().center())
+
+        with mock.patch.object(media_preview.QCursor, "pos") as cursor:
+
+            cursor.return_value = self.menu.mapToGlobal(self.menu.actionGeometry(self.first).center())
+            self.menu.show_preview()
+            animation = self.menu.preview_animation
+            first_position = animation.endValue()
+            animation.setCurrentTime(60)
+            current_position = self.menu.preview.pos()
+
+            self.worker.thumbnail_ready.emit(self.first.data(), 3, self.thumbnail())
+
+            self.assertEqual(animation.currentTime(), 60)
+            self.assertEqual(self.menu.preview.pos(), current_position)
+            self.assertEqual(animation.state(), QAbstractAnimation.State.Running)
+
+            self.menu.preview_action = self.second
+            cursor.return_value = self.menu.mapToGlobal(self.menu.actionGeometry(self.second).center())
+            self.menu.show_preview()
+
+            self.assertEqual(animation.startValue(), current_position)
+            self.assertNotEqual(animation.endValue(), first_position)
+            animation.setCurrentTime(60)
+            current_position = self.menu.preview.pos()
+
+            self.menu.preview_action = self.first
+            cursor.return_value = self.menu.mapToGlobal(self.menu.actionGeometry(self.first).center())
+            self.menu.show_preview()
+
+            self.assertEqual(animation.startValue(), current_position)
+            self.assertEqual(animation.endValue(), first_position)
+
+            self.menu.leave_preview()
+            self.assertEqual(animation.state(), QAbstractAnimation.State.Stopped)
+            self.assertFalse(self.menu.preview.isVisible())
+
+            self.menu.preview_action = self.first
+            self.menu.show_preview()
+            self.assertEqual(animation.state(), QAbstractAnimation.State.Running)
+
+            self.menu.hide()
+            self.assertEqual(animation.state(), QAbstractAnimation.State.Stopped)
+            self.assertFalse(self.menu.preview.isVisible())
 
 
 @unittest.skipUnless(

@@ -148,8 +148,8 @@ Number of rotated logs to keep |  | 3 files
 Periodic synchronization interval for following monitors | SYNC_INTERVAL_MS | 60 s
 Playback synchronization tolerance for following monitors | SYNC_TOLERANCE_MS | 0.5 s
 Delay before restoring monitor follow relationships on startup | RESTORE_DELAY_MS | 3 s, only when saved follow relationships exist
-Delay before showing the first preview | preview_timer | 0.5 s
-Delay before leaving preview mode after moving away | reset_timer | 1 s
+Delay before showing the first preview | preview_timer | 1 s
+Delay before leaving preview mode after moving away | reset_timer | 2 s
 Longest preview image edge |  | `previewSize * 100` px, excluding 4 px of padding on each side; shrinks when screen space is insufficient
 Preview background color |  | #202020
 Preview padding |  | 4 px
