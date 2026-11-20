@@ -4,8 +4,10 @@
 """
 
 from pathlib import Path
+import json
 import os
 import sys
+import tempfile
 from types import SimpleNamespace
 import threading
 import time
@@ -77,8 +79,11 @@ class ImportMenuTests(QtTestCase):
 
         super().setUp()
 
-        self.source = ROOT / "sample.mp4"
-        self.destination = ROOT / "imported.mp4"
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.source = Path(self.temp_dir.name) / "sample.mp4"
+        self.source.write_bytes(b"sample contents")
+        self.destination = Path(self.temp_dir.name) / "imported.mp4"
         config_store = mock.Mock()
         config_store.load.return_value = {}
 
@@ -92,7 +97,7 @@ class ImportMenuTests(QtTestCase):
             "THUMBNAIL_DIR": ROOT / "test-thumbnails",
             "LOADING_IMAGE_PATH": ROOT / "icon" / "loading300.jpg",
             "SINGLE_IMPORT_DIR": ROOT / "video" / "_imports",
-            "LANG": {"importing_media": "{percent}%"},
+            "LANG": json.loads((ROOT / "lang" / "zh-TW.json").read_text(encoding="utf-8")),
             "SUPPORTED_MEDIA_EXTENSIONS": {".mp4", ".png"},
             "SUPPORTED_VIDEO_EXTENSIONS": {".mp4"},
             "config_store": config_store,
@@ -105,7 +110,7 @@ class ImportMenuTests(QtTestCase):
             "get_media": mock.Mock(return_value=[]),
         }
         self.namespace["QSystemTrayIcon"].MessageIcon = QSystemTrayIcon.MessageIcon
-        self.namespace["QFileDialog"].getOpenFileName.return_value = (str(self.source), "")
+        self.namespace["QFileDialog"].getOpenFileNames.return_value = ([str(self.source)], "")
         module = load_app_module()
         module.__dict__.update(self.namespace)
         self.namespace = module.__dict__
@@ -194,7 +199,7 @@ class ImportMenuTests(QtTestCase):
         self.assertIsNone(self.tray.import_thread)
 
 
-    def blocked_import(self, source, import_dir, *, translate, progress, cancelled):
+    def blocked_import(self, source, import_dir, *, translate, progress, cancelled, expected_size):
         """
         暫停匯入工作, 由測試控制完成或取消
         """
@@ -434,21 +439,24 @@ class ImportMenuTests(QtTestCase):
         updated_on = []
         update_progress = self.tray.update_import_progress
 
-        def record_progress(percent):
+        def record_progress(worker, percent, index, comparing):
             """
             記錄進度回呼的執行緒, 再呼叫原本的選單更新方法
             """
 
             updated_on.append(threading.get_ident())
-            update_progress(percent)
+            update_progress(worker, percent, index, comparing)
 
-        def copy_with_progress(source, import_dir, *, translate, progress, cancelled):
+        def copy_with_progress(source, import_dir, *, translate, progress, cancelled, expected_size):
             """
             回報匯入進度後等待測試放行匯入工作
             """
 
             progress(42)
-            return self.blocked_import(source, import_dir, translate=translate, progress=progress, cancelled=cancelled)
+            return self.blocked_import(
+                source, import_dir, translate=translate, progress=progress,
+                cancelled=cancelled, expected_size=expected_size
+            )
 
         self.tray.update_import_progress = record_progress
         self.namespace["import_media"] = copy_with_progress
@@ -456,13 +464,14 @@ class ImportMenuTests(QtTestCase):
         worker = self.tray.import_thread
         self.assertTrue(self.started.wait(5))
         self.app.processEvents()
-        self.assertEqual(updated_on, [threading.get_ident()])
+        self.assertTrue(updated_on)
+        self.assertEqual(set(updated_on), {threading.get_ident()})
         self.assertIn("42%", self.tray.add_media_action.text())
 
         self.tray.cancel_import_action.trigger()
         self.assertTrue(worker.isInterruptionRequested())
         progress_text = self.tray.add_media_action.text()
-        self.tray.update_import_progress(80)
+        self.tray.update_import_progress(worker, 80, 1, False)
         self.assertEqual(self.tray.add_media_action.text(), progress_text)
         self.release.set()
         self.wait_for_completion(worker)
@@ -597,7 +606,7 @@ class ImportMenuTests(QtTestCase):
         驗證退出等待匯入前先要求取消, 取消完成後不播放或顯示錯誤
         """
 
-        def wait_for_cancel(source, import_dir, *, translate, progress, cancelled):
+        def wait_for_cancel(source, import_dir, *, translate, progress, cancelled, expected_size):
             """
             等待匯入取消要求並拋出取消例外, 未及時收到要求則回報逾時
             """

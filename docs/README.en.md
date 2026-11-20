@@ -116,8 +116,8 @@ Preview size | "previewSize" | 3 (Normal), 1-5 maps to 100-500 px
 Recently used media | "recentVideo" | [], 0-20 entries
 Wallpaper for each monitor | "screenWallpapers" | {}
 Monitor follow relationships | "screenFollows" | {}
-Scaling modes per media file and monitor orientation | "scalingMode" | {}, uses fill when no setting exists
-Background colors shared per media file | "backgroundColor" | {}, automatically calculated and saved in Fit mode
+Media scaling modes | "scalingMode" | {}, uses fill when no setting exists
+Media background colors | "backgroundColor" | {}, automatically calculated and saved in Fit mode
 
 Language codes must exactly match `zh-TW`, `zh-CN`, `ja-JP`, `ko-KR`, or `en-US`; for example, the system language `en-GB` is not automatically mapped to `en-US`.
 
@@ -126,11 +126,11 @@ Language codes must exactly match `zh-TW`, `zh-CN`, `ja-JP`, `ko-KR`, or `en-US`
 Name | Item | Default
 --- | --- | ---
 Media folder | MEDIA_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\video\`
-Single-file import folder | SINGLE_IMPORT_DIR | `_imports/` inside the media folder
+Media import folder | SINGLE_IMPORT_DIR | `_imports/` inside the media folder
 Thumbnail folder | THUMBNAIL_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\thumbnails\`
 Log file |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\log\log.log`
 VLC wallpaper playback options |  | Audio disabled, video title hidden, repeat option `--input-repeat=65535`
-Wallpaper scaling mode |  | fill (default), fit, or stretch, saved per media file and monitor orientation
+Wallpaper scaling mode |  | Images and videos preserve their aspect ratio and fill the screen with centered cropping
 Wallpaper selection order on startup |  | Saved wallpaper for the monitor > first recent entry > first media list entry; the file must exist for either of the first two choices
 Delay before detecting maximized windows on startup | fullscreen_detection_timer | 10 s
 Automatic pause check interval | check_auto_pause_timer | 0.5 s
@@ -150,7 +150,7 @@ Delay before restoring monitor follow relationships on startup | RESTORE_DELAY_M
 Delay before showing the first preview | preview_timer | 0.5 s
 Delay before leaving preview mode after moving away | reset_timer | 1 s
 Longest preview image edge |  | `previewSize * 100` px, excluding 4 px of padding on each side; shrinks when screen space is insufficient
-Preview border background color |  | #202020; preview content uses the media file's background color
+Preview background color |  | #202020
 Preview padding |  | 4 px
 Gap between the preview and menu |  | 8 px, preferably on the left; moves to the right if there is not enough space
 Fallback when the loading image cannot be loaded |  | Width `previewSize * 100` px, height rounded to 16:9, dark gray (`Qt.GlobalColor.darkGray`)
@@ -164,6 +164,7 @@ Frame used for video thumbnails |  | First decoded frame
 Supported video file extensions | SUPPORTED_VIDEO_EXTENSIONS | .mp4, .mkv, .webm, .mov, .avi
 Supported image file extensions | SUPPORTED_IMAGE_EXTENSIONS | .jpg, .jpeg, .png, .bmp, .webp
 Additional disk space reserved for imports | IMPORT_RESERVE_BYTES | 200 MiB
+Total size limit for multiple selections | MAX_BATCH_IMPORT_BYTES | 30 GiB, including media with duplicate contents
 Import read chunk size |  | 1 MiB for both SHA-256 calculation and file copying
 Maximized window detection edge tolerance | FULLSCREEN_MARGIN | 4 px, based on the monitor work area
 Window titles excluded from maximized window detection | WINDOW_TITLE_BLACKLIST | `""`, `default ime`, `msctfime ui`, `windows 輸入體驗`, `搜尋`, `search`, `開始`, `start`, `工作檢視`, `task view`

@@ -126,7 +126,7 @@ Folder/
 名稱                     | 項目                       | 預設值
 ---                      | ---                        | ---
 媒體資料夾               | MEDIA_DIR                  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\video\`
-單檔匯入資料夾           | SINGLE_IMPORT_DIR          | 媒體資料夾下的 `_imports/`
+素材匯入資料夾           | SINGLE_IMPORT_DIR          | 媒體資料夾下的 `_imports/`
 縮圖資料夾               | THUMBNAIL_DIR              | `%LOCALAPPDATA%\BB\BB Video Wallpaper\thumbnails\`
 日誌檔案                 |                            | `%LOCALAPPDATA%\BB\BB Video Wallpaper\log\log.log`
 VLC 桌布播放參數         |                            | 關閉音訊, 不顯示影片標題, 重播參數 `--input-repeat=65535`
@@ -164,6 +164,7 @@ VLC 桌布播放參數         |                            | 關閉音訊, 不�
 支援影片副檔名           | SUPPORTED_VIDEO_EXTENSIONS | .mp4, .mkv, .webm, .mov, .avi
 支援圖片副檔名           | SUPPORTED_IMAGE_EXTENSIONS | .jpg, .jpeg, .png, .bmp, .webp
 匯入時額外預留空間       | IMPORT_RESERVE_BYTES       | 200 MiB
+多選匯入總大小上限       | MAX_BATCH_IMPORT_BYTES     | 30 GiB, 含內容重複的素材
 匯入讀取區塊大小         |                            | SHA-256 計算與檔案複製皆為 1 MiB
 最大化偵測邊界容許值     | FULLSCREEN_MARGIN          | 4 px, 以螢幕工作區域判定
 最大化偵測排除視窗標題   | WINDOW_TITLE_BLACKLIST     | `""`, `default ime`, `msctfime ui`, `windows 輸入體驗`, `搜尋`, `search`, `開始`, `start`, `工作檢視`, `task view`

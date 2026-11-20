@@ -116,8 +116,8 @@ Folder/
 最近使用记录 | "recentVideo" | [], 0-20 条
 各屏幕壁纸 | "screenWallpapers" | {}
 屏幕跟随关系 | "screenFollows" | {}
-素材与屏幕方向的缩放模式 | "scalingMode" | {}, 无记录时使用 fill
-素材共用的留白颜色 | "backgroundColor" | {}, 完整显示时自动取色并保存
+素材缩放模式 | "scalingMode" | {}, 无记录时使用 fill
+素材留白颜色 | "backgroundColor" | {}, 完整显示时自动取色并保存
 
 语言代码必须完全匹配 `zh-TW`, `zh-CN`, `ja-JP`, `ko-KR`, `en-US`; 例如系统语言为 `en-GB` 时不会自动对应 `en-US`
 
@@ -126,11 +126,11 @@ Folder/
 名称 | 项目 | 默认值
 --- | --- | ---
 媒体文件夹 | MEDIA_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\video\`
-单文件导入文件夹 | SINGLE_IMPORT_DIR | 媒体文件夹下的 `_imports/`
+素材导入文件夹 | SINGLE_IMPORT_DIR | 媒体文件夹下的 `_imports/`
 缩略图文件夹 | THUMBNAIL_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\thumbnails\`
 日志文件 |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\log\log.log`
 VLC 壁纸播放参数 |  | 关闭音频, 不显示视频标题, 循环播放参数 `--input-repeat=65535`
-壁纸缩放方式 |  | fill (默认), fit 或 stretch, 按素材与屏幕方向保存
+壁纸缩放方式 |  | 图片与视频均保持比例居中裁剪填满
 启动时选择壁纸的顺序 |  | 该屏幕保存的壁纸 > 最近记录第一条 > 媒体列表第一项, 前两者要求文件存在
 启动时延后最大化检测 | fullscreen_detection_timer | 10 s
 自动暂停检查间隔 | check_auto_pause_timer | 0.5 s
@@ -150,7 +150,7 @@ VLC 壁纸播放参数 |  | 关闭音频, 不显示视频标题, 循环播放参
 首次显示预览的等待时间 | preview_timer | 0.5 s
 离开选项后退出预览模式的延迟 | reset_timer | 1 s
 预览图片最长边 |  | `previewSize * 100` px, 不含左右各 4 px 内边距, 屏幕空间不足时缩小
-预览边框背景色 |  | #202020, 预览内容使用素材的留白颜色
+预览背景色 |  | #202020
 预览内边距 |  | 4 px
 预览与菜单间距 |  | 8 px, 优先放在左侧, 空间不足时改放右侧
 加载图片失败时的替代图 |  | 宽 `previewSize * 100` px, 高按 16:9 四舍五入, 深灰色 (`Qt.GlobalColor.darkGray`)
@@ -164,6 +164,7 @@ VLC 壁纸播放参数 |  | 关闭音频, 不显示视频标题, 循环播放参
 支持的视频扩展名 | SUPPORTED_VIDEO_EXTENSIONS | .mp4, .mkv, .webm, .mov, .avi
 支持的图片扩展名 | SUPPORTED_IMAGE_EXTENSIONS | .jpg, .jpeg, .png, .bmp, .webp
 导入时额外预留空间 | IMPORT_RESERVE_BYTES | 200 MiB
+多选导入总大小上限 | MAX_BATCH_IMPORT_BYTES | 30 GiB，包含内容重复的素材
 导入读取块大小 |  | SHA-256 计算和文件复制均为 1 MiB
 最大化检测边界容许值 | FULLSCREEN_MARGIN | 4 px, 按屏幕工作区域判断
 最大化检测排除的窗口标题 | WINDOW_TITLE_BLACKLIST | `""`, `default ime`, `msctfime ui`, `windows 輸入體驗`, `搜尋`, `search`, `開始`, `start`, `工作檢視`, `task view`

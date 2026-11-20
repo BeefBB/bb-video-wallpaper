@@ -4,6 +4,7 @@ import sys
 import os
 from ctypes import wintypes
 from pathlib import Path
+from stat import S_ISREG
 import time
 import subprocess
 import logging
@@ -12,14 +13,14 @@ from typing import cast
 
 from win32con import WM_DESTROY
 
-from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog
+from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog, QMessageBox
 from PySide6.QtCore import QByteArray, Qt, QTimer, QThread, Signal
 from PySide6.QtGui import QAction, QActionGroup, QIcon, QFont, QImage, QScreen, QCursor
 
 import bb_image_display
 import bb_video_display
 from config import CONFIG_DEFAULTS, ConfigStore, SUPPORTED_LANGUAGES, get_scaling_mode
-from media_import import MediaImportCancelled, import_media
+from media_import import MAX_BATCH_IMPORT_BYTES, MediaImportCancelled, check_import_cancelled, import_media
 from media_preview import MediaPreviewMenu
 from playback import AutoPauseReason, PlaybackState, update_auto_pause
 from screen_follow import AutoPauseHandler, FollowController, RESTORE_DELAY_MS, SYNC_INTERVAL_MS
@@ -207,15 +208,19 @@ class MediaImportThread(QThread):
     匯入媒體的背景執行緒
     """
 
-    progress = Signal(int)
+    progress = Signal(object, int, int, bool)
 
-    def __init__(self, source: Path) -> None:
+    def __init__(self, sources: list[Path]) -> None:
 
         super().__init__()
 
 
-        self.source = source
+        self.sources = sources
         self.destination: Path | None = None
+        self.destinations: list[Path] = []
+        self.imported_count = 0
+        self.reused_count = 0
+        self.errors: list[str] = []
         self.error = ""
         self.cancelled = False
 
@@ -223,21 +228,118 @@ class MediaImportThread(QThread):
     def run(self) -> None:
 
         try:
-            self.destination = import_media(
-                self.source,
-                SINGLE_IMPORT_DIR,
-                translate=tr,
-                progress=self.progress.emit,
-                cancelled=self.isInterruptionRequested
-            )
+
+            sizes: list[int | None] = []
+
+            for source in self.sources:
+
+                check_import_cancelled(self.isInterruptionRequested)
+
+                try:
+
+                    source_stat = source.stat()
+                    if not S_ISREG(source_stat.st_mode) or source.suffix.lower() not in SUPPORTED_MEDIA_EXTENSIONS:
+                        raise ValueError(source.name)
+                    sizes.append(source_stat.st_size)
+
+                except Exception as error:
+
+                    sizes.append(None)
+                    logger.exception("新增媒體預檢失敗 - %s", source)
+
+                    reason = str(error) or type(error).__name__
+                    if len(self.sources) == 1:
+                        self.error = reason
+                    else:
+                        self.errors.append(f"{source.name}: {reason}")
+
+            total_size = sum(size for size in sizes if size is not None)
+
+            check_import_cancelled(self.isInterruptionRequested)
+
+            if len(self.sources) > 1 and total_size > MAX_BATCH_IMPORT_BYTES:
+                gigabyte = 1024 * 1024 * 1024
+                raise ValueError(tr("media_import_limit_exceeded").format(
+                    # 向上取至小數點後兩位, 避免超限時仍顯示與上限相同的大小
+                    size=(total_size * 100 + gigabyte - 1) // gigabyte / 100,
+                    limit=MAX_BATCH_IMPORT_BYTES / gigabyte
+                ))
+
+            completed_size = 0
+
+            for index, (source, size) in enumerate(zip(self.sources, sizes), 1):
+
+                check_import_cancelled(self.isInterruptionRequested)
+
+                if size is None:
+                    continue
+
+                self.progress.emit(self, min(99, completed_size * 100 // max(1, total_size)), index, True)
+
+                copying = False
+
+                def report_progress(percent: int, source_size: int = size) -> None:
+                    """
+                    將單檔複製百分比換算為整批進度
+                    """
+
+                    nonlocal copying
+                    copying = True
+
+                    overall = min(99, (completed_size * 100 + source_size * percent) // max(1, total_size))
+                    self.progress.emit(self, overall, index, False)
+
+                try:
+
+                    destination = import_media(
+                        source,
+                        SINGLE_IMPORT_DIR,
+                        translate=tr,
+                        progress=report_progress,
+                        cancelled=self.isInterruptionRequested,
+                        expected_size=size
+                    )
+                    self.destinations.append(destination)
+
+                    if copying:
+                        self.imported_count += 1
+                    else:
+                        self.reused_count += 1
+
+                    if len(self.sources) == 1:
+                        self.destination = destination
+
+                except MediaImportCancelled:
+                    raise
+
+                except Exception as error:
+
+                    logger.exception("新增媒體失敗 - %s", source)
+
+                    reason = str(error) or type(error).__name__
+                    if len(self.sources) == 1:
+                        self.error = reason
+                    else:
+                        self.errors.append(f"{source.name}: {reason}")
+
+                completed_size += size
+                percent = min(99, completed_size * 100 // max(1, total_size))
+                self.progress.emit(self, percent, index, False)
+
+            check_import_cancelled(self.isInterruptionRequested)
+
+            self.progress.emit(self, 100, len(self.sources), False)
 
         except MediaImportCancelled:
             self.cancelled = True
-            logger.info("已取消新增媒體 - %s", self.source)
+            logger.info("已取消新增媒體, 已完成 %s/%s", len(self.destinations), len(self.sources))
 
         except Exception as e:
-            logger.exception("新增媒體失敗 - %s", self.source)
-            self.error = str(e)
+            logger.exception("新增媒體預檢失敗 - %s", self.sources)
+            self.error = str(e) or type(e).__name__
+
+        finally:
+            self.cancelled = self.cancelled or self.isInterruptionRequested()
 
 
 class DesktopEventWindow(QWidget):
@@ -1851,7 +1953,7 @@ class Tray:
             for ext in sorted(SUPPORTED_MEDIA_EXTENSIONS)
         )
 
-        filename, _ = QFileDialog.getOpenFileName(
+        filenames, _ = QFileDialog.getOpenFileNames(
             None,
             tr("add_media"),
             "",
@@ -1861,29 +1963,30 @@ class Tray:
         if self.is_exiting:
             return
 
-        if not filename:
+        if not filenames:
             self.add_media_action.setEnabled(True)
             return
 
-        self.add_media_action.setText(tr("comparing_media"))
+        self.add_media_action.setText(tr("checking_media"))
 
         self.cancel_import_action.setEnabled(True)
         self.cancel_import_action.setVisible(True)
 
-        self.import_screen_id = next(iter(self.wallpapers)) if len(self.wallpapers) == 1 else None
-        self.import_applies_to_all = len(self.wallpapers) > 1 and not get_media()
+        self.import_screen_id = next(iter(self.wallpapers)) if len(filenames) == 1 and len(self.wallpapers) == 1 else None
+        self.import_applies_to_all = len(filenames) == 1 and len(self.wallpapers) > 1 and not get_media()
         self.import_stopped_screens.clear()
 
-        self.import_thread = MediaImportThread(Path(filename))
+        self.import_thread = MediaImportThread([Path(filename) for filename in filenames])
         self.import_thread.progress.connect(self.update_import_progress, Qt.ConnectionType.QueuedConnection)
         self.import_thread.finished.connect(lambda w=self.import_thread: self.finish_import(w))
         self.import_thread.start()
 
 
-    def update_import_progress(self, percent: int) -> None:
+    def update_import_progress(self, worker: MediaImportThread, percent: int, index: int, comparing: bool) -> None:
 
-        if self.import_thread is not None and not self.import_thread.isInterruptionRequested():
-            self.add_media_action.setText(tr("importing_media").format(percent=percent))
+        if self.import_thread is worker and not worker.isInterruptionRequested():
+            key = "comparing_media" if comparing else "importing_media"
+            self.add_media_action.setText(tr(key).format(index=index, total=len(worker.sources), percent=percent))
 
 
     def cancel_import(self) -> None:
@@ -1934,26 +2037,39 @@ class Tray:
         self.add_media_action.setEnabled(True)
         self.cancel_import_action.setVisible(False)
 
-        if self.is_exiting or worker.cancelled:
+        if self.is_exiting:
             return
 
-        if worker.destination is not None:
+        if worker.destinations:
 
-            self.thumbnail_thread.request(worker.destination, preview_size=self.preview_size)
-            config_store.remember_recent(worker.destination)
+            for destination in dict.fromkeys(worker.destinations):
+                self.thumbnail_thread.request(destination, preview_size=self.preview_size)
 
-            for screen_id in screen_ids:
-                self.play_from_menu(worker.destination, screen_id)
+            if not worker.cancelled and worker.destination is not None:
+                config_store.remember_recent(worker.destination)
+
+                for screen_id in screen_ids:
+                    self.play_from_menu(worker.destination, screen_id)
 
             self.refresh_media_menu()
 
-        else:
+        if worker.error:
             self.tray.showMessage(
                 tr("app_name"),
                 tr("media_add_failed").format(error=worker.error),
                 QSystemTrayIcon.MessageIcon.Information,
                 3000
             )
+
+        elif worker.errors:
+            message = QMessageBox()
+            message.setWindowTitle(tr("app_name"))
+            message.setIcon(QMessageBox.Icon.Warning)
+            message.setText(tr("media_import_summary").format(
+                imported=worker.imported_count, reused=worker.reused_count, failed=len(worker.errors)
+            ))
+            message.setDetailedText("\n".join(worker.errors))
+            message.exec()
 
 
     def wait_for_import(self) -> None:
