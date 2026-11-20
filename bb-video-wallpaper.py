@@ -2112,11 +2112,14 @@ def main() -> int:
     initialize_paths()
 
     config_store = ConfigStore(CONFIG_PATH, MEDIA_DIR, ROOT_DIR / "lang")
-    LANG = config_store.load_language()
 
     if already_running:
+
         mutex.Close()  # type: ignore
+
+        LANG = config_store.load_language()
         show_already_running_toast()
+
         return 0
 
     initialize_logging()
@@ -2128,6 +2131,8 @@ def main() -> int:
     try:
         if not config_store.save(config_store.load()):
             return 1
+
+        LANG = config_store.load_language()
 
     except OSError:
         return 1
