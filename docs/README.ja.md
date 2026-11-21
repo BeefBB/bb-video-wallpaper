@@ -122,6 +122,9 @@ Folder/
 最近の使用履歴 | "recentVideo" | [], 0-20 件
 各モニターの壁紙 | "screenWallpapers" | {}
 モニターの追従関係 | "screenFollows" | {}
+追従モニターの定期同期間隔 | "followSyncIntervalMs" | 60000 ms, 1000-600000
+追従モニターの同期誤差許容値 | "followSyncToleranceMs" | 500 ms, 0-10000
+起動時に追従関係を復元するまでの待機時間 | "followRestoreDelayMs" | 3000 ms, 0-60000, 保存済みの追従関係がある場合のみ待機
 素材の拡大縮小モード | "scalingMode" | {}, 記録がない場合は fill
 素材の余白の色 | "backgroundColor" | {}, 全体を表示するときに自動で計算して保存
 
@@ -148,9 +151,6 @@ VLC 停止時のウェイクアップ間隔 |  | 0.05 s
 ログレベル |  | INFO
 ログファイルごとの最大サイズ |  | 2 MiB
 古いログの保持数 |  | 3 ファイル
-追従モニターの定期同期間隔 | SYNC_INTERVAL_MS | 60 s
-追従モニターの同期誤差許容値 | SYNC_TOLERANCE_MS | 0.5 s
-起動時に追従関係を復元するまでの待機時間 | RESTORE_DELAY_MS | 3 s, 保存済みの追従関係がある場合のみ待機
 プレビュー画像の最長辺 |  | `previewSize * 100` px, 左右それぞれ 4 px の内側余白を除く; 画面の空き領域が足りない場合は縮小
 プレビュー背景色 |  | #202020
 プレビューの内側余白 |  | 4 px

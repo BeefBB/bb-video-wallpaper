@@ -23,7 +23,7 @@ from config import CONFIG_DEFAULTS, ConfigStore, SUPPORTED_LANGUAGES, get_scalin
 from media_import import MediaImportCancelled, check_import_cancelled, import_media
 from media_preview import MediaPreviewMenu
 from playback import AutoPauseReason, PlaybackState, update_auto_pause
-from screen_follow import AutoPauseHandler, FollowController, RESTORE_DELAY_MS, SYNC_INTERVAL_MS
+from screen_follow import AutoPauseHandler, FollowController
 from thumbnails import (
     SUPPORTED_VIDEO_EXTENSIONS,
     SUPPORTED_IMAGE_EXTENSIONS,
@@ -1068,7 +1068,10 @@ class Tray:
         self.saved_follows: dict[str, str] = config.get("screenFollows", {})
 
         # 螢幕跟隨控制器, 會在桌布建立後啟動, 以避免在桌布尚未就緒時就嘗試跟隨
-        self.follow_controller = FollowController(self.wallpapers, config_store)
+        self.follow_controller = FollowController(
+            self.wallpapers, config_store,
+            sync_tolerance_ms=cast(int | None, config.get("followSyncToleranceMs")),
+        )
 
         # 如果有已保存的螢幕跟隨設定, 在啟動時等待桌布建立完成後再啟動跟隨
         self.waiting_for_screens = bool(self.saved_follows)
@@ -1250,7 +1253,7 @@ class Tray:
         # 螢幕跟隨同步計時器
         self.follow_sync_timer = QTimer(menu)
         self.follow_sync_timer.timeout.connect(self.follow_controller.synchronize)
-        self.follow_sync_timer.start(SYNC_INTERVAL_MS)
+        self.follow_sync_timer.start(config.get("followSyncIntervalMs", 60000))
 
         # 螢幕跟隨還原計時器, 避免螢幕列舉尚未穩定就嘗試還原跟隨關係
         self.follow_restore_timer = QTimer(menu)
@@ -1263,7 +1266,7 @@ class Tray:
 
         if self.waiting_for_screens:
             # 等待螢幕列舉穩定後再建立桌布(單純等一小段時間)
-            self.follow_restore_timer.start(RESTORE_DELAY_MS)
+            self.follow_restore_timer.start(config.get("followRestoreDelayMs", 3000))
         else:
             self.initialize_screens()
 

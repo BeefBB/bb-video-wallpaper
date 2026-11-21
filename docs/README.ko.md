@@ -122,6 +122,9 @@ Folder/
 최근 사용 기록 | "recentVideo" | [], 0-20개
 모니터별 배경화면 | "screenWallpapers" | {}
 모니터 따라가기 관계 | "screenFollows" | {}
+따라가는 모니터의 정기 동기화 간격 | "followSyncIntervalMs" | 60000 ms, 1000-600000
+따라가는 모니터의 동기화 오차 허용값 | "followSyncToleranceMs" | 500 ms, 0-10000
+시작 시 모니터 따라가기 관계 복원 전 대기 시간 | "followRestoreDelayMs" | 3000 ms, 0-60000, 저장된 따라가기 관계가 있을 때만 대기
 미디어 크기 조정 모드 | "scalingMode" | {}, 기록이 없으면 fill 사용
 미디어 여백 색상 | "backgroundColor" | {}, 맞춤 모드에서 자동으로 계산하고 저장
 
@@ -148,9 +151,6 @@ VLC 중지 시 깨우기 간격 |  | 0.05 s
 로그 수준 |  | INFO
 로그 파일당 최대 크기 |  | 2 MiB
 이전 로그 보관 개수 |  | 3개
-따라가는 모니터의 정기 동기화 간격 | SYNC_INTERVAL_MS | 60 s
-따라가는 모니터의 동기화 오차 허용값 | SYNC_TOLERANCE_MS | 0.5 s
-시작 시 모니터 따라가기 관계 복원 전 대기 시간 | RESTORE_DELAY_MS | 3 s, 저장된 따라가기 관계가 있을 때만 대기
 미리보기 이미지의 가장 긴 변 |  | `previewSize * 100` px, 좌우 각각 4 px의 안쪽 여백 제외, 화면 공간이 부족하면 축소
 미리보기 배경색 |  | #202020
 미리보기 안쪽 여백 |  | 4 px

@@ -122,6 +122,9 @@ Folder/
 最近使用紀錄             | "recentVideo"                | [], 0-20
 各螢幕桌布               | "screenWallpapers"           | {}
 螢幕跟隨關係             | "screenFollows"              | {}
+跟隨螢幕定期同步間隔     | "followSyncIntervalMs"       | 60000 ms, 1000-600000
+跟隨螢幕同步誤差容許值   | "followSyncToleranceMs"      | 500 ms, 0-10000
+啟動時還原跟隨關係前等待 | "followRestoreDelayMs"       | 3000 ms, 0-60000, 有已保存的跟隨關係時才等待
 素材縮放模式             | "scalingMode"                | {}, 無紀錄時使用 fill
 素材留白顏色             | "backgroundColor"            | {}, 完整顯示時自動取色並保存
 
@@ -148,9 +151,6 @@ VLC 桌布播放參數         |                            | 關閉音訊, 不�
 日誌等級                 |                            | INFO
 日誌單檔大小上限         |                            | 2 MiB
 舊日誌保留份數           |                            | 3 份
-跟隨螢幕定期同步間隔     | SYNC_INTERVAL_MS           | 60 s
-跟隨螢幕同步誤差容許值   | SYNC_TOLERANCE_MS          | 0.5 s
-啟動時還原跟隨關係前等待 | RESTORE_DELAY_MS           | 3 s , 有已保存的跟隨關係時才等待
 預覽圖片最長邊           |                            | `previewSize * 100` px, 不含左右各 4 px 內距, 螢幕空間不足時縮小
 預覽背景色               |                            | #202020
 預覽內距                 |                            | 4 px

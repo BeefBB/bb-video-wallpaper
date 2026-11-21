@@ -28,6 +28,7 @@ CONFIG_KEYS = set(CONFIG_DEFAULTS) | {
     "screenWallpapers", "screenFollows", "scalingMode", "backgroundColor", "hardwareDecoding",
     "maxBatchImportKiB", "previewDelayMs", "previewResetDelayMs", "previewAnimationDurationMs",
     "fullscreenDetectionDelayMs", "autoPauseCheckIntervalMs",
+    "followSyncIntervalMs", "followSyncToleranceMs", "followRestoreDelayMs",
 }
 
 SUPPORTED_LANGUAGES = {
@@ -315,6 +316,9 @@ class ConfigStore:
             ("previewAnimationDurationMs", 140, 0, 10000),
             ("fullscreenDetectionDelayMs", 10000, 0, 60000),
             ("autoPauseCheckIntervalMs", 500, 100, 10000),
+            ("followSyncIntervalMs", 60000, 1000, 600000),
+            ("followSyncToleranceMs", 500, 0, 10000),
+            ("followRestoreDelayMs", 3000, 0, 60000),
         ):
             value = config.get(key, default)
             if type(value) is not int:

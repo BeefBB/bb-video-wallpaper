@@ -122,6 +122,9 @@ Folder/
 最近使用记录 | "recentVideo" | [], 0-20 条
 各屏幕壁纸 | "screenWallpapers" | {}
 屏幕跟随关系 | "screenFollows" | {}
+跟随屏幕定期同步间隔 | "followSyncIntervalMs" | 60000 ms, 1000-600000
+跟随屏幕同步误差容许值 | "followSyncToleranceMs" | 500 ms, 0-10000
+启动时恢复跟随关系前的等待 | "followRestoreDelayMs" | 3000 ms, 0-60000, 仅在有已保存的跟随关系时等待
 素材缩放模式 | "scalingMode" | {}, 无记录时使用 fill
 素材留白颜色 | "backgroundColor" | {}, 完整显示时自动取色并保存
 
@@ -148,9 +151,6 @@ VLC 壁纸播放参数 |  | 关闭音频, 不显示视频标题, 循环播放参
 日志级别 |  | INFO
 单个日志文件大小上限 |  | 2 MiB
 旧日志保留份数 |  | 3 份
-跟随屏幕定期同步间隔 | SYNC_INTERVAL_MS | 60 s
-跟随屏幕同步误差容许值 | SYNC_TOLERANCE_MS | 0.5 s
-启动时恢复跟随关系前的等待 | RESTORE_DELAY_MS | 3 s, 仅在有已保存的跟随关系时等待
 预览图片最长边 |  | `previewSize * 100` px, 不含左右各 4 px 内边距, 屏幕空间不足时缩小
 预览背景色 |  | #202020
 预览内边距 |  | 4 px

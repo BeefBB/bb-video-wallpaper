@@ -122,6 +122,9 @@ Total size limit for multiple selections | "maxBatchImportKiB" | 31457280 KiB (3
 Recently used media | "recentVideo" | [], 0-20 entries
 Wallpaper for each monitor | "screenWallpapers" | {}
 Monitor follow relationships | "screenFollows" | {}
+Periodic synchronization interval for following monitors | "followSyncIntervalMs" | 60000 ms, 1000-600000
+Playback synchronization tolerance for following monitors | "followSyncToleranceMs" | 500 ms, 0-10000
+Delay before restoring monitor follow relationships on startup | "followRestoreDelayMs" | 3000 ms, 0-60000, only when saved follow relationships exist
 Media scaling modes | "scalingMode" | {}, uses fill when no setting exists
 Media background colors | "backgroundColor" | {}, automatically calculated and saved in Fit mode
 
@@ -148,9 +151,6 @@ Notification display duration |  | 3 s
 Log level |  | INFO
 Maximum size per log file |  | 2 MiB
 Number of rotated logs to keep |  | 3 files
-Periodic synchronization interval for following monitors | SYNC_INTERVAL_MS | 60 s
-Playback synchronization tolerance for following monitors | SYNC_TOLERANCE_MS | 0.5 s
-Delay before restoring monitor follow relationships on startup | RESTORE_DELAY_MS | 3 s, only when saved follow relationships exist
 Longest preview image edge |  | `previewSize * 100` px, excluding 4 px of padding on each side; shrinks when screen space is insufficient
 Preview background color |  | #202020
 Preview padding |  | 4 px
