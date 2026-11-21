@@ -17,11 +17,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-SYNC_INTERVAL_MS = 60_000
-SYNC_TOLERANCE_MS = 500
-RESTORE_DELAY_MS = 3_000
-
-
 class FollowWallpaper(PlaybackTarget, Protocol):
 
     def set_play_media(self, path: Path, /) -> None: ...
@@ -34,6 +29,9 @@ class FollowWallpaper(PlaybackTarget, Protocol):
 
 
 class AutoPauseHandler(Protocol):
+    """
+    依跟隨關係檢查自動暫停狀態
+    """
 
     def __call__(self, wallpaper: FollowWallpaper, *, from_timer: bool = False) -> bool: ...
 
@@ -171,10 +169,17 @@ class FollowController:
     依跟隨關係套用來源的媒體, 狀態與進度
     """
 
-    def __init__(self, wallpapers: Mapping[str, FollowWallpaper], config_store: ConfigStore) -> None:
+    def __init__(
+        self,
+        wallpapers: Mapping[str, FollowWallpaper],
+        config_store: ConfigStore,
+        *,
+        sync_tolerance_ms: int | None = None,
+    ) -> None:
 
         self.wallpapers = wallpapers
         self.config_store = config_store
+        self._sync_tolerance_ms = 500 if sync_tolerance_ms is None else sync_tolerance_ms
         self.graph = FollowGraph()
         self._pending_selection: set[str] = set()
         self.is_exiting = False
@@ -262,7 +267,7 @@ class FollowController:
 
     def synchronize(self, screen_id: str | None = None) -> None:
         """
-        在 Qt 主執行緒連續套用群組, 不處理事件佇列
+        在 Qt 主執行緒連續套用群組
         """
 
         if self.is_exiting:
@@ -323,7 +328,7 @@ class FollowController:
                 if length > 0 and difference <= length:
                     difference = min(difference, length - difference)
 
-                if difference > SYNC_TOLERANCE_MS:
+                if difference > self._sync_tolerance_ms:
                     target.seek_time(source_time)
 
             except Exception:

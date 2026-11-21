@@ -5,7 +5,7 @@
 可以将视频作为壁纸播放，同时也是一款非常轻量的壁纸管理软件。  
 将壁纸保存在一个文件夹中，以便随时切换。  
 
-- 轻量（约 200MB）
+- 轻量（约 200 MiB）
 - 记录最近使用的壁纸
 - 可选择各种自动暂停时机（窗口最大化、屏幕关闭、未接通电源）
 - 可选择开机自动启动
@@ -107,16 +107,26 @@ Folder/
 --- | --- | ---
 语言 | "language" | 缺少字段时: 安装语言 > 系统语言 > 繁体中文; 字段已存在但无效时: 繁体中文
 窗口最大化时自动暂停 | "autoPauseIfFullscreen" | true
+启动时延后最大化检测 | "fullscreenDetectionDelayMs" | 10000 ms, 0-60000
 屏幕关闭时自动暂停 | "autoPauseIfScreenOff" | true
 未接通电源时自动暂停 | "autoPauseIfOnBattery" | false
+自动暂停检查间隔 | "autoPauseCheckIntervalMs" | 500 ms, 100-10000
+硬件解码 | "hardwareDecoding" | any (自动), 可选 any, d3d11va, dxva2, none
 字体大小 | "fontSize" | 11 pt, 6-48
 最近记录显示条数 | "recentDisplayCount" | 6 条, 0-20
-预览大小 | "previewSize" | 3 (普通), 1-5 对应 100-500 px
+预览大小 | "previewSize" | 3 (普通), 0 禁用预览, 1-5 对应 100-500 px
+首次显示预览的等待时间 | "previewDelayMs" | 1000 ms, 0-10000
+离开选项后退出预览模式的延迟 | "previewResetDelayMs" | 2000 ms, 0-10000
+预览动画时间 | "previewAnimationDurationMs" | 140 ms, 0-10000
+多选导入总大小上限 | "maxBatchImportKiB" | 31457280 KiB (30 GiB), 正整数
 最近使用记录 | "recentVideo" | [], 0-20 条
 各屏幕壁纸 | "screenWallpapers" | {}
 屏幕跟随关系 | "screenFollows" | {}
-素材与屏幕方向的缩放模式 | "scalingMode" | {}, 无记录时使用 fill
-素材共用的留白颜色 | "backgroundColor" | {}, 完整显示时自动取色并保存
+跟随屏幕定期同步间隔 | "followSyncIntervalMs" | 60000 ms, 1000-600000
+跟随屏幕同步误差容许值 | "followSyncToleranceMs" | 500 ms, 0-10000
+启动时恢复跟随关系前的等待 | "followRestoreDelayMs" | 3000 ms, 0-60000, 仅在有已保存的跟随关系时等待
+素材缩放模式 | "scalingMode" | {}, 无记录时使用 fill
+素材留白颜色 | "backgroundColor" | {}, 完整显示时自动取色并保存
 
 语言代码必须完全匹配 `zh-TW`, `zh-CN`, `ja-JP`, `ko-KR`, `en-US`; 例如系统语言为 `en-GB` 时不会自动对应 `en-US`
 
@@ -125,14 +135,12 @@ Folder/
 名称 | 项目 | 默认值
 --- | --- | ---
 媒体文件夹 | MEDIA_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\video\`
-单文件导入文件夹 | SINGLE_IMPORT_DIR | 媒体文件夹下的 `_imports/`
+素材导入文件夹 | SINGLE_IMPORT_DIR | 媒体文件夹下的 `_imports/`
 缩略图文件夹 | THUMBNAIL_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\thumbnails\`
 日志文件 |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\log\log.log`
 VLC 壁纸播放参数 |  | 关闭音频, 不显示视频标题, 循环播放参数 `--input-repeat=65535`
-壁纸缩放方式 |  | fill (默认), fit 或 stretch, 按素材与屏幕方向保存
+壁纸缩放方式 |  | 图片与视频均保持比例居中裁剪填满
 启动时选择壁纸的顺序 |  | 该屏幕保存的壁纸 > 最近记录第一条 > 媒体列表第一项, 前两者要求文件存在
-启动时延后最大化检测 | fullscreen_detection_timer | 10 s
-自动暂停检查间隔 | check_auto_pause_timer | 0.5 s
 壁纸重新挂载默认延迟 |  | 0.2 s
 桌面未就绪时的重新挂载等待 |  | 2 s
 壁纸重新挂载失败重试间隔 |  | 2 s
@@ -143,13 +151,8 @@ VLC 壁纸播放参数 |  | 关闭音频, 不显示视频标题, 循环播放参
 日志级别 |  | INFO
 单个日志文件大小上限 |  | 2 MiB
 旧日志保留份数 |  | 3 份
-跟随屏幕定期同步间隔 | SYNC_INTERVAL_MS | 60 s
-跟随屏幕同步误差容许值 | SYNC_TOLERANCE_MS | 0.5 s
-启动时恢复跟随关系前的等待 | RESTORE_DELAY_MS | 3 s, 仅在有已保存的跟随关系时等待
-首次显示预览的等待时间 | preview_timer | 0.5 s
-离开选项后退出预览模式的延迟 | reset_timer | 1 s
 预览图片最长边 |  | `previewSize * 100` px, 不含左右各 4 px 内边距, 屏幕空间不足时缩小
-预览边框背景色 |  | #202020, 预览内容使用素材的留白颜色
+预览背景色 |  | #202020
 预览内边距 |  | 4 px
 预览与菜单间距 |  | 8 px, 优先放在左侧, 空间不足时改放右侧
 加载图片失败时的替代图 |  | 宽 `previewSize * 100` px, 高按 16:9 四舍五入, 深灰色 (`Qt.GlobalColor.darkGray`)

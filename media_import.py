@@ -1,6 +1,5 @@
 """
-媒體匯入, 內容去重, 容量檢查與取消
-匯入目錄與翻譯函式由呼叫端提供, 匯入模組時不建立資料夾或載入 VLC
+媒體匯入, 容量檢查與取消
 """
 
 from collections.abc import Callable
@@ -16,8 +15,8 @@ import winerror
 from thumbnails import SUPPORTED_MEDIA_EXTENSIONS
 
 
-# 匯入媒體時預留的額外空間
-IMPORT_RESERVE_BYTES = 200 * 1024 * 1024  # 200 MB
+# 匯入媒體時預留的額外空間(200 MiB)
+IMPORT_RESERVE_BYTES = 200 * 1024 * 1024
 
 
 class MediaImportCancelled(Exception):
@@ -44,12 +43,10 @@ def calculate_sha256(path: Path, cancelled: Callable[[], bool] = lambda: False) 
             check_import_cancelled(cancelled)
 
             chunk = file.read(1024 * 1024)
-
             if not chunk:
                 break
 
             digest.update(chunk)
-
 
     return digest.digest()
 
@@ -60,22 +57,21 @@ def import_media(
     *,
     translate: Callable[[str], str],
     progress: Callable[[int], None] | None = None,
-    cancelled: Callable[[], bool] = lambda: False
+    cancelled: Callable[[], bool] = lambda: False,
+    expected_size: int | None = None
 ) -> Path:
     """
-    比對重複內容後分塊複製至指定目錄, 支援進度回報與取消
+    匯入媒體檔案至指定目錄, 期間使檔案無法被改寫或替換, 支援進度回報與取消
     """
 
     check_import_cancelled(cancelled)
 
     source = source.resolve(strict=True)
-
     if (
         not source.is_file() or
         source.suffix.lower() not in SUPPORTED_MEDIA_EXTENSIONS
     ):
         raise ValueError(source.name)
-
 
     # 只允許共用讀取, 來源在雜湊與複製期間不能被改寫或替換
     try:
@@ -90,6 +86,10 @@ def import_media(
         raise
 
     try:
+        # 批次預檢後大小可能變動, 取得來源鎖後再確認
+        if expected_size is not None and source.stat().st_size != expected_size:
+            raise OSError(translate("media_source_changed"))
+
         return _import_media(source, import_dir, translate=translate, progress=progress, cancelled=cancelled)
 
     finally:
@@ -105,15 +105,13 @@ def _import_media(
     cancelled: Callable[[], bool]
 ) -> Path:
     """
-    在來源禁止寫入期間進行內容比對與複製
+    傳輸媒體檔案至匯入目錄, 先比對重複內容, 再分塊複製, 支援進度回報與取消
     """
 
     import_dir.mkdir(parents=True, exist_ok=True)
 
-
     source_size = source.stat().st_size
     source_hash = None
-
 
     for candidate in sorted(import_dir.iterdir()):
 
@@ -137,9 +135,7 @@ def _import_media(
         if calculate_sha256(candidate, cancelled) == source_hash:
             return candidate
 
-
     check_import_cancelled(cancelled)
-
 
     # 重複檔案不需額外空間; 確定要複製時才檢查並預留
     # 可用空間是給使用者看的, 是扣除預留空間後的數值, 也就是說會比真實可用空間小一些
@@ -148,15 +144,14 @@ def _import_media(
 
     if free_space < required_space:
 
-        megabyte = 1024 * 1024
+        mebibyte = 1024 * 1024
 
         raise OSError(
             translate("media_insufficient_space").format(
-                required=(source_size + megabyte - 1) // megabyte,
-                available=max(0, free_space - IMPORT_RESERVE_BYTES) // megabyte
+                required=(source_size + mebibyte - 1) // mebibyte,
+                available=max(0, free_space - IMPORT_RESERVE_BYTES) // mebibyte
             )
         )
-
 
     # 暫存檔不會出現在媒體清單, 完成複製後才改成正式檔名
     with tempfile.NamedTemporaryFile(
@@ -166,7 +161,6 @@ def _import_media(
         delete=False
     ) as temp:
         temp_path = Path(temp.name)
-
 
     try:
 

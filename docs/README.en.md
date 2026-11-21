@@ -5,7 +5,7 @@
 Play videos as your desktop wallpaper while keeping it lightweight and simple to manage.  
 Store your wallpapers in a single folder, making it easy to switch between them at any time.  
 
-- Lightweight (~200 MB)
+- Lightweight (~200 MiB)
 - Keep a history of recently used wallpapers
 - Various automatic pause options (when a window is maximized, the screen is turned off, or the PC is running on battery)
 - Optional launch on system startup
@@ -107,16 +107,26 @@ Name | Item | Default
 --- | --- | ---
 Language | "language" | If the field is missing: installer language > system language > Traditional Chinese; if present but invalid: Traditional Chinese
 Automatically pause when a window is maximized | "autoPauseIfFullscreen" | true
+Delay before detecting maximized windows on startup | "fullscreenDetectionDelayMs" | 10000 ms, 0-60000
 Automatically pause when the screen is off | "autoPauseIfScreenOff" | true
 Automatically pause when on battery | "autoPauseIfOnBattery" | false
+Automatic pause check interval | "autoPauseCheckIntervalMs" | 500 ms, 100-10000
+Hardware decoding | "hardwareDecoding" | any (automatic), options: any, d3d11va, dxva2, none
 Font size | "fontSize" | 11 pt, 6-48
 Number of recent entries to display | "recentDisplayCount" | 6 entries, 0-20
-Preview size | "previewSize" | 3 (Normal), 1-5 maps to 100-500 px
+Preview size | "previewSize" | 3 (Normal), 0 disables previews, 1-5 maps to 100-500 px
+Delay before showing the first preview | "previewDelayMs" | 1000 ms, 0-10000
+Delay before leaving preview mode after moving away | "previewResetDelayMs" | 2000 ms, 0-10000
+Preview animation duration | "previewAnimationDurationMs" | 140 ms, 0-10000
+Total size limit for multiple selections | "maxBatchImportKiB" | 31457280 KiB (30 GiB), positive integer
 Recently used media | "recentVideo" | [], 0-20 entries
 Wallpaper for each monitor | "screenWallpapers" | {}
 Monitor follow relationships | "screenFollows" | {}
-Scaling modes per media file and monitor orientation | "scalingMode" | {}, uses fill when no setting exists
-Background colors shared per media file | "backgroundColor" | {}, automatically calculated and saved in Fit mode
+Periodic synchronization interval for following monitors | "followSyncIntervalMs" | 60000 ms, 1000-600000
+Playback synchronization tolerance for following monitors | "followSyncToleranceMs" | 500 ms, 0-10000
+Delay before restoring monitor follow relationships on startup | "followRestoreDelayMs" | 3000 ms, 0-60000, only when saved follow relationships exist
+Media scaling modes | "scalingMode" | {}, uses fill when no setting exists
+Media background colors | "backgroundColor" | {}, automatically calculated and saved in Fit mode
 
 Language codes must exactly match `zh-TW`, `zh-CN`, `ja-JP`, `ko-KR`, or `en-US`; for example, the system language `en-GB` is not automatically mapped to `en-US`.
 
@@ -125,14 +135,12 @@ Language codes must exactly match `zh-TW`, `zh-CN`, `ja-JP`, `ko-KR`, or `en-US`
 Name | Item | Default
 --- | --- | ---
 Media folder | MEDIA_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\video\`
-Single-file import folder | SINGLE_IMPORT_DIR | `_imports/` inside the media folder
+Media import folder | SINGLE_IMPORT_DIR | `_imports/` inside the media folder
 Thumbnail folder | THUMBNAIL_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\thumbnails\`
 Log file |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\log\log.log`
 VLC wallpaper playback options |  | Audio disabled, video title hidden, repeat option `--input-repeat=65535`
-Wallpaper scaling mode |  | fill (default), fit, or stretch, saved per media file and monitor orientation
+Wallpaper scaling mode |  | Images and videos preserve their aspect ratio and fill the screen with centered cropping
 Wallpaper selection order on startup |  | Saved wallpaper for the monitor > first recent entry > first media list entry; the file must exist for either of the first two choices
-Delay before detecting maximized windows on startup | fullscreen_detection_timer | 10 s
-Automatic pause check interval | check_auto_pause_timer | 0.5 s
 Default wallpaper reattachment delay |  | 0.2 s
 Reattachment wait when the desktop is not ready |  | 2 s
 Retry interval after wallpaper reattachment fails |  | 2 s
@@ -143,13 +151,8 @@ Notification display duration |  | 3 s
 Log level |  | INFO
 Maximum size per log file |  | 2 MiB
 Number of rotated logs to keep |  | 3 files
-Periodic synchronization interval for following monitors | SYNC_INTERVAL_MS | 60 s
-Playback synchronization tolerance for following monitors | SYNC_TOLERANCE_MS | 0.5 s
-Delay before restoring monitor follow relationships on startup | RESTORE_DELAY_MS | 3 s, only when saved follow relationships exist
-Delay before showing the first preview | preview_timer | 0.5 s
-Delay before leaving preview mode after moving away | reset_timer | 1 s
 Longest preview image edge |  | `previewSize * 100` px, excluding 4 px of padding on each side; shrinks when screen space is insufficient
-Preview border background color |  | #202020; preview content uses the media file's background color
+Preview background color |  | #202020
 Preview padding |  | 4 px
 Gap between the preview and menu |  | 8 px, preferably on the left; moves to the right if there is not enough space
 Fallback when the loading image cannot be loaded |  | Width `previewSize * 100` px, height rounded to 16:9, dark gray (`Qt.GlobalColor.darkGray`)

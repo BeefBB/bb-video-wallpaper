@@ -67,11 +67,9 @@ def is_already_running() -> tuple[bool, object]:
     # 建立全域 Mutex
     mutex = win32event.CreateMutex(None, False, MUTEX_NAME)  # type: ignore
 
-
     # 檢查錯誤碼
     if win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS:
         return True, mutex
-
 
     return False, mutex
 
@@ -126,7 +124,6 @@ def register_power_notification(hwnd: int) -> int | None:
     register = ctypes.windll.user32.RegisterPowerSettingNotification
     register.restype = wintypes.HANDLE
     register.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD]
-
 
     return register(hwnd, ctypes.byref(GUID_CONSOLE_DISPLAY_STATE), DEVICE_NOTIFY_WINDOW_HANDLE)
 
@@ -200,7 +197,6 @@ def register_taskbar_created_notification(hwnd: int) -> int:
     if not message:
         raise RuntimeError("無法註冊 TaskbarCreated 訊息")
 
-
     change_filter = ctypes.windll.user32.ChangeWindowMessageFilterEx
     change_filter.restype = wintypes.BOOL
     change_filter.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.DWORD, ctypes.c_void_p]
@@ -208,7 +204,6 @@ def register_taskbar_created_notification(hwnd: int) -> int:
     # MSGFLT_ALLOW = 1, 只放行此視窗的工作列重建訊息
     if not change_filter(hwnd, message, 1, None):
         logger.warning("允許工作列重建通知失敗 - hwnd=%#x error=%s", hwnd, ctypes.GetLastError())
-
 
     return message
 
@@ -250,7 +245,6 @@ def is_on_battery() -> bool:
 
     if not ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(status)):
         return False
-
 
     return status.ACLineStatus == 0  # 0 = 沒插電, 1 = 接上 AC 電源, 255 = 未知
 
@@ -332,7 +326,6 @@ def task_exists() -> bool:
         creationflags=subprocess.CREATE_NO_WINDOW
     )
 
-
     return result.returncode == 0
 
 
@@ -354,7 +347,6 @@ def create_workerw(parent_hwnd) -> int:
         # 只忽略已註冊的類別, 其他錯誤保留給掛載流程記錄
         if error.winerror != winerror.ERROR_CLASS_ALREADY_EXISTS:
             raise
-
 
     rect = win32gui.GetClientRect(parent_hwnd)
     width = rect[2] - rect[0]
@@ -385,7 +377,6 @@ def create_workerw(parent_hwnd) -> int:
             logger.exception("清理未完成初始化的 WorkerW 失敗 - hwnd=%#x", hwnd)
 
         raise
-
 
     return hwnd
 
@@ -442,13 +433,11 @@ def set_windows_as_wallpaper(hwnd: int) -> None:
 
         _log_wallpaper_window("Progman", progman)
 
-
         # 發送桌面分裂訊息, 讓桌布與桌面圖示分屬不同的 WorkerW
         for wparam, lparam in ((0, None), (0xD, None), (0xD, 1)):
 
             stage = f"SendMessageTimeout(0x052C, {wparam}, {lparam})"
             win32gui.SendMessageTimeout(progman, 0x052C, wparam, lparam, 0, 0x03E8)
-
 
         stage = "尋找 WorkerW"
         workerw_top = 0
@@ -458,18 +447,15 @@ def set_windows_as_wallpaper(hwnd: int) -> None:
         while True:
 
             workerw_top = win32gui.FindWindowEx(None, workerw_top, "WorkerW", None)
-
             if not workerw_top:
                 break
 
             icon_layer = win32gui.FindWindowEx(workerw_top, None, "SHELLDLL_DefView", None)
-
             if not icon_layer:
                 continue
 
             workerw_old = win32gui.FindWindowEx(None, workerw_top, "WorkerW", None)
             break
-
 
         if not workerw_old:
 
@@ -488,7 +474,6 @@ def set_windows_as_wallpaper(hwnd: int) -> None:
             # 舊版: 掛載到桌面圖示層後方的 WorkerW
             mode = "legacy-workerw"
             workerw = workerw_old
-
 
         logger.info("桌布掛載路徑 - mode=%s progman=%#x workerw=%#x", mode, progman, workerw)
         _log_wallpaper_window("WorkerW", workerw)
@@ -513,16 +498,14 @@ def set_windows_as_wallpaper(hwnd: int) -> None:
         )
 
         if workerw_old:
-
             stage = "SetWindowPos"
             win32gui.SetWindowPos(
                 hwnd, icon_layer, 0, 0, 0, 0,
                 win32con.SWP_NOSIZE | win32con.SWP_NOMOVE
             )
 
-
+        # 使用實際父層, 避免 GetParent 把頂層視窗的 owner 當成 parent
         try:
-            # 使用實際父層, 避免 GetParent 把頂層視窗的 owner 當成 parent
             actual_parent = win32gui.GetAncestor(hwnd, win32con.GA_PARENT)
 
         except Exception:
@@ -600,7 +583,6 @@ def is_on_current_desktop(hwnd: int) -> bool:
 
 
 # 視窗最大化
-
 # 邊界容許值(沒有人會透過螢幕邊緣幾個像素看桌布)
 FULLSCREEN_MARGIN = 4
 
@@ -641,9 +623,7 @@ def is_any_fullscreen(wallpaper_hwnd: int) -> bool:
     if not wallpaper_monitor:
         return False
 
-
     shell_hwnd = ctypes.windll.user32.GetShellWindow()
-
 
     has_fullscreen = False
 
@@ -654,28 +634,23 @@ def is_any_fullscreen(wallpaper_hwnd: int) -> bool:
         if has_fullscreen:
             return True
 
-
         if (
             hwnd == wallpaper_hwnd or  # 自己不算
             hwnd == shell_hwnd         # Progman不算
         ):
             return True
 
-
         # 隱藏視窗不算
         if not win32gui.IsWindowVisible(hwnd):
             return True
-
 
         # 最小化視窗不算
         if win32gui.IsIconic(hwnd):
             return True
 
-
         # 不在目前桌面不算
         if not is_on_current_desktop(hwnd):
             return True
-
 
         try:
 
@@ -683,7 +658,6 @@ def is_any_fullscreen(wallpaper_hwnd: int) -> bool:
             class_name = win32gui.GetClassName(hwnd)
             if class_name in SHELL_CLASSES:
                 return True
-
 
             # 黑名單不算
             window_title = win32gui.GetWindowText(hwnd).casefold().strip()
@@ -694,7 +668,6 @@ def is_any_fullscreen(wallpaper_hwnd: int) -> bool:
 
         if window_title in WINDOW_TITLE_BLACKLIST:
             return True
-
 
         try:
             monitor = win32api.MonitorFromWindow(hwnd, win32con.MONITOR_DEFAULTTONEAREST)
@@ -717,7 +690,6 @@ def is_any_fullscreen(wallpaper_hwnd: int) -> bool:
         except Exception:
             return True
 
-
         has_fullscreen = (
             left <= monitor_left + FULLSCREEN_MARGIN and
             top <= monitor_top + FULLSCREEN_MARGIN and
@@ -725,15 +697,11 @@ def is_any_fullscreen(wallpaper_hwnd: int) -> bool:
             bottom >= monitor_bottom - FULLSCREEN_MARGIN
         )
 
-
         if has_fullscreen:
             logger.debug("Fullscreen - %s - %s", hwnd, window_title)
 
-
         return True
 
-
     win32gui.EnumWindows(enum_windows_callback, None)
-
 
     return has_fullscreen

@@ -17,8 +17,8 @@ import threading
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QImage, QImageWriter
+from PySide6.QtCore import QAbstractAnimation, QEvent, QObject, QPointF, Qt, Signal
+from PySide6.QtGui import QAction, QColor, QImage, QImageWriter, QMouseEvent
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -507,6 +507,47 @@ class MediaPreviewTests(QtTestCase):
         self.assertEqual(self.menu.preview_pixmap.toImage().pixelColor(0, 0), QColor("blue"))
 
 
+    def test_disable_ignores_queued_result_and_hover_until_reenabled(self) -> None:
+        """
+        禁用時忽略佇列結果與懸停, 重新啟用後恢復首次等待與縮圖請求
+        """
+
+        self.worker.request = mock.Mock()
+        self.menu.popup(self.app.primaryScreen().availableGeometry().center())
+        position = self.menu.actionGeometry(self.first).center()
+        cursor_position = self.menu.mapToGlobal(position)
+        event = QMouseEvent(
+            QEvent.Type.MouseMove, QPointF(position), QPointF(cursor_position),
+            Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier
+        )
+        image = self.thumbnail()
+        media_path = self.first.data()
+        thread = threading.Thread(target=lambda: self.worker.thumbnail_ready.emit(media_path, 3, image))
+        thread.start()
+        thread.join(timeout=5)
+        self.assertFalse(thread.is_alive())
+
+        self.menu.preview_timer.start()
+        self.menu.set_preview_size(0)
+
+        with mock.patch.object(media_preview.QCursor, "pos", return_value=cursor_position):
+
+            self.menu.mouseMoveEvent(event)
+            self.menu.show_preview()
+            self.app.processEvents()
+            self.display_preview_mock.assert_not_called()
+            self.worker.request.assert_not_called()
+            self.assertFalse(self.menu.preview_timer.isActive())
+            self.assertFalse(self.menu.preview_mode)
+            self.assertTrue(self.menu.preview.isHidden())
+
+            self.menu.set_preview_size(3)
+            self.menu.mouseMoveEvent(event)
+            self.assertTrue(self.menu.preview_timer.isActive())
+            self.menu.show_preview()
+            self.worker.request.assert_called_once_with(Path(media_path), preview_size=3, priority=True)
+
+
     def test_background_result_updates_preview_on_qt_main_thread(self) -> None:
         """
         背景縮圖結果由 Qt 主執行緒更新預覽
@@ -537,6 +578,59 @@ class MediaPreviewTests(QtTestCase):
 
         self.assertEqual(displayed_on, [threading.get_ident()])
         self.assertEqual(self.menu.preview_pixmap.toImage().pixelColor(0, 0), QColor("blue"))
+
+
+    def test_thumbnail_arrival_and_rapid_switch_preserve_animation_position(self) -> None:
+        """
+        動畫途中換圖不中斷進度, 快速換項目接續目前位置, 隱藏時停止
+        """
+
+        del self.menu.display_preview
+        self.worker.request = mock.Mock()
+        self.menu.popup(self.app.primaryScreen().availableGeometry().center())
+
+        with mock.patch.object(media_preview.QCursor, "pos") as cursor:
+
+            cursor.return_value = self.menu.mapToGlobal(self.menu.actionGeometry(self.first).center())
+            self.menu.show_preview()
+            animation = self.menu.preview_animation
+            first_position = animation.endValue()
+            animation.setCurrentTime(60)
+            current_position = self.menu.preview.pos()
+
+            self.worker.thumbnail_ready.emit(self.first.data(), 3, self.thumbnail())
+
+            self.assertEqual(animation.currentTime(), 60)
+            self.assertEqual(self.menu.preview.pos(), current_position)
+            self.assertEqual(animation.state(), QAbstractAnimation.State.Running)
+
+            self.menu.preview_action = self.second
+            cursor.return_value = self.menu.mapToGlobal(self.menu.actionGeometry(self.second).center())
+            self.menu.show_preview()
+
+            self.assertEqual(animation.startValue(), current_position)
+            self.assertNotEqual(animation.endValue(), first_position)
+            animation.setCurrentTime(60)
+            current_position = self.menu.preview.pos()
+
+            self.menu.preview_action = self.first
+            cursor.return_value = self.menu.mapToGlobal(self.menu.actionGeometry(self.first).center())
+            self.menu.show_preview()
+
+            self.assertEqual(animation.startValue(), current_position)
+            self.assertEqual(animation.endValue(), first_position)
+
+            self.menu.leave_preview()
+            self.assertEqual(animation.state(), QAbstractAnimation.State.Stopped)
+            self.assertFalse(self.menu.preview.isVisible())
+
+            self.menu.preview_action = self.first
+            self.menu.show_preview()
+            self.assertEqual(animation.state(), QAbstractAnimation.State.Running)
+
+            self.menu.hide()
+            self.assertEqual(animation.state(), QAbstractAnimation.State.Stopped)
+            self.assertFalse(self.menu.preview.isVisible())
 
 
 @unittest.skipUnless(

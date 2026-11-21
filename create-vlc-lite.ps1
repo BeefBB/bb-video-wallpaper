@@ -66,6 +66,7 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Failed to generate VLC plugin cache.'
 }
 
+$mebibyte = 1024 * 1024
 $sourceBytes = (Get-ChildItem $source -Recurse -File | Measure-Object Length -Sum).Sum
 $liteBytes = (Get-ChildItem $destination -Recurse -File | Measure-Object Length -Sum).Sum
-Write-Host ("Created VLC-lite: {0:N1} MB (source: {1:N1} MB, reduction: {2:N1}%)" -f ($liteBytes / 1MB), ($sourceBytes / 1MB), (100 * (1 - $liteBytes / $sourceBytes)))
+Write-Host ("Created VLC-lite: {0:N1} MiB (source: {1:N1} MiB, reduction: {2:N1}%)" -f ($liteBytes / $mebibyte), ($sourceBytes / $mebibyte), (100 * (1 - $liteBytes / $sourceBytes)))

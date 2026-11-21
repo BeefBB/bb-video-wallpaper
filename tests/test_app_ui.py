@@ -4,8 +4,10 @@
 """
 
 from pathlib import Path
+import json
 import os
 import sys
+import tempfile
 from types import SimpleNamespace
 import threading
 import time
@@ -35,7 +37,8 @@ class PreviewMenu(QMenu):
 
     def __init__(
         self, title, parent, *, media_dir, thumbnail_dir, loading_image_path,
-        preview_size=3, thumbnail_thread=None
+        preview_size=3, preview_delay_ms=1000, preview_reset_delay_ms=2000,
+        preview_animation_duration_ms=140, thumbnail_thread=None
     ):
         """
         建立 Qt 選單, 保存共用縮圖工作物件並替換預覽重設操作
@@ -77,10 +80,13 @@ class ImportMenuTests(QtTestCase):
 
         super().setUp()
 
-        self.source = ROOT / "sample.mp4"
-        self.destination = ROOT / "imported.mp4"
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.source = Path(self.temp_dir.name) / "sample.mp4"
+        self.source.write_bytes(b"sample contents")
+        self.destination = Path(self.temp_dir.name) / "imported.mp4"
         config_store = mock.Mock()
-        config_store.load.return_value = {}
+        config_store.load.return_value = {"maxBatchImportKiB": 30 * 1024 * 1024}
 
         self.namespace = {
             "QFileDialog": mock.Mock(),
@@ -92,7 +98,7 @@ class ImportMenuTests(QtTestCase):
             "THUMBNAIL_DIR": ROOT / "test-thumbnails",
             "LOADING_IMAGE_PATH": ROOT / "icon" / "loading300.jpg",
             "SINGLE_IMPORT_DIR": ROOT / "video" / "_imports",
-            "LANG": {"importing_media": "{percent}%"},
+            "LANG": json.loads((ROOT / "lang" / "zh-TW.json").read_text(encoding="utf-8")),
             "SUPPORTED_MEDIA_EXTENSIONS": {".mp4", ".png"},
             "SUPPORTED_VIDEO_EXTENSIONS": {".mp4"},
             "config_store": config_store,
@@ -105,7 +111,7 @@ class ImportMenuTests(QtTestCase):
             "get_media": mock.Mock(return_value=[]),
         }
         self.namespace["QSystemTrayIcon"].MessageIcon = QSystemTrayIcon.MessageIcon
-        self.namespace["QFileDialog"].getOpenFileName.return_value = (str(self.source), "")
+        self.namespace["QFileDialog"].getOpenFileNames.return_value = ([str(self.source)], "")
         module = load_app_module()
         module.__dict__.update(self.namespace)
         self.namespace = module.__dict__
@@ -194,7 +200,7 @@ class ImportMenuTests(QtTestCase):
         self.assertIsNone(self.tray.import_thread)
 
 
-    def blocked_import(self, source, import_dir, *, translate, progress, cancelled):
+    def blocked_import(self, source, import_dir, *, translate, progress, cancelled, expected_size):
         """
         暫停匯入工作, 由測試控制完成或取消
         """
@@ -281,21 +287,98 @@ class ImportMenuTests(QtTestCase):
         store.load.return_value = {"previewSize": 3, "futureOption": 9}
         store.save.return_value = False
 
-        self.tray.preview_size_actions[4].trigger()
+        self.tray.preview_size_actions[0].trigger()
 
-        store.save.assert_called_once_with({"previewSize": 4, "futureOption": 9})
+        store.save.assert_called_once_with({"previewSize": 0, "futureOption": 9})
         self.assertEqual(self.tray.preview_size, 3)
         self.assertTrue(self.tray.preview_size_actions[3].isChecked())
-        self.assertFalse(self.tray.preview_size_actions[4].isChecked())
+        self.assertFalse(self.tray.preview_size_actions[0].isChecked())
         for menu in menus:
             menu.set_preview_size.assert_not_called()
 
         store.save.return_value = True
-        self.tray.preview_size_actions[4].trigger()
+        self.tray.preview_size_actions[0].trigger()
 
-        self.assertEqual(self.tray.preview_size, 4)
+        self.assertEqual(self.tray.preview_size, 0)
         for menu in menus:
-            menu.set_preview_size.assert_called_once_with(4)
+            menu.set_preview_size.assert_called_once_with(0)
+
+        self.tray.preview_size_actions[4].trigger()
+        self.assertEqual(self.tray.preview_size, 4)
+        self.assertTrue(self.tray.preview_size_actions[4].isChecked())
+        self.assertFalse(self.tray.preview_size_actions[0].isChecked())
+        for menu in menus:
+            self.assertEqual(menu.set_preview_size.call_args_list, [mock.call(0), mock.call(4)])
+
+
+    def test_hardware_decoding_failures_restore_selection_and_retry_restarts(self) -> None:
+        """
+        讀取或保存失敗時還原勾選, 重試成功才重啟且不覆寫其他設定
+        """
+
+        store = self.namespace["config_store"]
+        config = {"hardwareDecoding": "any", "futureOption": 9}
+        store.load.side_effect = lambda: config.copy()
+        store.save.return_value = True
+        actions = self.tray.hardware_decoding_actions
+
+        with mock.patch.object(self.tray, "restart") as restart:
+            actions["any"].trigger()
+            store.save.assert_not_called()
+            restart.assert_not_called()
+
+            for failure, patcher in (
+                ("read", mock.patch.object(store, "load", side_effect=PermissionError)),
+                ("save", mock.patch.object(store, "save", return_value=False)),
+            ):
+                with self.subTest(failure=failure), patcher:
+                    actions["dxva2"].trigger()
+                    self.assertEqual(self.tray.hardware_decoding, "any")
+                    self.assertTrue(actions["any"].isChecked())
+                    self.assertFalse(actions["dxva2"].isChecked())
+                    restart.assert_not_called()
+
+            actions["dxva2"].trigger()
+            actions["dxva2"].trigger()
+
+            store.save.assert_called_once_with({**config, "hardwareDecoding": "dxva2"})
+            self.assertEqual(self.tray.hardware_decoding, "dxva2")
+            self.assertTrue(actions["dxva2"].isChecked())
+            self.assertFalse(actions["any"].isChecked())
+            restart.assert_called_once_with()
+
+
+    def test_hardware_decoding_restart_ignores_queued_changes_during_shutdown(self) -> None:
+        """
+        重啟清理期間的延遲選單訊號不得覆寫解碼設定或轉為還原預設
+        """
+
+        store = self.namespace["config_store"]
+        config = {"hardwareDecoding": "any", "futureOption": 9}
+        store.load.return_value = config
+        store.save.return_value = True
+        action = QAction(self.menu)
+        action.triggered.connect(
+            lambda checked=False: self.tray.hardware_decoding_actions["none"].trigger(),
+            Qt.ConnectionType.QueuedConnection
+        )
+        action.triggered.connect(
+            lambda checked=False: self.tray.reset_defaults(),
+            Qt.ConnectionType.QueuedConnection
+        )
+        action.trigger()
+        self.wallpaper.shutdown.side_effect = self.app.processEvents
+
+        self.tray.hardware_decoding_actions["d3d11va"].trigger()
+
+        store.save.assert_called_once_with({**config, "hardwareDecoding": "d3d11va"})
+        self.assertEqual(self.tray.hardware_decoding, "d3d11va")
+        self.assertTrue(self.tray.hardware_decoding_actions["d3d11va"].isChecked())
+        self.assertFalse(self.tray.hardware_decoding_actions["none"].isChecked())
+        self.assertTrue(self.tray.restart_requested)
+        self.assertFalse(self.tray.reset_requested)
+        self.tray.app.quit.assert_called_once_with()
+        self.wallpaper.shutdown.assert_called_once_with()
 
 
     def test_language_restart_ignores_queued_changes_during_shutdown(self) -> None:
@@ -364,21 +447,24 @@ class ImportMenuTests(QtTestCase):
         updated_on = []
         update_progress = self.tray.update_import_progress
 
-        def record_progress(percent):
+        def record_progress(worker, percent, index, comparing):
             """
             記錄進度回呼的執行緒, 再呼叫原本的選單更新方法
             """
 
             updated_on.append(threading.get_ident())
-            update_progress(percent)
+            update_progress(worker, percent, index, comparing)
 
-        def copy_with_progress(source, import_dir, *, translate, progress, cancelled):
+        def copy_with_progress(source, import_dir, *, translate, progress, cancelled, expected_size):
             """
             回報匯入進度後等待測試放行匯入工作
             """
 
             progress(42)
-            return self.blocked_import(source, import_dir, translate=translate, progress=progress, cancelled=cancelled)
+            return self.blocked_import(
+                source, import_dir, translate=translate, progress=progress,
+                cancelled=cancelled, expected_size=expected_size
+            )
 
         self.tray.update_import_progress = record_progress
         self.namespace["import_media"] = copy_with_progress
@@ -386,13 +472,14 @@ class ImportMenuTests(QtTestCase):
         worker = self.tray.import_thread
         self.assertTrue(self.started.wait(5))
         self.app.processEvents()
-        self.assertEqual(updated_on, [threading.get_ident()])
+        self.assertTrue(updated_on)
+        self.assertEqual(set(updated_on), {threading.get_ident()})
         self.assertIn("42%", self.tray.add_media_action.text())
 
         self.tray.cancel_import_action.trigger()
         self.assertTrue(worker.isInterruptionRequested())
         progress_text = self.tray.add_media_action.text()
-        self.tray.update_import_progress(80)
+        self.tray.update_import_progress(worker, 80, 1, False)
         self.assertEqual(self.tray.add_media_action.text(), progress_text)
         self.release.set()
         self.wait_for_completion(worker)
@@ -410,7 +497,7 @@ class ImportMenuTests(QtTestCase):
 
     def test_completed_import_waits_for_reattach_and_plays_only_once(self) -> None:
         """
-        驗證匯入結果等待重掛結束, 重複完成訊號也只套用一次
+        驗證匯入結果等待重掛結束, 重複完成訊號只套用一次且禁用後不預產縮圖
         """
 
         self.namespace["get_media"].return_value = [self.source]
@@ -421,6 +508,8 @@ class ImportMenuTests(QtTestCase):
         self.app.processEvents()
         self.assertIs(self.tray.import_thread, worker)
         self.tray.play_from_menu.assert_not_called()
+
+        self.tray.preview_size_actions[0].trigger()
 
         # 等待中的回呼若又遇上重掛, 繼續等下一次結束訊號
         self.reattach_notifier.reattach_finished.emit()
@@ -434,6 +523,7 @@ class ImportMenuTests(QtTestCase):
         self.assertIsNone(self.tray.import_thread)
         self.tray.play_from_menu.assert_called_once_with(self.destination, "screen-a")
         self.tray.refresh_media_menu.assert_called_once_with()
+        self.tray.thumbnail_thread.request.assert_not_called()
 
 
     def test_stop_overrides_queued_import_after_reattach_and_allows_new_import(self) -> None:
@@ -527,7 +617,7 @@ class ImportMenuTests(QtTestCase):
         驗證退出等待匯入前先要求取消, 取消完成後不播放或顯示錯誤
         """
 
-        def wait_for_cancel(source, import_dir, *, translate, progress, cancelled):
+        def wait_for_cancel(source, import_dir, *, translate, progress, cancelled, expected_size):
             """
             等待匯入取消要求並拋出取消例外, 未及時收到要求則回報逾時
             """

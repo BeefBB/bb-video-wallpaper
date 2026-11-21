@@ -25,7 +25,10 @@ CONFIG_DEFAULTS = {
 
 CONFIG_KEYS = set(CONFIG_DEFAULTS) | {
     "fontSize", "recentDisplayCount", "previewSize", "language", "recentVideo",
-    "screenWallpapers", "screenFollows", "scalingMode", "backgroundColor",
+    "screenWallpapers", "screenFollows", "scalingMode", "backgroundColor", "hardwareDecoding",
+    "maxBatchImportKiB", "previewDelayMs", "previewResetDelayMs", "previewAnimationDurationMs",
+    "fullscreenDetectionDelayMs", "autoPauseCheckIntervalMs",
+    "followSyncIntervalMs", "followSyncToleranceMs", "followRestoreDelayMs",
 }
 
 SUPPORTED_LANGUAGES = {
@@ -118,7 +121,7 @@ def _punctuation_candidates(text: str, position: int) -> set[str]:
 
 class ConfigStore:
     """
-    管理設定與語言檔, 建立物件時不讀寫檔案
+    管理設定與語言檔
     """
 
     def __init__(self, config_path: Path, media_dir: Path, lang_dir: Path) -> None:
@@ -247,7 +250,7 @@ class ConfigStore:
 
     def validate(self, raw, *, log_issues: bool = True) -> tuple[dict, list[str]]:
         """
-        回傳修正後設定與異常清單, 缺少欄位與相容性轉換不計異常
+        回傳修正後設定與異常清單
         """
 
         issues: list[str] = []
@@ -263,8 +266,7 @@ class ConfigStore:
 
         config = raw.copy()
 
-
-        # 自動暫停選項只接受布林值
+        # 自動暫停選項, 使用布林值
         for key, default in CONFIG_DEFAULTS.items():
 
             if key not in config:
@@ -274,8 +276,13 @@ class ConfigStore:
                 report("設定欄位 %s 型別錯誤, 使用預設值", key)
                 config[key] = default
 
+        hardware_decoding = config.get("hardwareDecoding", "any")
+        if not isinstance(hardware_decoding, str) or hardware_decoding not in ("any", "d3d11va", "dxva2", "none"):
+            report("設定欄位 hardwareDecoding 無效, 使用自動")
+            hardware_decoding = "any"
+        config["hardwareDecoding"] = hardware_decoding
 
-        # 字體大小使用整數 pt, 超出範圍時限制在 6 到 48
+        # 字體大小, 使用整數 pt, 限制在 6 到 48
         font_size = config.get("fontSize", 11)
         if type(font_size) is not int:
             report("設定欄位 fontSize 無效, 使用預設值")
@@ -284,8 +291,7 @@ class ConfigStore:
             report("設定欄位 fontSize 超出 6 到 48, 已限制範圍")
         config["fontSize"] = max(6, min(48, font_size))
 
-
-        # 最近紀錄顯示筆數使用整數, 0 表示隱藏, 最多顯示 20 筆
+        # 最近紀錄顯示筆數, 使用整數, 限制在 0 到 20
         recent_display_count = config.get("recentDisplayCount", 6)
         if type(recent_display_count) is not int:
             report("設定欄位 recentDisplayCount 無效, 使用預設值")
@@ -294,18 +300,42 @@ class ConfigStore:
             report("設定欄位 recentDisplayCount 超出 0 到 20, 已限制範圍")
         config["recentDisplayCount"] = max(0, min(20, recent_display_count))
 
-
-        # 預覽大小使用整數, 超出範圍時限制在 1 到 5
+        # 預覽大小使用整數, 0 表示禁用, 1 到 5 對應尺寸
         preview_size = config.get("previewSize", 3)
         if type(preview_size) is not int:
             report("設定欄位 previewSize 無效, 使用預設值")
             preview_size = 3
-        elif not 1 <= preview_size <= 5:
-            report("設定欄位 previewSize 超出 1 到 5, 已限制範圍")
-        config["previewSize"] = max(1, min(5, preview_size))
+        elif not 0 <= preview_size <= 5:
+            report("設定欄位 previewSize 超出 0 到 5, 已限制範圍")
+        config["previewSize"] = max(0, min(5, preview_size))
 
+        # 時間設定使用整數 ms, 各自限制範圍
+        for key, default, minimum, maximum in (
+            ("previewDelayMs", 1000, 0, 10000),
+            ("previewResetDelayMs", 2000, 0, 10000),
+            ("previewAnimationDurationMs", 140, 0, 10000),
+            ("fullscreenDetectionDelayMs", 10000, 0, 60000),
+            ("autoPauseCheckIntervalMs", 500, 100, 10000),
+            ("followSyncIntervalMs", 60000, 1000, 600000),
+            ("followSyncToleranceMs", 500, 0, 10000),
+            ("followRestoreDelayMs", 3000, 0, 60000),
+        ):
+            value = config.get(key, default)
+            if type(value) is not int:
+                report("設定欄位 %s 無效, 使用預設值", key)
+                value = default
+            elif not minimum <= value <= maximum:
+                report("設定欄位 %s 超出 %s 到 %s, 已限制範圍", key, minimum, maximum)
+            config[key] = max(minimum, min(maximum, value))
 
-        # 未指定語言時優先使用安裝語言, 再使用系統語言與繁體中文
+        # 多選匯入總大小上限, 使用正整數 KiB
+        max_batch_import_kib = config.get("maxBatchImportKiB", 30 * 1024 * 1024)
+        if type(max_batch_import_kib) is not int or max_batch_import_kib <= 0:
+            report("設定欄位 maxBatchImportKiB 無效, 使用預設值")
+            max_batch_import_kib = 30 * 1024 * 1024
+        config["maxBatchImportKiB"] = max_batch_import_kib
+
+        # 順位: 指定語言 > 安裝語言 > 系統語言 > 繁體中文
         if "language" not in config:
 
             installer_config = ConfigParser(interpolation=None)
@@ -334,7 +364,6 @@ class ConfigStore:
             config["language"] = language
 
         language = config["language"]
-
         if (
             not isinstance(language, str) or
             language not in SUPPORTED_LANGUAGES.values()
@@ -342,10 +371,8 @@ class ConfigStore:
             report("設定欄位 language 無效, 使用繁體中文")
             config["language"] = "zh-TW"
 
-
-        # 相容舊版單筆紀錄, 保留媒體資料夾內的相對路徑
         recent = config.get("recentVideo", [])
-
+        # 相容舊版單筆紀錄
         if isinstance(recent, str):
             recent = [recent]
 
@@ -357,13 +384,11 @@ class ConfigStore:
             for index, media_path in enumerate(recent):
 
                 normalized = self._normalize_media_path(media_path)
-
                 if normalized is None:
                     report("設定欄位 recentVideo[%s] 無效, 已移除", index)
                     continue
 
                 path = Path(normalized)
-
                 if path in seen:
                     report("設定欄位 recentVideo[%s] 重複, 已移除", index)
 
@@ -378,7 +403,6 @@ class ConfigStore:
             report("設定欄位 recentVideo 必須是清單, 使用空清單")
 
         config["recentVideo"] = normalized_recent
-
 
         # 各螢幕的桌布選擇
         screen_wallpapers = config.get("screenWallpapers", {})
@@ -395,10 +419,8 @@ class ConfigStore:
                     continue
 
                 normalized = self._normalize_media_path(media_path)
-
                 if normalized is not None:
                     normalized_wallpapers[screen_id] = normalized
-
                 else:
                     report("設定欄位 screenWallpapers.%s 媒體路徑無效, 已移除", screen_id)
 
@@ -444,7 +466,6 @@ class ConfigStore:
 
             config[key] = normalized_entries
 
-
         screen_follows = config.get("screenFollows", {})
         follows = {}
 
@@ -463,7 +484,6 @@ class ConfigStore:
             if follower not in config["screenFollows"]:
                 report("設定欄位 screenFollows.%s 無效或形成循環, 已移除", follower)
 
-
         return config, issues
 
 
@@ -478,7 +498,6 @@ class ConfigStore:
         config["recentVideo"] = [media_path] + [
             item for item in recent if Path(item) != Path(media_path)
         ][:19]
-
         self.save(config)
 
 
@@ -498,7 +517,7 @@ class ConfigStore:
 
     def load(self) -> dict:
         """
-        讀取並驗證設定, 內容損壞時使用預設值
+        讀取並驗證設定, JSON 解析失敗時嘗試修復標點, 無法修復時使用預設值
         存取錯誤向外傳遞
         """
 
@@ -509,16 +528,15 @@ class ConfigStore:
             config = {}
 
         except ValueError:
-
-            logger.exception("設定檔內容無法修復, 使用預設設定")
-
             config = {}
+            logger.exception("設定檔內容無法修復, 使用預設設定")
 
         except OSError:
             logger.exception("讀取 config 時發生錯誤")
             raise
 
         config, _ = self.validate(config)
+
         return config
 
 
@@ -541,7 +559,6 @@ class ConfigStore:
             return True
 
         except Exception:
-            logger.exception("儲存 config 時發生錯誤")
 
             try:
                 if temp_path.exists():
@@ -549,6 +566,8 @@ class ConfigStore:
 
             except Exception:
                 pass
+
+            logger.exception("儲存 config 時發生錯誤")
 
             return False
 
@@ -564,9 +583,7 @@ class ConfigStore:
         else:
             language_code = config["language"]
 
-
         path = self.lang_dir / f"{language_code}.json"
-
         if not path.is_file():
             path = self.lang_dir / "zh-TW.json"
 

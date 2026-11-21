@@ -313,9 +313,9 @@ class VideoDisplay(bb_video_display.Instance):
     保留影片模組的播放與停止流程, 只替換原生視窗及影像軌查詢
     """
 
-    def __init__(self) -> None:
+    def __init__(self, hardware_decoding: str = "any") -> None:
 
-        super().__init__()
+        super().__init__(hardware_decoding=hardware_decoding)
         self._hwnd = 1
         self._bound_hwnd = 0
         self._layout = mock.Mock()

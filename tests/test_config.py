@@ -88,11 +88,22 @@ class ConfigTests(unittest.TestCase):
         """
 
         defaults, _ = self.store.validate({})
-        repaired = {**defaults, "autoPauseIfOnBattery": True, "language": "ja-JP", "futureOption": 9}
+        repaired = {
+            **defaults,
+            "autoPauseIfOnBattery": True,
+            "language": "ja-JP",
+            "futureOption": 9,
+            "previewDelayMs": 0,
+            "previewResetDelayMs": 10000,
+        }
         invalid_values = json.dumps({
             "autoPauseIfFullscreen": "false",
             "autoPauseIfOnBattery": True,
             "previewSize": True,
+            "previewDelayMs": -1,
+            "previewResetDelayMs": 10001,
+            "previewAnimationDurationMs": True,
+            "hardwareDecoding": [],
             "language": "ja-JP",
             "futureOption": 9,
         }).encode("utf-8")
@@ -109,6 +120,11 @@ class ConfigTests(unittest.TestCase):
         preserved = {
             **repaired,
             "fontSize": 24,
+            "previewSize": 0,
+            "previewDelayMs": 500,
+            "previewResetDelayMs": 1500,
+            "previewAnimationDurationMs": 250,
+            "hardwareDecoding": "dxva2",
             "recentVideo": ["folder/桌布.mp4"],
             "screenWallpapers": {"screen-a": "folder/桌布.mp4"},
             "screenFollows": {"screen-b": "screen-a"},

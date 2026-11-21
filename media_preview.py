@@ -6,7 +6,7 @@
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QLabel, QMenu, QToolTip, QWidget
-from PySide6.QtCore import QEvent, QRectF, QSize, Qt, QTimer, Slot
+from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QPropertyAnimation, QRectF, QSize, Qt, QTimer, Slot
 from PySide6.QtGui import QAction, QColor, QCursor, QImage, QPainter, QPixmap, QScreen
 
 from config import get_scaling_mode
@@ -27,6 +27,9 @@ class MediaPreviewMenu(QMenu):
         thumbnail_dir: Path,
         loading_image_path: Path,
         preview_size: int = 3,
+        preview_delay_ms: int = 1000,
+        preview_reset_delay_ms: int = 2000,
+        preview_animation_duration_ms: int = 140,
         thumbnail_thread: ThumbnailThread | None = None
     ) -> None:
 
@@ -36,18 +39,19 @@ class MediaPreviewMenu(QMenu):
         self.media_dir = media_dir
         self.display_config: dict = {}
 
-
-        # 預覽視窗不搶焦點, 也不攔截滑鼠事件
+        # 預覽視窗不搶焦點, 不攔截滑鼠事件
         self.preview = QLabel(self, Qt.WindowType.ToolTip)
         self.preview.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.preview.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.preview.setStyleSheet("background: #202020; padding: 4px;")
 
+        self.preview_animation = QPropertyAnimation(self.preview, b"pos", self)
+        self.preview_animation.setDuration(preview_animation_duration_ms)
+        self.preview_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
 
         self.loading_image_path = loading_image_path
         self.preview_mode = False
         self.preview_action: QAction | None = None
-
 
         self.thumbnail_thread: ThumbnailThread = (
             thumbnail_thread if thumbnail_thread is not None
@@ -55,18 +59,16 @@ class MediaPreviewMenu(QMenu):
         )
         self.thumbnail_thread.thumbnail_ready.connect(self.update_preview)
 
-
-        # 首次懸停 0.5 秒後顯示預覽
+        # 首次懸停達設定時間後顯示預覽
         self.preview_timer = QTimer(self)
         self.preview_timer.setSingleShot(True)
-        self.preview_timer.setInterval(500)
+        self.preview_timer.setInterval(preview_delay_ms)
         self.preview_timer.timeout.connect(self.show_preview)
 
-
-        # 離開所有桌布選項滿 1 秒後退出預覽模式
+        # 離開所有桌布選項達設定時間後退出預覽模式
         self.reset_timer = QTimer(self)
         self.reset_timer.setSingleShot(True)
-        self.reset_timer.setInterval(1000)
+        self.reset_timer.setInterval(preview_reset_delay_ms)
         self.reset_timer.timeout.connect(self.reset_preview)
 
         self.set_preview_size(preview_size)
@@ -79,6 +81,10 @@ class MediaPreviewMenu(QMenu):
 
         self.reset_preview()
         self.preview_size = preview_size
+
+        if preview_size == 0:
+            return
+
         width = preview_size * 100
         self.loading_pixmap = QPixmap(
             self.loading_image_path.with_name(f"loading{width}.jpg")
@@ -98,8 +104,8 @@ class MediaPreviewMenu(QMenu):
     def event(self, event) -> bool:
 
         if event.type() == QEvent.Type.ToolTip:
-            action = self.actionAt(event.pos())
 
+            action = self.actionAt(event.pos())
             # 空提示會回退到項目文字, 因此直接略過未截斷項目的提示事件
             if action is None or action.data() is None or action.text() == action.toolTip():
                 QToolTip.hideText()
@@ -111,17 +117,18 @@ class MediaPreviewMenu(QMenu):
     def mouseMoveEvent(self, event) -> None:
 
         super().mouseMoveEvent(event)
-        action = self.actionAt(event.position().toPoint())
 
+        if self.preview_size == 0:
+            return
+
+        action = self.actionAt(event.position().toPoint())
         if (
             action is None or
             not action.isEnabled() or
             action.data() is None
         ):
-
             self.leave_preview()
             return
-
 
         self.reset_timer.stop()
 
@@ -140,18 +147,21 @@ class MediaPreviewMenu(QMenu):
     def leaveEvent(self, event) -> None:
 
         self.leave_preview()
+
         super().leaveEvent(event)
 
 
     def hideEvent(self, event) -> None:
 
         self.reset_preview()
+
         super().hideEvent(event)
 
 
     def leave_preview(self) -> None:
 
         self.preview_timer.stop()
+        self.preview_animation.stop()
         self.preview_action = None
         self.preview.hide()
 
@@ -163,6 +173,7 @@ class MediaPreviewMenu(QMenu):
 
         self.preview_timer.stop()
         self.reset_timer.stop()
+        self.preview_animation.stop()
         self.preview_action = None
         self.preview_mode = False
         self.preview.hide()
@@ -174,6 +185,7 @@ class MediaPreviewMenu(QMenu):
         cursor = QCursor.pos()
 
         if (
+            self.preview_size == 0 or
             not self.isVisible() or
             action is None or
             self.actionAt(self.mapFromGlobal(cursor)) != action
@@ -193,7 +205,6 @@ class MediaPreviewMenu(QMenu):
     def update_preview(self, media_path: str, preview_size: int, image: QImage) -> None:
 
         action = self.preview_action
-
         if (
             not self.preview_mode or
             action is None or
@@ -221,7 +232,6 @@ class MediaPreviewMenu(QMenu):
         ):
             return
 
-
         # 比例依目標螢幕, 尺寸與位置限制依選單所在螢幕
         screen = QApplication.screenAt(cursor) or self.screen()
         available = screen.availableGeometry()
@@ -235,13 +245,16 @@ class MediaPreviewMenu(QMenu):
         size = QSize(max(1, size.width()), max(1, size.height()))
 
         mode, color = "fill", "#000000"
+
         if self.preview_pixmap.cacheKey() != self.loading_pixmap.cacheKey():
+
             media_path = Path(action.data()).relative_to(self.media_dir).as_posix()
             geometry = (self.target_screen or screen).geometry()
             orientation = "landscape" if geometry.width() >= geometry.height() else "portrait"
             mode = get_scaling_mode(self.display_config, media_path, orientation)
             colors = self.display_config.get("backgroundColor", {})
             color = colors.get(media_path, "#000000")
+
             if mode == "fit" and media_path not in colors:
                 average = self.preview_pixmap.toImage().scaled(
                     1, 1, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation
@@ -250,11 +263,13 @@ class MediaPreviewMenu(QMenu):
 
         source = QRectF(self.preview_pixmap.rect())
         destination = QRectF(0, 0, size.width(), size.height())
+
         if mode == "fill":
             # 直接繪製置中裁切範圍, 避免先放大整張極寬或極高的縮圖
             scale = max(size.width() / source.width(), size.height() / source.height())
             width, height = size.width() / scale, size.height() / scale
             source = QRectF((source.width() - width) / 2, (source.height() - height) / 2, width, height)
+
         elif mode == "fit":
             fitted = source.size().scaled(destination.size(), Qt.AspectRatioMode.KeepAspectRatio)
             destination = QRectF(0, 0, fitted.width(), fitted.height())
@@ -270,7 +285,6 @@ class MediaPreviewMenu(QMenu):
         self.preview.setPixmap(pixmap)
         self.preview.setFixedSize(size + QSize(8, 8))
 
-
         # 優先放在選單左側, 空間不足時改放右側
         menu_rect = self.frameGeometry()
         x = menu_rect.left() - self.preview.width() - 8
@@ -278,12 +292,27 @@ class MediaPreviewMenu(QMenu):
         if x < available.left():
             x = menu_rect.right() + 8
 
-
         y = self.mapToGlobal(self.actionGeometry(action).topLeft()).y()
         x = max(available.left(), min(x, available.right() - self.preview.width() + 1))
         y = max(available.top(), min(y, available.bottom() - self.preview.height() + 1))
 
+        position = QPoint(x, y)
+        appearing = not self.preview.isVisible()
 
-        self.preview.move(x, y)
+        if appearing:
+
+            self.preview_animation.stop()
+            offset = 16 if x < menu_rect.left() else -16
+            start_x = max(available.left(), min(x + offset, available.right() - self.preview.width() + 1))
+            self.preview.move(start_x, y)
+
+        # 同一位置的縮圖更新不重播動畫, 換項目時從目前位置接續
+        if appearing or self.preview_animation.endValue() != position:
+
+            self.preview_animation.stop()
+            self.preview_animation.setStartValue(self.preview.pos())
+            self.preview_animation.setEndValue(position)
+            self.preview_animation.start()
+
         self.preview.show()
         self.preview_mode = True

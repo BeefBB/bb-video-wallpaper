@@ -58,7 +58,6 @@ def cleanup_orphaned_thumbnails(media_dir: Path, thumbnail_dir: Path) -> None:
             logger.warning("讀取縮圖來源目錄失敗 - %s", source_directory, exc_info=True)
             continue
 
-
         for name in filenames:
 
             if (
@@ -78,7 +77,7 @@ def cleanup_orphaned_thumbnails(media_dir: Path, thumbnail_dir: Path) -> None:
 
 def fast_hash(path: Path) -> str:
     """
-    以大小, 修改時間與頭尾各 16KB 計算縮圖識別碼
+    以大小, 修改時間與頭尾各 16 KiB 計算縮圖識別碼
     """
 
     digest = hashlib.sha256()
@@ -519,6 +518,7 @@ class ThumbnailThread(QThread):
 
         self.media_dir = media_dir
         self.thumbnail_dir = thumbnail_dir
+
         self.queue: deque[tuple[Path, int]] = deque()
         self.pending: set[tuple[Path, int]] = set()
         self.pending_lock = threading.Condition()

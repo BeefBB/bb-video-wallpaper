@@ -11,6 +11,7 @@ Qt 影片顯示模組, 接收主程式提供的 HWND 並共用既有 QApplicatio
     display.play()
 
 預設為 fill 與黑色背景, 靜音並循環播放
+hardware_decoding 接受 any, d3d11va, dxva2, none, 預設 any
 show/hide 只改變可見性, stop 隱藏輸出並停止播放
 set_hwnd(0) 解除掛載但保留進度與播放意圖, 重新綁定後恢復
 close 釋放媒體及內部資源, 保留 HWND 與顯示選項供重新載入
@@ -87,7 +88,7 @@ class _TargetEvents(QAbstractNativeEventFilter):
 
 class _StopThread(QThread):
     """
-    重掛時在背景停止 VLC, 讓 Qt 主執行緒繼續處理視窗訊息
+    "停止VLC"執行緒, 重掛時在背景執行以避免干擾 Qt 主執行緒
     """
 
     def __init__(self, stop: Callable[[], None], parent: QObject) -> None:
@@ -107,7 +108,7 @@ class _StopThread(QThread):
 
 class _VideoWindow(QRasterWindow):
     """
-    不透明背景與影片子視窗, VLC 停止後才可釋放
+    內部影片子視窗
     """
 
     def __init__(self, target_hwnd: int, color: QColor) -> None:
@@ -131,7 +132,7 @@ class _VideoWindow(QRasterWindow):
 
     def show(self) -> None:
         """
-        第一次顯示時建立不透明容器及影片子視窗
+        顯示影片, 第一次顯示時建立不透明容器及影片子視窗
         """
 
         if not win32gui.IsWindow(self.target_hwnd):
@@ -196,7 +197,7 @@ class _VideoWindow(QRasterWindow):
 
     def sync_geometry(self) -> None:
         """
-        依目標客戶區與 DPI 更新背景視窗尺寸
+        依目標視窗的客戶區調整影片容器, 以裝置像素比換算 Qt 視窗尺寸
         """
 
         if not win32gui.IsWindow(self.target_hwnd) or not win32gui.IsWindow(self.host_hwnd):
@@ -220,6 +221,9 @@ class _VideoWindow(QRasterWindow):
 
 
     def hide(self) -> None:
+        """
+        隱藏影片與內部容器
+        """
 
         if self.host_hwnd and win32gui.IsWindow(self.host_hwnd):
             win32gui.ShowWindow(self.host_hwnd, win32con.SW_HIDE)
@@ -250,7 +254,7 @@ class Instance(QObject):
     _player_event = Signal(int, str)
     _target_event = Signal(object, bool)
 
-    def __init__(self) -> None:
+    def __init__(self, hardware_decoding: str = "any") -> None:
 
         app = QApplication.instance()
         if app is None:
@@ -258,7 +262,7 @@ class Instance(QObject):
 
         super().__init__(app)
 
-
+        self._hardware_decoding = hardware_decoding
         self._hwnd = 0
         self._window: _VideoWindow | None = None
         self._target_events: _TargetEvents | None = None
@@ -292,7 +296,7 @@ class Instance(QObject):
 
     def _ensure_player(self) -> None:
         """
-        延後到載入媒體時才建立 VLC 資源
+        建立 VLC 資源
         """
 
         if self._player is not None:
@@ -408,7 +412,7 @@ class Instance(QObject):
 
     def set_media(self, path: Path | str) -> None:
         """
-        換片保留播放意圖, 清除舊進度; 非同步解碼失敗由 error 通知
+        載入影片, 保留播放意圖, 清除舊進度
         """
 
         source = Path(path).resolve(strict=True)
@@ -422,6 +426,8 @@ class Instance(QObject):
             raise RuntimeError("無法建立 VLC 媒體")
 
         try:
+            # 套用硬體解碼(不要在"instance=vlc.Instance()"裡加, 不會生效)
+            media.add_option(f":avcodec-hw={self._hardware_decoding}")
             if not self._stop_player():
                 media.release()
                 return
@@ -445,7 +451,7 @@ class Instance(QObject):
 
     def set_hwnd(self, hwnd: int, *, process_events: bool = False) -> None:
         """
-        停止舊輸出後換綁目標, 保留進度與播放意圖, 0 表示解除掛載
+        設定目標視窗控制代碼, 0 表示解除掛載
         """
 
         hwnd = int(hwnd)
@@ -491,13 +497,16 @@ class Instance(QObject):
 
 
     def get_hwnd(self) -> int:
+        """
+        取得視窗控制代碼
+        """
 
         return self._hwnd
 
 
     def set_scaling(self, mode: str, background_color: QColor | str = "#000000") -> None:
         """
-        設定 fill, fit 或 stretch 與不透明背景色, 可在載入前設定
+        設定 fill, fit 或 stretch 與 不透明背景色
         """
 
         if mode not in ("fill", "fit", "stretch"):
@@ -598,7 +607,7 @@ class Instance(QObject):
 
     def play(self) -> None:
         """
-        顯示輸出並播放, 載入期間以最新的播放意圖為準
+        顯示輸出並播放
         """
 
         self._request_playback("play")
@@ -606,7 +615,7 @@ class Instance(QObject):
 
     def pause(self) -> None:
         """
-        顯示輸出並暫停, 尚未就緒時等播放通知後套用
+        顯示輸出並暫停
         """
 
         self._request_playback("pause")
@@ -614,7 +623,7 @@ class Instance(QObject):
 
     def _request_playback(self, state: str) -> None:
         """
-        等待重掛時只更新播放意圖, 有效目標綁定後再恢復輸出
+        請求播放控制, 若尚未就緒則保留意圖
         """
 
         if self._media is None:
@@ -648,6 +657,9 @@ class Instance(QObject):
 
 
     def _is_ready(self) -> bool:
+        """
+        VLC 播放器是否已就緒
+        """
 
         if self._player is None:
             return False
@@ -659,7 +671,7 @@ class Instance(QObject):
 
     def get_time(self) -> int | None:
         """
-        停止, 載入中或等待定位時回傳 None
+        取得播放進度
         """
 
         if (
@@ -673,6 +685,9 @@ class Instance(QObject):
 
 
     def get_length(self) -> int:
+        """
+        取得影片長度
+        """
 
         return max(0, self._player.get_length()) if self._player is not None else 0
 

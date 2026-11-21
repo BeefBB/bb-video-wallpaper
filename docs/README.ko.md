@@ -5,7 +5,7 @@
 동영상을 바탕 화면 배경으로 재생할 수 있는 가벼운 배경화면 관리 프로그램입니다.  
 배경화면을 한 폴더에 보관하여 언제든지 간편하게 전환할 수 있습니다.  
 
-- 작은 용량 (약 200 MB)
+- 작은 용량 (약 200 MiB)
 - 최근 사용한 배경화면 기록
 - 자동 일시 중지 조건 선택 (창 최대화, 화면 꺼짐, 배터리 사용)
 - Windows 시작 시 자동 실행 옵션
@@ -107,16 +107,26 @@ Folder/
 --- | --- | ---
 언어 | "language" | 필드가 없으면: 설치 언어 > 시스템 언어 > 중국어 번체; 필드가 있지만 유효하지 않으면: 중국어 번체
 창 최대화 시 자동 일시 중지 | "autoPauseIfFullscreen" | true
+시작 시 최대화 감지 지연 시간 | "fullscreenDetectionDelayMs" | 10000 ms, 0-60000
 화면 꺼짐 시 자동 일시 중지 | "autoPauseIfScreenOff" | true
 배터리 사용 시 자동 일시 중지 | "autoPauseIfOnBattery" | false
+자동 일시 중지 확인 간격 | "autoPauseCheckIntervalMs" | 500 ms, 100-10000
+하드웨어 디코딩 | "hardwareDecoding" | any (자동), 사용 가능한 값: any, d3d11va, dxva2, none
 글꼴 크기 | "fontSize" | 11 pt, 6-48
 최근 기록 표시 개수 | "recentDisplayCount" | 6개, 0-20
-미리보기 크기 | "previewSize" | 3 (보통), 1-5는 100-500 px에 대응
+미리보기 크기 | "previewSize" | 3 (보통), 0은 미리보기 사용 안 함, 1-5는 100-500 px에 대응
+첫 미리보기 표시 전 대기 시간 | "previewDelayMs" | 1000 ms, 0-10000
+항목을 벗어난 뒤 미리보기 모드를 종료하기까지의 시간 | "previewResetDelayMs" | 2000 ms, 0-10000
+미리보기 애니메이션 시간 | "previewAnimationDurationMs" | 140 ms, 0-10000
+여러 파일 선택 시 총 크기 제한 | "maxBatchImportKiB" | 31457280 KiB (30 GiB), 양의 정수
 최근 사용 기록 | "recentVideo" | [], 0-20개
 모니터별 배경화면 | "screenWallpapers" | {}
 모니터 따라가기 관계 | "screenFollows" | {}
-미디어와 모니터 방향별 크기 조정 모드 | "scalingMode" | {}, 기록이 없으면 fill 사용
-미디어별 공통 여백 색상 | "backgroundColor" | {}, 맞춤 모드에서 자동으로 계산하고 저장
+따라가는 모니터의 정기 동기화 간격 | "followSyncIntervalMs" | 60000 ms, 1000-600000
+따라가는 모니터의 동기화 오차 허용값 | "followSyncToleranceMs" | 500 ms, 0-10000
+시작 시 모니터 따라가기 관계 복원 전 대기 시간 | "followRestoreDelayMs" | 3000 ms, 0-60000, 저장된 따라가기 관계가 있을 때만 대기
+미디어 크기 조정 모드 | "scalingMode" | {}, 기록이 없으면 fill 사용
+미디어 여백 색상 | "backgroundColor" | {}, 맞춤 모드에서 자동으로 계산하고 저장
 
 언어 코드는 `zh-TW`, `zh-CN`, `ja-JP`, `ko-KR`, `en-US` 중 하나와 정확히 일치해야 합니다. 예를 들어 시스템 언어가 `en-GB`여도 `en-US`로 자동 매핑되지 않습니다.
 
@@ -125,14 +135,12 @@ Folder/
 이름 | 항목 | 기본값
 --- | --- | ---
 미디어 폴더 | MEDIA_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\video\`
-단일 파일 가져오기 폴더 | SINGLE_IMPORT_DIR | 미디어 폴더 안의 `_imports/`
+미디어 가져오기 폴더 | SINGLE_IMPORT_DIR | 미디어 폴더 안의 `_imports/`
 썸네일 폴더 | THUMBNAIL_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\thumbnails\`
 로그 파일 |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\log\log.log`
 VLC 배경화면 재생 옵션 |  | 오디오 비활성화, 동영상 제목 숨김, 반복 옵션 `--input-repeat=65535`
-배경화면 크기 조정 방식 |  | fill (기본값), fit, stretch; 미디어와 모니터 방향별로 저장
+배경화면 크기 조정 방식 |  | 이미지와 동영상 모두 종횡비를 유지하며 중앙을 기준으로 잘라 화면을 채움
 시작 시 배경화면 선택 순서 |  | 해당 모니터에 저장된 배경화면 > 최근 기록의 첫 항목 > 미디어 목록의 첫 항목, 앞의 두 후보는 파일이 존재해야 함
-시작 시 최대화 감지 지연 시간 | fullscreen_detection_timer | 10 s
-자동 일시 중지 확인 간격 | check_auto_pause_timer | 0.5 s
 배경화면 재연결 기본 지연 시간 |  | 0.2 s
 바탕 화면이 준비되지 않았을 때 재연결 대기 시간 |  | 2 s
 배경화면 재연결 실패 후 재시도 간격 |  | 2 s
@@ -143,13 +151,8 @@ VLC 중지 시 깨우기 간격 |  | 0.05 s
 로그 수준 |  | INFO
 로그 파일당 최대 크기 |  | 2 MiB
 이전 로그 보관 개수 |  | 3개
-따라가는 모니터의 정기 동기화 간격 | SYNC_INTERVAL_MS | 60 s
-따라가는 모니터의 동기화 오차 허용값 | SYNC_TOLERANCE_MS | 0.5 s
-시작 시 모니터 따라가기 관계 복원 전 대기 시간 | RESTORE_DELAY_MS | 3 s, 저장된 따라가기 관계가 있을 때만 대기
-첫 미리보기 표시 전 대기 시간 | preview_timer | 0.5 s
-항목을 벗어난 뒤 미리보기 모드를 종료하기까지의 시간 | reset_timer | 1 s
 미리보기 이미지의 가장 긴 변 |  | `previewSize * 100` px, 좌우 각각 4 px의 안쪽 여백 제외, 화면 공간이 부족하면 축소
-미리보기 테두리 배경색 |  | #202020; 미리보기 내용은 미디어의 배경색 사용
+미리보기 배경색 |  | #202020
 미리보기 안쪽 여백 |  | 4 px
 미리보기와 메뉴 사이 간격 |  | 8 px, 왼쪽에 우선 표시하고 공간이 부족하면 오른쪽에 표시
 로딩 이미지를 불러오지 못했을 때 대체 이미지 |  | 너비 `previewSize * 100` px, 높이는 16:9 비율로 반올림, 짙은 회색 (`Qt.GlobalColor.darkGray`)

@@ -5,7 +5,7 @@
 壁紙として動画を再生できる、軽量な壁紙管理ソフトウェアです。  
 壁紙を1つのフォルダに保存し、いつでも簡単に切り替えることができます。  
 
-- 軽量（約200MB）
+- 軽量（約200 MiB）
 - 最近使った壁紙を記録
 - 各種の自動一時停止条件を選択可能（ウィンドウの最大化、画面オフ、バッテリー駆動時）
 - Windows 起動時の自動起動に対応
@@ -107,16 +107,26 @@ Folder/
 --- | --- | ---
 言語 | "language" | フィールドがない場合: インストール時の言語 > システム言語 > 繁体字中国語; フィールドが存在しても無効な場合: 繁体字中国語
 ウィンドウ最大化時に自動一時停止 | "autoPauseIfFullscreen" | true
+起動時の最大化検出開始までの待機時間 | "fullscreenDetectionDelayMs" | 10000 ms, 0-60000
 画面オフ時に自動一時停止 | "autoPauseIfScreenOff" | true
 バッテリー駆動時に自動一時停止 | "autoPauseIfOnBattery" | false
+自動一時停止の確認間隔 | "autoPauseCheckIntervalMs" | 500 ms, 100-10000
+ハードウェアデコード | "hardwareDecoding" | any (自動), 選択肢: any, d3d11va, dxva2, none
 フォントサイズ | "fontSize" | 11 pt, 6-48
 最近の使用履歴の表示件数 | "recentDisplayCount" | 6 件, 0-20
-プレビューサイズ | "previewSize" | 3 (標準), 1-5 は 100-500 px に対応
+プレビューサイズ | "previewSize" | 3 (標準), 0 はプレビューを無効化, 1-5 は 100-500 px に対応
+初回プレビュー表示までの待機時間 | "previewDelayMs" | 1000 ms, 0-10000
+項目から離れた後にプレビューモードを終了するまでの時間 | "previewResetDelayMs" | 2000 ms, 0-10000
+プレビューアニメーションの時間 | "previewAnimationDurationMs" | 140 ms, 0-10000
+複数選択時の合計サイズ上限 | "maxBatchImportKiB" | 31457280 KiB (30 GiB), 正の整数
 最近の使用履歴 | "recentVideo" | [], 0-20 件
 各モニターの壁紙 | "screenWallpapers" | {}
 モニターの追従関係 | "screenFollows" | {}
-メディアとモニターの向きごとの拡大縮小モード | "scalingMode" | {}, 記録がない場合は fill
-メディアごとに共有する余白の色 | "backgroundColor" | {}, 全体を表示するときに自動で計算して保存
+追従モニターの定期同期間隔 | "followSyncIntervalMs" | 60000 ms, 1000-600000
+追従モニターの同期誤差許容値 | "followSyncToleranceMs" | 500 ms, 0-10000
+起動時に追従関係を復元するまでの待機時間 | "followRestoreDelayMs" | 3000 ms, 0-60000, 保存済みの追従関係がある場合のみ待機
+素材の拡大縮小モード | "scalingMode" | {}, 記録がない場合は fill
+素材の余白の色 | "backgroundColor" | {}, 全体を表示するときに自動で計算して保存
 
 言語コードは `zh-TW`, `zh-CN`, `ja-JP`, `ko-KR`, `en-US` のいずれかと完全に一致する必要があります。例えば、システム言語が `en-GB` の場合、`en-US` には自動的に対応付けられません。
 
@@ -125,14 +135,12 @@ Folder/
 名前 | 項目 | デフォルト値
 --- | --- | ---
 メディアフォルダー | MEDIA_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\video\`
-単一ファイルのインポート先フォルダー | SINGLE_IMPORT_DIR | メディアフォルダー内の `_imports/`
+素材のインポート先フォルダー | SINGLE_IMPORT_DIR | メディアフォルダー内の `_imports/`
 サムネイルフォルダー | THUMBNAIL_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\thumbnails\`
 ログファイル |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\log\log.log`
 VLC の壁紙再生オプション |  | 音声無効, 動画タイトル非表示, リピート設定 `--input-repeat=65535`
-壁紙の拡大縮小方式 |  | fill (デフォルト), fit, stretch; メディアとモニターの向きごとに保存
+壁紙の拡大縮小方式 |  | 画像・動画ともに縦横比を維持し、中央でトリミングして画面を埋める
 起動時の壁紙選択順序 |  | そのモニターに保存された壁紙 > 最近の使用履歴の先頭 > メディア一覧の先頭; 保存された壁紙と履歴の候補は、ファイルが存在する場合のみ使用
-起動時の最大化検出開始までの待機時間 | fullscreen_detection_timer | 10 s
-自動一時停止の確認間隔 | check_auto_pause_timer | 0.5 s
 壁紙の再アタッチのデフォルト遅延 |  | 0.2 s
 デスクトップが未準備の場合の再アタッチ待機時間 |  | 2 s
 壁紙の再アタッチ失敗時の再試行間隔 |  | 2 s
@@ -143,13 +151,8 @@ VLC 停止時のウェイクアップ間隔 |  | 0.05 s
 ログレベル |  | INFO
 ログファイルごとの最大サイズ |  | 2 MiB
 古いログの保持数 |  | 3 ファイル
-追従モニターの定期同期間隔 | SYNC_INTERVAL_MS | 60 s
-追従モニターの同期誤差許容値 | SYNC_TOLERANCE_MS | 0.5 s
-起動時に追従関係を復元するまでの待機時間 | RESTORE_DELAY_MS | 3 s, 保存済みの追従関係がある場合のみ待機
-初回プレビュー表示までの待機時間 | preview_timer | 0.5 s
-項目から離れた後にプレビューモードを終了するまでの時間 | reset_timer | 1 s
 プレビュー画像の最長辺 |  | `previewSize * 100` px, 左右それぞれ 4 px の内側余白を除く; 画面の空き領域が足りない場合は縮小
-プレビュー外枠の背景色 |  | #202020; プレビュー内容にはメディアの背景色を使用
+プレビュー背景色 |  | #202020
 プレビューの内側余白 |  | 4 px
 プレビューとメニューの間隔 |  | 8 px, 左側を優先し、空き領域が足りない場合は右側に表示
 読み込み中表示用の画像を読み込めない場合の代替画像 |  | 幅 `previewSize * 100` px, 高さは 16:9 で丸める, ダークグレー (`Qt.GlobalColor.darkGray`)
