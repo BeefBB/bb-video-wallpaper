@@ -44,7 +44,7 @@
   "comparing_media": "比對中 {index}/{total} · {percent}%",
   "importing_media": "匯入中 {index}/{total} · {percent}%",
   "cancel_media_import": "取消匯入",
-  "media_import_limit_exceeded": "本次素材共 {size:,.2f} GiB, 超過單次匯入上限 {limit:g} GiB\n可嘗試將超過 {limit:g} GiB 的素材獨自匯入",
+  "media_import_limit_exceeded": "本次素材共 {size:,.2f} GiB, 超過批次匯入上限 {limit:g} GiB\n可嘗試將超過 {limit:g} GiB 的素材獨自匯入",
   "media_import_summary": "匯入結果: 新增 {imported}, 重用 {reused}, 失敗 {failed}",
   "media_add_failed": "新增影片失敗: {error}",
   "media_load_failed": "載入桌布失敗",

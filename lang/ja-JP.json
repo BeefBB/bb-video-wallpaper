@@ -44,7 +44,7 @@
   "comparing_media": "重複を確認中 {index}/{total} · {percent}%",
   "importing_media": "インポート中 {index}/{total} · {percent}%",
   "cancel_media_import": "インポートをキャンセル",
-  "media_import_limit_exceeded": "選択した素材は合計 {size:,.2f} GiB で、1 回の上限 {limit:g} GiB を超えています\n{limit:g} GiB を超える素材は、個別にインポートしてみてください",
+  "media_import_limit_exceeded": "選択した素材は合計 {size:,.2f} GiB で、一括インポートの上限 {limit:g} GiB を超えています\n{limit:g} GiB を超える素材は、個別にインポートしてみてください",
   "media_import_summary": "インポート結果: 追加 {imported}、再利用 {reused}、失敗 {failed}",
   "media_add_failed": "動画を追加できませんでした：{error}",
   "media_load_failed": "壁紙を読み込めませんでした",

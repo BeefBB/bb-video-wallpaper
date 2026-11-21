@@ -44,7 +44,7 @@
   "comparing_media": "Comparing {index}/{total} · {percent}%",
   "importing_media": "Importing {index}/{total} · {percent}%",
   "cancel_media_import": "Cancel Import",
-  "media_import_limit_exceeded": "Selected media totals {size:,.2f} GiB, exceeding the {limit:g} GiB per-import limit\nTry importing files larger than {limit:g} GiB individually",
+  "media_import_limit_exceeded": "Selected media totals {size:,.2f} GiB, exceeding the {limit:g} GiB batch import limit\nTry importing files larger than {limit:g} GiB individually",
   "media_import_summary": "Import results: {imported} added, {reused} reused, {failed} failed",
   "media_add_failed": "Could not add video: {error}",
   "media_load_failed": "Could not load wallpaper",

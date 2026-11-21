@@ -939,7 +939,7 @@ class Wallpaper(QWidget):
 
     def get_auto_pause_reason(self) -> AutoPauseReason | None:
         """
-        回報不需掃描視窗的暫停原因(螢幕關閉screen_off/筆電電池battery/全螢幕fullscreen)
+        依序檢查 螢幕關閉, 電池供電, 視窗最大化, 回傳第一個符合的自動暫停原因
         """
 
         if self.auto_pause_if_screen_off and self.screen_off:
@@ -1043,11 +1043,11 @@ class Tray:
 
         # 匯入媒體的背景執行緒
         self.import_thread: MediaImportThread | None = None
-        # 匯入媒體的目標螢幕 ID, None 表示匯入完成後套用到所有螢幕
+        # 單螢幕自動套用的目標 ID, None 表示未指定單一目標
         self.import_screen_id: str | None = None
-        # 匯入媒體的目標螢幕 ID 集合, 用於取消匯入時避免套用到已停止匯入的螢幕
+        # 匯入完成後是否自動套用到所有螢幕
         self.import_applies_to_all = False
-        # 匯入已停止的螢幕 ID 集合
+        # 本次匯入不自動套用的螢幕 ID 集合, 停止桌布時加入該螢幕與跟隨者
         self.import_stopped_screens: set[str] = set()
 
         # 處理縮圖生成的背景執行緒
@@ -1447,7 +1447,7 @@ class Tray:
         screen_id: str | None = None
     ) -> None:
         """
-        建立主選單
+        依螢幕與播放狀態更新播放選單項目的文字, 勾選與可用狀態
         """
 
         wallpapers = self.get_wallpapers(screen_id)

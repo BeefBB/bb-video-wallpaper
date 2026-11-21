@@ -44,7 +44,7 @@
   "comparing_media": "比对中 {index}/{total} · {percent}%",
   "importing_media": "导入中 {index}/{total} · {percent}%",
   "cancel_media_import": "取消导入",
-  "media_import_limit_exceeded": "本次素材共 {size:,.2f} GiB, 超过单次导入上限 {limit:g} GiB\n可尝试将超过 {limit:g} GiB 的素材单独导入",
+  "media_import_limit_exceeded": "本次素材共 {size:,.2f} GiB, 超过批量导入上限 {limit:g} GiB\n可尝试将超过 {limit:g} GiB 的素材单独导入",
   "media_import_summary": "导入结果: 新增 {imported}, 重用 {reused}, 失败 {failed}",
   "media_add_failed": "添加视频失败: {error}",
   "media_load_failed": "加载壁纸失败",

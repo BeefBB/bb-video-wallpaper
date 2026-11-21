@@ -197,7 +197,7 @@ class _VideoWindow(QRasterWindow):
 
     def sync_geometry(self) -> None:
         """
-        依目標視窗的客戶區與縮放比例更新圖片尺寸
+        依目標視窗的客戶區調整影片容器, 以裝置像素比換算 Qt 視窗尺寸
         """
 
         if not win32gui.IsWindow(self.target_hwnd) or not win32gui.IsWindow(self.host_hwnd):
