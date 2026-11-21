@@ -523,7 +523,7 @@ class Wallpaper(QWidget):
         self.fullscreen_detection_timer = QTimer(self)
         self.fullscreen_detection_timer.setSingleShot(True)
         self.fullscreen_detection_timer.timeout.connect(self.enable_fullscreen_detection)
-        self.fullscreen_detection_timer.start(10000)
+        self.fullscreen_detection_timer.start(config.get("fullscreenDetectionDelayMs", 10000))
 
         # 自動暫停計時器
         self.check_auto_pause_timer = QTimer(self)

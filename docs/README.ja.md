@@ -107,6 +107,7 @@ Folder/
 --- | --- | ---
 言語 | "language" | フィールドがない場合: インストール時の言語 > システム言語 > 繁体字中国語; フィールドが存在しても無効な場合: 繁体字中国語
 ウィンドウ最大化時に自動一時停止 | "autoPauseIfFullscreen" | true
+起動時の最大化検出開始までの待機時間 | "fullscreenDetectionDelayMs" | 10000 ms, 0-60000
 画面オフ時に自動一時停止 | "autoPauseIfScreenOff" | true
 バッテリー駆動時に自動一時停止 | "autoPauseIfOnBattery" | false
 ハードウェアデコード | "hardwareDecoding" | any (自動), 選択肢: any, d3d11va, dxva2, none
@@ -136,7 +137,6 @@ Folder/
 VLC の壁紙再生オプション |  | 音声無効, 動画タイトル非表示, リピート設定 `--input-repeat=65535`
 壁紙の拡大縮小方式 |  | 画像・動画ともに縦横比を維持し、中央でトリミングして画面を埋める
 起動時の壁紙選択順序 |  | そのモニターに保存された壁紙 > 最近の使用履歴の先頭 > メディア一覧の先頭; 保存された壁紙と履歴の候補は、ファイルが存在する場合のみ使用
-起動時の最大化検出開始までの待機時間 | fullscreen_detection_timer | 10 s
 自動一時停止の確認間隔 | check_auto_pause_timer | 0.5 s
 壁紙の再アタッチのデフォルト遅延 |  | 0.2 s
 デスクトップが未準備の場合の再アタッチ待機時間 |  | 2 s

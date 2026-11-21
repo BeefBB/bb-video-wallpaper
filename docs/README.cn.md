@@ -107,6 +107,7 @@ Folder/
 --- | --- | ---
 语言 | "language" | 缺少字段时: 安装语言 > 系统语言 > 繁体中文; 字段已存在但无效时: 繁体中文
 窗口最大化时自动暂停 | "autoPauseIfFullscreen" | true
+启动时延后最大化检测 | "fullscreenDetectionDelayMs" | 10000 ms, 0-60000
 屏幕关闭时自动暂停 | "autoPauseIfScreenOff" | true
 未接通电源时自动暂停 | "autoPauseIfOnBattery" | false
 硬件解码 | "hardwareDecoding" | any (自动), 可选 any, d3d11va, dxva2, none
@@ -136,7 +137,6 @@ Folder/
 VLC 壁纸播放参数 |  | 关闭音频, 不显示视频标题, 循环播放参数 `--input-repeat=65535`
 壁纸缩放方式 |  | 图片与视频均保持比例居中裁剪填满
 启动时选择壁纸的顺序 |  | 该屏幕保存的壁纸 > 最近记录第一条 > 媒体列表第一项, 前两者要求文件存在
-启动时延后最大化检测 | fullscreen_detection_timer | 10 s
 自动暂停检查间隔 | check_auto_pause_timer | 0.5 s
 壁纸重新挂载默认延迟 |  | 0.2 s
 桌面未就绪时的重新挂载等待 |  | 2 s
