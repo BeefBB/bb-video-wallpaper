@@ -1056,7 +1056,7 @@ class Tray:
 
         # 設定檔
         config = config_store.load()
-        # 語言代碼, 字型大小, 縮圖預覽大小, 首次顯示預覽的等待時間, 
+        # 語言代碼, 字型大小, 縮圖預覽大小, 首次顯示預覽的等待時間
         # 離開選項後退出預覽模式的時間, 預覽動畫時間, 硬體解碼, 螢幕跟隨設定
         self.current_language_code = config.get("language", "zh-TW")
         self.font_size = config.get("fontSize", 11)
