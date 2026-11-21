@@ -528,7 +528,7 @@ class Wallpaper(QWidget):
         # 自動暫停計時器
         self.check_auto_pause_timer = QTimer(self)
         self.check_auto_pause_timer.timeout.connect(lambda: self.check_auto_pause(from_timer=True))
-        self.check_auto_pause_timer.start(500)
+        self.check_auto_pause_timer.start(config.get("autoPauseCheckIntervalMs", 500))
 
         try:
             self.desktop_events = DesktopEventWindow()

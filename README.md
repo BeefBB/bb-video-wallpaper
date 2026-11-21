@@ -110,6 +110,7 @@ Folder/
 啟動時延後最大化偵測     | "fullscreenDetectionDelayMs" | 10000 ms, 0-60000
 螢幕關閉時自動暫停       | "autoPauseIfScreenOff"       | true
 沒插電時自動暫停         | "autoPauseIfOnBattery"       | false
+自動暫停檢查間隔         | "autoPauseCheckIntervalMs"   | 500 ms, 100-10000
 硬體解碼                 | "hardwareDecoding"           | any (自動), 可選 any, d3d11va, dxva2, none
 文字大小                 | "fontSize"                   | 11 pt, 6-48
 最近紀錄顯示筆數         | "recentDisplayCount"         | 6 筆, 0-20
@@ -137,7 +138,6 @@ Folder/
 VLC 桌布播放參數         |                            | 關閉音訊, 不顯示影片標題, 重播參數 `--input-repeat=65535`
 桌布縮放方式             |                            | 圖片與影片皆等比例置中裁切填滿
 啟動時選擇桌布的順序     |                            | 該螢幕保存的桌布 > 最近紀錄第一筆 > 媒體清單第一筆, 前兩者須檔案存在
-自動暫停檢查間隔         | check_auto_pause_timer     | 0.5 s
 桌布重掛預設延遲         |                            | 0.2 s
 桌面未就緒時的重掛等待   |                            | 2 s
 桌布重掛失敗重試間隔     |                            | 2 s

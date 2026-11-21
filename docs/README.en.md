@@ -110,6 +110,7 @@ Automatically pause when a window is maximized | "autoPauseIfFullscreen" | true
 Delay before detecting maximized windows on startup | "fullscreenDetectionDelayMs" | 10000 ms, 0-60000
 Automatically pause when the screen is off | "autoPauseIfScreenOff" | true
 Automatically pause when on battery | "autoPauseIfOnBattery" | false
+Automatic pause check interval | "autoPauseCheckIntervalMs" | 500 ms, 100-10000
 Hardware decoding | "hardwareDecoding" | any (automatic), options: any, d3d11va, dxva2, none
 Font size | "fontSize" | 11 pt, 6-48
 Number of recent entries to display | "recentDisplayCount" | 6 entries, 0-20
@@ -137,7 +138,6 @@ Log file |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\log\log.log`
 VLC wallpaper playback options |  | Audio disabled, video title hidden, repeat option `--input-repeat=65535`
 Wallpaper scaling mode |  | Images and videos preserve their aspect ratio and fill the screen with centered cropping
 Wallpaper selection order on startup |  | Saved wallpaper for the monitor > first recent entry > first media list entry; the file must exist for either of the first two choices
-Automatic pause check interval | check_auto_pause_timer | 0.5 s
 Default wallpaper reattachment delay |  | 0.2 s
 Reattachment wait when the desktop is not ready |  | 2 s
 Retry interval after wallpaper reattachment fails |  | 2 s

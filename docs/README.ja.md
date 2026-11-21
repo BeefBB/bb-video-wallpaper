@@ -110,6 +110,7 @@ Folder/
 起動時の最大化検出開始までの待機時間 | "fullscreenDetectionDelayMs" | 10000 ms, 0-60000
 画面オフ時に自動一時停止 | "autoPauseIfScreenOff" | true
 バッテリー駆動時に自動一時停止 | "autoPauseIfOnBattery" | false
+自動一時停止の確認間隔 | "autoPauseCheckIntervalMs" | 500 ms, 100-10000
 ハードウェアデコード | "hardwareDecoding" | any (自動), 選択肢: any, d3d11va, dxva2, none
 フォントサイズ | "fontSize" | 11 pt, 6-48
 最近の使用履歴の表示件数 | "recentDisplayCount" | 6 件, 0-20
@@ -137,7 +138,6 @@ Folder/
 VLC の壁紙再生オプション |  | 音声無効, 動画タイトル非表示, リピート設定 `--input-repeat=65535`
 壁紙の拡大縮小方式 |  | 画像・動画ともに縦横比を維持し、中央でトリミングして画面を埋める
 起動時の壁紙選択順序 |  | そのモニターに保存された壁紙 > 最近の使用履歴の先頭 > メディア一覧の先頭; 保存された壁紙と履歴の候補は、ファイルが存在する場合のみ使用
-自動一時停止の確認間隔 | check_auto_pause_timer | 0.5 s
 壁紙の再アタッチのデフォルト遅延 |  | 0.2 s
 デスクトップが未準備の場合の再アタッチ待機時間 |  | 2 s
 壁紙の再アタッチ失敗時の再試行間隔 |  | 2 s

@@ -110,6 +110,7 @@ Folder/
 시작 시 최대화 감지 지연 시간 | "fullscreenDetectionDelayMs" | 10000 ms, 0-60000
 화면 꺼짐 시 자동 일시 중지 | "autoPauseIfScreenOff" | true
 배터리 사용 시 자동 일시 중지 | "autoPauseIfOnBattery" | false
+자동 일시 중지 확인 간격 | "autoPauseCheckIntervalMs" | 500 ms, 100-10000
 하드웨어 디코딩 | "hardwareDecoding" | any (자동), 사용 가능한 값: any, d3d11va, dxva2, none
 글꼴 크기 | "fontSize" | 11 pt, 6-48
 최근 기록 표시 개수 | "recentDisplayCount" | 6개, 0-20
@@ -137,7 +138,6 @@ Folder/
 VLC 배경화면 재생 옵션 |  | 오디오 비활성화, 동영상 제목 숨김, 반복 옵션 `--input-repeat=65535`
 배경화면 크기 조정 방식 |  | 이미지와 동영상 모두 종횡비를 유지하며 중앙을 기준으로 잘라 화면을 채움
 시작 시 배경화면 선택 순서 |  | 해당 모니터에 저장된 배경화면 > 최근 기록의 첫 항목 > 미디어 목록의 첫 항목, 앞의 두 후보는 파일이 존재해야 함
-자동 일시 중지 확인 간격 | check_auto_pause_timer | 0.5 s
 배경화면 재연결 기본 지연 시간 |  | 0.2 s
 바탕 화면이 준비되지 않았을 때 재연결 대기 시간 |  | 2 s
 배경화면 재연결 실패 후 재시도 간격 |  | 2 s

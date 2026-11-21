@@ -110,6 +110,7 @@ Folder/
 启动时延后最大化检测 | "fullscreenDetectionDelayMs" | 10000 ms, 0-60000
 屏幕关闭时自动暂停 | "autoPauseIfScreenOff" | true
 未接通电源时自动暂停 | "autoPauseIfOnBattery" | false
+自动暂停检查间隔 | "autoPauseCheckIntervalMs" | 500 ms, 100-10000
 硬件解码 | "hardwareDecoding" | any (自动), 可选 any, d3d11va, dxva2, none
 字体大小 | "fontSize" | 11 pt, 6-48
 最近记录显示条数 | "recentDisplayCount" | 6 条, 0-20
@@ -137,7 +138,6 @@ Folder/
 VLC 壁纸播放参数 |  | 关闭音频, 不显示视频标题, 循环播放参数 `--input-repeat=65535`
 壁纸缩放方式 |  | 图片与视频均保持比例居中裁剪填满
 启动时选择壁纸的顺序 |  | 该屏幕保存的壁纸 > 最近记录第一条 > 媒体列表第一项, 前两者要求文件存在
-自动暂停检查间隔 | check_auto_pause_timer | 0.5 s
 壁纸重新挂载默认延迟 |  | 0.2 s
 桌面未就绪时的重新挂载等待 |  | 2 s
 壁纸重新挂载失败重试间隔 |  | 2 s
