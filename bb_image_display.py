@@ -1,7 +1,8 @@
 """
 Qt 圖片顯示模組, 接收主程式提供的 HWND 並共用既有 QApplication
 
-在 Qt 主執行緒先建立 QApplication 與目標視窗, 再使用:
+在 Qt 主執行緒先建立 QApplication 與目標視窗
+
     import bb_image_display
 
     display = bb_image_display.Instance()
@@ -10,8 +11,6 @@ Qt 圖片顯示模組, 接收主程式提供的 HWND 並共用既有 QApplicatio
     display.set_media("image.png")
     display.show()
 
-主程式負責目標視窗的建立, 顯示, 桌面掛載與 Qt 事件迴圈
-模組只管理圖片及其內部子視窗
 預設為 fill 與黑色背景
 """
 
@@ -65,7 +64,7 @@ class _TargetEvents(QAbstractNativeEventFilter):
 
 class _ImageWindow(QRasterWindow):
     """
-    繪圖所需的內部容器, 在指定視窗內繪製圖片與背景
+    繪製圖片與背景
     """
 
     def __init__(self, image_path: Path, target_hwnd: int) -> None:
@@ -89,7 +88,6 @@ class _ImageWindow(QRasterWindow):
 
         self.setTitle("Qt image display")
 
-        # 以 QWindow 管理外部父視窗, 直接接收繪圖事件
         self.setFlags(
             Qt.WindowType.SubWindow |
             Qt.WindowType.FramelessWindowHint |
@@ -100,7 +98,7 @@ class _ImageWindow(QRasterWindow):
 
     def set_hwnd(self, hwnd: int) -> None:
         """
-        改用新的目標視窗
+        設定目標 HWND
         """
 
         if hwnd == self._target_hwnd:
@@ -117,7 +115,7 @@ class _ImageWindow(QRasterWindow):
 
     def show(self) -> None:
         """
-        顯示圖片, 第一次顯示時才建立內部容器
+        顯示圖片視窗, 需要時建立原生容器
         """
 
         if not self._target_hwnd or not win32gui.IsWindow(self._target_hwnd):
@@ -162,7 +160,7 @@ class _ImageWindow(QRasterWindow):
 
     def hide(self) -> None:
         """
-        隱藏圖片與內部容器
+        隱藏圖片視窗與原生容器
         """
 
         if self._host_hwnd and win32gui.IsWindow(self._host_hwnd):
@@ -173,7 +171,7 @@ class _ImageWindow(QRasterWindow):
 
     def close(self) -> bool:
         """
-        關閉圖片視窗並釋放內部容器
+        關閉圖片視窗並釋放原生容器
         """
 
         try:
@@ -209,7 +207,7 @@ class _ImageWindow(QRasterWindow):
 
     def _create_host(self) -> None:
         """
-        在目標視窗內建立圖片容器, 處理父子視窗裁切與合成
+        在目標視窗內建立原生容器, 處理父子視窗裁切與合成
         """
 
         app = QApplication.instance()
@@ -248,6 +246,7 @@ class _ImageWindow(QRasterWindow):
             # 保持完全不透明, 由 Windows 重導向並合成容器內的繪圖
             win32gui.SetLayeredWindowAttributes(self._host_hwnd, 0, 255, win32con.LWA_ALPHA)
 
+            # 以原生容器作為 Qt 視窗的父視窗
             self._host_window = QWindow.fromWinId(self._host_hwnd)
 
             if self._host_window is None:
@@ -267,7 +266,7 @@ class _ImageWindow(QRasterWindow):
 
     def _sync_geometry(self) -> None:
         """
-        依目標視窗的客戶區與縮放比例更新圖片尺寸
+        依目標視窗的客戶區同步原生容器與 Qt 視窗尺寸
         """
 
         if (
@@ -291,7 +290,7 @@ class _ImageWindow(QRasterWindow):
 
     def _release_host(self) -> None:
         """
-        釋放內部原生容器
+        釋放原生容器
         """
 
         if self._target_events is not None:
@@ -346,7 +345,7 @@ class Instance(QObject):
 
     def set_hwnd(self, hwnd: int) -> None:
         """
-        設定目標視窗控制代碼, 0 表示解除掛載
+        設定目標 HWND, 0 表示解除掛載
         """
 
         hwnd = int(hwnd)
@@ -361,7 +360,7 @@ class Instance(QObject):
 
     def get_hwnd(self) -> int:
         """
-        取得視窗控制代碼
+        取得目標 HWND
         """
 
         return self._hwnd
@@ -394,7 +393,7 @@ class Instance(QObject):
 
     def set_scaling(self, mode: str, background_color: QColor | str = "#000000") -> None:
         """
-        設定 fill, fit 或 stretch 與不透明背景色
+        設定縮放模式(fill/fit/stretch)及不透明背景色
         """
 
         if mode not in ("fill", "fit", "stretch"):
@@ -416,7 +415,7 @@ class Instance(QObject):
     @Slot()
     def show(self) -> None:
         """
-        顯示圖片
+        顯示輸出
         """
 
         if self.window is None:
@@ -428,7 +427,7 @@ class Instance(QObject):
     @Slot()
     def hide(self) -> None:
         """
-        隱藏圖片
+        隱藏輸出
         """
 
         if self.window is not None:
@@ -438,7 +437,7 @@ class Instance(QObject):
     @Slot()
     def close(self) -> None:
         """
-        釋放圖片及內部容器, 保留目標 HWND
+        釋放資源, 保留目標 HWND 與顯示選項
         """
 
         try:

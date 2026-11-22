@@ -1,7 +1,9 @@
 """
 Qt 影片顯示模組, 接收主程式提供的 HWND 並共用既有 QApplication
 
-呼叫端先設定 VLC DLL 搜尋位置, 再於 Qt 主執行緒使用:
+在 Qt 主執行緒先建立 QApplication 與目標視窗
+使用前設定 VLC DLL 搜尋位置
+
     import bb_video_display
 
     display = bb_video_display.Instance()
@@ -12,10 +14,7 @@ Qt 影片顯示模組, 接收主程式提供的 HWND 並共用既有 QApplicatio
 
 預設為 fill 與黑色背景, 靜音並循環播放
 hardware_decoding 接受 any, d3d11va, dxva2, none, 預設 any
-show/hide 只改變可見性, stop 隱藏輸出並停止播放
-set_hwnd(0) 解除掛載但保留進度與播放意圖, 重新綁定後恢復
-close 釋放媒體及內部資源, 保留 HWND 與顯示選項供重新載入
-重掛或結束時可傳入 process_events=True, 在等待停止期間處理 Qt 事件
+process_events=True 允許在等待 VLC 停止時處理 Qt 事件
 """
 
 from collections.abc import Callable
@@ -108,7 +107,7 @@ class _StopThread(QThread):
 
 class _VideoWindow(QRasterWindow):
     """
-    內部影片子視窗
+    繪製背景並提供影片輸出子視窗
     """
 
     def __init__(self, target_hwnd: int, color: QColor) -> None:
@@ -132,7 +131,7 @@ class _VideoWindow(QRasterWindow):
 
     def show(self) -> None:
         """
-        顯示影片, 第一次顯示時建立不透明容器及影片子視窗
+        顯示影片視窗, 需要時建立原生容器及影片輸出子視窗
         """
 
         if not win32gui.IsWindow(self.target_hwnd):
@@ -156,6 +155,8 @@ class _VideoWindow(QRasterWindow):
                     None
                 )
                 win32gui.SetLayeredWindowAttributes(self.host_hwnd, 0, 255, win32con.LWA_ALPHA)
+
+                # 以原生容器作為 Qt 視窗的父視窗
                 self.host_window = QWindow.fromWinId(self.host_hwnd)
 
                 if self.host_window is None:
@@ -197,7 +198,7 @@ class _VideoWindow(QRasterWindow):
 
     def hide(self) -> None:
         """
-        隱藏影片與內部容器
+        隱藏影片視窗與原生容器
         """
 
         if self.host_hwnd and win32gui.IsWindow(self.host_hwnd):
@@ -207,6 +208,9 @@ class _VideoWindow(QRasterWindow):
 
 
     def close(self) -> bool:
+        """
+        關閉影片視窗並釋放原生容器
+        """
 
         self.hide()
         self.setParent(None)
@@ -227,7 +231,7 @@ class _VideoWindow(QRasterWindow):
 
     def sync_geometry(self) -> None:
         """
-        依目標視窗的客戶區調整影片容器, 以裝置像素比換算 Qt 視窗尺寸
+        依目標視窗的客戶區同步原生容器與 Qt 視窗尺寸
         """
 
         if not win32gui.IsWindow(self.target_hwnd) or not win32gui.IsWindow(self.host_hwnd):
@@ -296,7 +300,7 @@ class Instance(QObject):
 
     def set_hwnd(self, hwnd: int, *, process_events: bool = False) -> None:
         """
-        設定目標視窗控制代碼, 0 表示解除掛載
+        設定目標 HWND, 0 表示解除掛載
         """
 
         hwnd = int(hwnd)
@@ -343,7 +347,7 @@ class Instance(QObject):
 
     def get_hwnd(self) -> int:
         """
-        取得視窗控制代碼
+        取得目標 HWND
         """
 
         return self._hwnd
@@ -390,7 +394,7 @@ class Instance(QObject):
 
     def set_scaling(self, mode: str, background_color: QColor | str = "#000000") -> None:
         """
-        設定 fill, fit 或 stretch 與 不透明背景色
+        設定縮放模式(fill/fit/stretch)及不透明背景色
         """
 
         if mode not in ("fill", "fit", "stretch"):
@@ -407,7 +411,7 @@ class Instance(QObject):
 
     def show(self) -> None:
         """
-        顯示影片與背景容器, 不改變播放狀態
+        顯示輸出
         """
 
         if self._media is None or self._player is None:
@@ -441,7 +445,7 @@ class Instance(QObject):
 
     def hide(self) -> None:
         """
-        隱藏整個輸出, 保留播放狀態與內部資源
+        隱藏輸出
         """
 
         self._visible = False
@@ -452,7 +456,7 @@ class Instance(QObject):
     @Slot()
     def close(self, *, process_events: bool = False) -> None:
         """
-        停止輸出並釋放內部資源, 保留外部 HWND 與顯示選項
+        釋放資源, 保留目標 HWND 與顯示選項
         """
 
         if self._closing:
