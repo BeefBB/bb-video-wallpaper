@@ -137,9 +137,10 @@ Name | Item | Default
 Media folder | MEDIA_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\video\`
 Media import folder | SINGLE_IMPORT_DIR | `_imports/` inside the media folder
 Thumbnail folder | THUMBNAIL_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\thumbnails\`
+Blurred wallpaper background folder |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\backgrounds\`
 Log file |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\log\log.log`
 VLC wallpaper playback options |  | Audio disabled, video title hidden, repeat option `--input-repeat=65535`
-Wallpaper scaling mode |  | Images and videos preserve their aspect ratio and fill the screen with centered cropping
+Default wallpaper scaling mode |  | Images and videos preserve their aspect ratio and fill the screen with centered cropping
 Wallpaper selection order on startup |  | Saved wallpaper for the monitor > first recent entry > first media list entry; the file must exist for either of the first two choices
 Default wallpaper reattachment delay |  | 0.2 s
 Reattachment wait when the desktop is not ready |  | 2 s

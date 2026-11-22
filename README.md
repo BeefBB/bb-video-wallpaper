@@ -137,9 +137,10 @@ Folder/
 媒體資料夾               | MEDIA_DIR                  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\video\`
 素材匯入資料夾           | SINGLE_IMPORT_DIR          | 媒體資料夾下的 `_imports/`
 縮圖資料夾               | THUMBNAIL_DIR              | `%LOCALAPPDATA%\BB\BB Video Wallpaper\thumbnails\`
+桌布模糊背景資料夾       |                            | `%LOCALAPPDATA%\BB\BB Video Wallpaper\backgrounds\`
 日誌檔案                 |                            | `%LOCALAPPDATA%\BB\BB Video Wallpaper\log\log.log`
 VLC 桌布播放參數         |                            | 關閉音訊, 不顯示影片標題, 重播參數 `--input-repeat=65535`
-桌布縮放方式             |                            | 圖片與影片皆等比例置中裁切填滿
+預設桌布縮放方式         |                            | 圖片與影片皆等比例置中裁切填滿
 啟動時選擇桌布的順序     |                            | 該螢幕保存的桌布 > 最近紀錄第一筆 > 媒體清單第一筆, 前兩者須檔案存在
 桌布重掛預設延遲         |                            | 0.2 s
 桌面未就緒時的重掛等待   |                            | 2 s

@@ -137,9 +137,10 @@ Folder/
 メディアフォルダー | MEDIA_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\video\`
 素材のインポート先フォルダー | SINGLE_IMPORT_DIR | メディアフォルダー内の `_imports/`
 サムネイルフォルダー | THUMBNAIL_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\thumbnails\`
+壁紙用ぼかし背景フォルダー |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\backgrounds\`
 ログファイル |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\log\log.log`
 VLC の壁紙再生オプション |  | 音声無効, 動画タイトル非表示, リピート設定 `--input-repeat=65535`
-壁紙の拡大縮小方式 |  | 画像・動画ともに縦横比を維持し、中央でトリミングして画面を埋める
+壁紙の既定の拡大縮小方式 |  | 画像・動画ともに縦横比を維持し、中央でトリミングして画面を埋める
 起動時の壁紙選択順序 |  | そのモニターに保存された壁紙 > 最近の使用履歴の先頭 > メディア一覧の先頭; 保存された壁紙と履歴の候補は、ファイルが存在する場合のみ使用
 壁紙の再アタッチのデフォルト遅延 |  | 0.2 s
 デスクトップが未準備の場合の再アタッチ待機時間 |  | 2 s

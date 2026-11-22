@@ -52,12 +52,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 
 使用者資料存放在 `%LOCALAPPDATA%\BB\BB Video Wallpaper\`:
 
-路徑          | 用途
----           | ---
-`config.json` | 語言, 自動暫停選項, 各螢幕桌布, 跟隨關係, 共用最近使用紀錄, 素材與螢幕方向的縮放模式及素材共用背景色
-`video/`      | 媒體資料夾, 匯入檔案存放在其下的 `_imports/`
-`thumbnails/` | 縮圖快取
-`log/log.log` | 日誌, 達到上限後輪替
+路徑           | 用途
+---            | ---
+`config.json`  | 語言, 自動暫停選項, 各螢幕桌布, 跟隨關係, 共用最近使用紀錄, 素材與螢幕方向的縮放模式及素材共用背景色
+`video/`       | 媒體資料夾, 匯入檔案存放在其下的 `_imports/`
+`thumbnails/`  | 縮圖快取
+`backgrounds/` | 桌布使用完整顯示與模糊背景時, 依圖片或影片的第一個解碼畫面產生的模糊背景
+`log/log.log`  | 日誌, 達到上限後輪替
 
 ## 日常開發
 
@@ -74,7 +75,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 [windows_integration.py](../windows_integration.py) | 單一實例, 螢幕識別, 桌面掛載與就緒檢查, 虛擬桌面及最大化視窗偵測, 電源通知與開機排程
 [bb_image_display.py](../bb_image_display.py)       | Qt 圖片輸出, 縮放與背景色, 原生子視窗管理與重綁
 [bb_video_display.py](../bb_video_display.py)       | VLC 影片輸出, 縮放與背景色, 非同步播放及進度恢復, 原生子視窗管理與重綁
-[thumbnails.py](../thumbnails.py)                   | 支援的媒體格式, 縮圖產生, 快取驗證與背景排隊
+[display_painting.py](../display_painting.py)       | 圖片桌布, 影片桌布, 懸停預覽 共用的背景圖置中裁切繪製
+[thumbnails.py](../thumbnails.py)                   | 支援的媒體格式; 清晰縮圖, 模糊縮圖, 全解析度模糊背景 的 產生, 快取, 工作佇列
 
 模組整合時需維持以下邊界:
 
