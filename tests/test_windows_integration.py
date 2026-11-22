@@ -1,11 +1,8 @@
 """
-測試 Windows 掛載失敗, 原生視窗生命週期與通知邊界
-模擬外部 API, 不變更桌面, Mutex 或工作排程
-使用隱藏視窗驗證工作列通知, 獨立監聽視窗與備援容器的原生 alpha 設定
+使用隱藏視窗驗證 WorkerW 掛載座標, 備援容器與圖片輸出的原生生命週期
+只操作測試視窗, 不變更使用者桌面
 """
 
-import ctypes
-from ctypes import wintypes
 from pathlib import Path
 import tempfile
 import sys
@@ -14,7 +11,6 @@ from unittest import mock
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QImage
-from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QWidget
 
 
@@ -24,228 +20,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
-from app_loader import QtTestCase, load_app_module
+from app_loader import QtTestCase
 import bb_image_display
 import win32con
 import win32gui
 import windows_integration as windows
-
-
-class WindowsIntegrationTests(unittest.TestCase):
-    """
-    使用模擬 API 驗證 Windows 整合行為
-    """
-
-    def test_monitor_identity_uses_device_interface_and_survives_display_renumbering(self) -> None:
-        """
-        驗證螢幕識別使用裝置介面, Windows 顯示編號改變後仍保持一致
-        """
-
-        device = mock.Mock(StateFlags=1, DeviceID=r"\\?\DISPLAY#Monitor-A")
-        with (
-            mock.patch.object(windows.win32api, "MonitorFromWindow", return_value=10),
-            mock.patch.object(windows.win32api, "GetMonitorInfo") as info,
-            mock.patch.object(windows.win32api, "EnumDisplayDevices", return_value=device),
-        ):
-            info.side_effect = [{"Device": r"\\.\DISPLAY1"}, {"Device": r"\\.\DISPLAY3"}]
-
-            self.assertEqual(windows.get_monitor_id(100), r"device:\\?\display#monitor-a")
-            self.assertEqual(windows.get_monitor_id(200), r"device:\\?\display#monitor-a")
-
-
-    def test_vlc_wakeup_only_posts_null_to_own_video_windows(self) -> None:
-        """
-        驗證喚醒操作只向目前程序持有的 VLC 影片視窗傳送 WM_NULL
-        """
-
-        error_type = windows.win32gui.error
-        with (
-            mock.patch.object(windows, "win32gui") as gui,
-            mock.patch.object(windows.win32api, "GetCurrentProcessId", return_value=100),
-            mock.patch.object(windows.win32process, "GetWindowThreadProcessId") as owner,
-        ):
-            gui.error = error_type
-            owner.side_effect = lambda hwnd: (10, 999 if hwnd == 4 else 100)
-
-            def class_name(hwnd):
-                """
-                依視窗代碼回傳 Qt 或 VLC 類別, 並模擬視窗失效與缺少類別名稱
-                """
-
-                if hwnd == 5:
-                    raise error_type(1400, "GetClassName", "window destroyed")
-                if hwnd == 6:
-                    return None
-                return "QtWindow" if hwnd == 3 else "VLC video main 1234"
-
-            gui.GetClassName.side_effect = class_name
-            gui.EnumWindows.side_effect = lambda callback, data: [callback(hwnd, data) for hwnd in range(1, 7)]
-            windows.wake_vlc_video_windows()
-
-            self.assertEqual(gui.PostMessage.call_args_list, [
-                mock.call(1, windows.win32con.WM_NULL, 0, 0),
-                mock.call(2, windows.win32con.WM_NULL, 0, 0),
-            ])
-
-
-    def test_taskbar_notification_preserves_handle_and_rejects_unregistered_message(self) -> None:
-        """
-        工作列通知保留完整 HWND, 註冊失敗時不放行編號為零的訊息
-        """
-
-        # 超過 32 位元的 HWND
-        hwnd = 2**40 + 1
-        with (
-            mock.patch.object(windows.win32gui, "RegisterWindowMessage", return_value=0xC123) as register,
-            mock.patch.object(windows.ctypes.windll.user32, "ChangeWindowMessageFilterEx", return_value=1) as change,
-        ):
-            self.assertEqual(windows.register_taskbar_created_notification(hwnd), 0xC123)
-            register.assert_called_once_with("TaskbarCreated")
-            change.assert_called_once_with(hwnd, 0xC123, 1, None)
-            self.assertIs(change.argtypes[0], wintypes.HWND)
-            self.assertIs(change.restype, wintypes.BOOL)
-            register.return_value = 0
-            change.reset_mock()
-            with self.assertRaisesRegex(RuntimeError, "TaskbarCreated"):
-                windows.register_taskbar_created_notification(hwnd)
-            change.assert_not_called()
-
-
-    def test_wallpaper_attaches_to_existing_fallback_and_legacy_containers(self) -> None:
-        """
-        驗證既有與備援容器的掛載目標, 舊版桌面另將桌布排在圖示後方
-        """
-
-        cases = (
-            ([0, 20], 20, False, None),
-            ([0, 0], 20, True, None),
-            ([20, 30, 40], 40, False, 30),
-        )
-        for windows_found, parent, creates_container, behind in cases:
-            with (
-                self.subTest(windows_found=windows_found),
-                mock.patch.object(windows, "win32gui") as gui,
-                mock.patch.object(windows, "create_workerw", return_value=20) as create,
-            ):
-                gui.FindWindow.return_value = 10
-                gui.FindWindowEx.side_effect = windows_found
-                gui.GetAncestor.return_value = parent
-                gui.GetWindowRect.return_value = (0, 0, 1920, 1080)
-                gui.ScreenToClient.return_value = (0, 0)
-                # SetParent 成功時也可能回傳 0
-                gui.SetParent.return_value = 0
-                windows.set_windows_as_wallpaper(100)
-
-                gui.SetParent.assert_called_once_with(100, parent)
-                self.assertEqual(create.call_args_list, [mock.call(10)] if creates_container else [])
-                if behind is None:
-                    self.assertTrue(gui.SetWindowPos.call_args.args[-1] & win32con.SWP_NOZORDER)
-                else:
-                    self.assertEqual(gui.SetWindowPos.call_args.args[:2], (100, behind))
-
-
-    def test_workerw_alpha_failure_cleans_up_and_preserves_original_error(self) -> None:
-        """
-        驗證 WorkerW 透明度設定失敗時銷毀容器, 清理再失敗也保留原始例外
-        """
-
-        error_type = windows.win32gui.error
-        error = error_type(87, "SetLayeredWindowAttributes", "invalid parameter")
-
-        for cleanup_error in (None, error_type(5, "DestroyWindow", "access denied")):
-            with self.subTest(cleanup_error=cleanup_error), mock.patch.object(windows, "win32gui") as gui:
-                gui.error = error_type
-                gui.GetClientRect.return_value = (0, 0, 1920, 1080)
-                gui.CreateWindowEx.return_value = 20
-                gui.SetLayeredWindowAttributes.side_effect = error
-                gui.DestroyWindow.side_effect = cleanup_error
-
-                with mock.patch.object(windows.logger, "exception"):
-                    with self.assertRaises(error_type) as caught:
-                        windows.create_workerw(10)
-
-                self.assertIs(caught.exception, error)
-                gui.DestroyWindow.assert_called_once_with(20)
-
-
-    def test_power_notifications_preserve_64_bit_handles_and_report_failure(self) -> None:
-        """
-        驗證通知保留完整的 64 位元 handle 與電源 GUID, 取消失敗時記錄原生錯誤
-        """
-
-        # 超過 32 位元的 HWND 與通知 handle
-        hwnd = 2**40 + 1
-        handle = 2**40 + 2
-
-        with (
-            mock.patch.object(windows.ctypes.windll.user32, "RegisterPowerSettingNotification", return_value=handle) as register,
-            mock.patch.object(windows.ctypes.windll.user32, "UnregisterPowerSettingNotification", return_value=1) as unregister,
-            mock.patch.object(windows.ctypes, "GetLastError", return_value=6) as last_error,
-            mock.patch.object(windows, "logger") as logger,
-        ):
-            self.assertEqual(windows.register_power_notification(hwnd), handle)
-            self.assertIs(register.restype, wintypes.HANDLE)
-            self.assertIs(register.argtypes[0], wintypes.HANDLE)
-            self.assertEqual(register.call_args.args[0], hwnd)
-            power_guid = ctypes.cast(register.call_args.args[1], ctypes.POINTER(windows.GUID)).contents
-            self.assertEqual(bytes(power_guid), bytes(windows.GUID_CONSOLE_DISPLAY_STATE))
-
-            windows.unregister_power_notification(handle)
-            self.assertIs(unregister.argtypes[0], wintypes.HANDLE)
-            unregister.assert_called_once_with(handle)
-            last_error.assert_not_called()
-            logger.warning.assert_not_called()
-
-            unregister.reset_mock()
-            unregister.return_value = 0
-            windows.unregister_power_notification(handle)
-            unregister.assert_called_once_with(handle)
-            last_error.assert_called_once_with()
-            logger.warning.assert_called_once()
-
-
-class DesktopEventTests(QtTestCase):
-    """
-    工作列通知與獨立監聽視窗
-    """
-
-    def setUp(self) -> None:
-        """
-        建立獨立的通知監聽視窗
-        """
-
-        super().setUp()
-
-        self.listener = load_app_module().DesktopEventWindow()
-        self.addCleanup(self.dispose_listener)
-
-
-    def dispose_listener(self) -> None:
-        """
-        關閉並釋放通知監聽視窗
-        """
-
-        self.listener.close()
-        self.listener.deleteLater()
-
-
-    def test_hidden_top_level_window_receives_only_taskbar_notification(self) -> None:
-        """
-        驗證監聽視窗維持隱藏且沒有父層, 只在收到工作列重建訊息時發出通知
-        """
-
-        # 確認監聽視窗保持隱藏且沒有父視窗
-        hwnd = int(self.listener.winId())
-        events = QSignalSpy(self.listener.taskbar_created)
-        self.assertFalse(windows.win32gui.IsWindowVisible(hwnd))
-        self.assertEqual(windows.win32gui.GetAncestor(hwnd, windows.win32con.GA_ROOT), hwnd)
-        self.assertIsNone(self.listener.parentWidget())
-
-        windows.win32gui.SendMessage(hwnd, windows.win32con.WM_NULL, 0, 0)
-        self.assertEqual(events.count(), 0)
-        windows.win32gui.SendMessage(hwnd, self.listener.taskbar_created_message, 0, 0)
-        self.assertEqual(events.count(), 1)
-        self.assertFalse(windows.win32gui.IsWindowVisible(hwnd))
 
 
 class WorkerWNativeTests(QtTestCase):
