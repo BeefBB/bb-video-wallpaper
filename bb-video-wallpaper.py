@@ -1619,6 +1619,7 @@ class Tray:
 
         colors = {
             None: "background_color_auto",
+            "blur": "background_blur",
             "#000000": "color_black",
             "#212322": "color_PMS419_moonless_night",
             "#54575a": "color_PMS425_sesame",
@@ -1641,7 +1642,6 @@ class Tray:
             "#002554": "color_PMS655_deep_sea",
             "#a8a2c3": "color_PMS7445_taro",
             "#6f40a2": "color_PMS2077_grape",
-            "blur": "background_blur",
         }
 
         media_path = wallpaper.current_media.relative_to(MEDIA_DIR).as_posix()
@@ -1657,6 +1657,8 @@ class Tray:
             action.triggered.connect(
                 lambda checked=False, value=color: self.set_background_color(screen_id, value)
             )
+            if color == "blur":
+                color_menu.addSeparator()
 
 
     def set_scaling(self, screen_id: str | None, mode: str) -> None:
