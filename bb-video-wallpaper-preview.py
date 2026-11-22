@@ -17,7 +17,7 @@ def add_previews(menu: QMenu, code: str, text: dict[str, str], multiple: bool) -
     prefix = f'{code}-{"多螢幕" if multiple else "單螢幕"}-'
     screens = tuple(f'{text["monitor"]} {number}' for number in range(1, 5))
     submenus = {
-        "select_video", "options", "advanced", "font_size", "preview_size", "language",
+        "select_video", "options", "advanced", "font_size", "preview_size", "auto_pause", "language",
         "hardware_decoding", "reset_defaults", "scaling_mode", "background_color", "follow_monitor",
         *screens,
     }
@@ -51,9 +51,7 @@ def add_previews(menu: QMenu, code: str, text: dict[str, str], multiple: bool) -
     )
 
     add_preview(
-        "options", ("auto_pause_fullscreen", True), ("auto_pause_screen_off", True),
-        ("auto_pause_battery", False), None, "font_size", "preview_size",
-        None, "language", None, ("startup", False),
+        "options", "font_size", "preview_size", None, "auto_pause", None, "language", None, ("startup", False),
     )
 
     add_preview("advanced", "open_config_file", "open_log_folder", "hardware_decoding", "reset_defaults")
@@ -91,6 +89,11 @@ def add_previews(menu: QMenu, code: str, text: dict[str, str], multiple: bool) -
     sizes = ("size_largest", "size_large", "size_normal", "size_small", "size_smallest")
     add_preview("font_size", *((key, key == "size_small") for key in sizes))
     add_preview("preview_size", *((key, key == "size_normal") for key in sizes), ("preview_disabled", False))
+
+    add_preview(
+        "auto_pause", ("auto_pause_fullscreen", True), ("auto_pause_screen_off", True),
+        ("auto_pause_battery", False),
+    )
 
     add_preview("language", *((name, code == language) for name, language in SUPPORTED_LANGUAGES.items()))
 

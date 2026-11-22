@@ -1144,26 +1144,6 @@ class Tray:
 
         # "選項"選單
         # ################
-        for text_key, config_key, attribute in (
-            ("auto_pause_fullscreen", "autoPauseIfFullscreen", "auto_pause_if_fullscreen"),
-            ("auto_pause_screen_off", "autoPauseIfScreenOff", "auto_pause_if_screen_off"),
-            ("auto_pause_battery", "autoPauseIfOnBattery", "auto_pause_if_on_battery"),
-        ):
-            action = QAction(tr(text_key), self.options_menu)
-            action.setCheckable(True)
-            action.setChecked(config.get(config_key, CONFIG_DEFAULTS[config_key]))
-
-            # triggered 前已切換勾選, 保存失敗時還原
-            action.triggered.connect(
-                lambda checked, key=config_key, attr=attribute, item=action: item.setChecked(
-                    checked if self.set_auto_pause_option(key, attr, checked) else not checked
-                )
-            )
-
-            self.options_menu.addAction(action)
-
-        self.options_menu.addSeparator()
-
         font_size_menu = self.options_menu.addMenu(tr("font_size"))
         font_size_group = QActionGroup(font_size_menu)
         self.font_size_actions: dict[int, QAction] = {}
@@ -1200,6 +1180,27 @@ class Tray:
 
             preview_size_menu.addAction(action)
             self.preview_size_actions[size] = action
+
+        self.options_menu.addSeparator()
+
+        auto_pause_menu = self.options_menu.addMenu(tr("auto_pause"))
+        for text_key, config_key, attribute in (
+            ("auto_pause_fullscreen", "autoPauseIfFullscreen", "auto_pause_if_fullscreen"),
+            ("auto_pause_screen_off", "autoPauseIfScreenOff", "auto_pause_if_screen_off"),
+            ("auto_pause_battery", "autoPauseIfOnBattery", "auto_pause_if_on_battery"),
+        ):
+            action = QAction(tr(text_key), auto_pause_menu)
+            action.setCheckable(True)
+            action.setChecked(config.get(config_key, CONFIG_DEFAULTS[config_key]))
+
+            # triggered 前已切換勾選, 保存失敗時還原
+            action.triggered.connect(
+                lambda checked, key=config_key, attr=attribute, item=action: item.setChecked(
+                    checked if self.set_auto_pause_option(key, attr, checked) else not checked
+                )
+            )
+
+            auto_pause_menu.addAction(action)
 
         self.options_menu.addSeparator()
 
