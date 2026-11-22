@@ -10,6 +10,7 @@ from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QPropertyAnimation, QRe
 from PySide6.QtGui import QAction, QColor, QCursor, QImage, QPainter, QPixmap, QScreen
 
 from config import get_scaling_mode
+from display_painting import draw_cover_image
 from thumbnails import ThumbnailThread
 
 
@@ -52,12 +53,14 @@ class MediaPreviewMenu(QMenu):
         self.loading_image_path = loading_image_path
         self.preview_mode = False
         self.preview_action: QAction | None = None
+        self.blurred_thumbnail: QImage | None = None
 
         self.thumbnail_thread: ThumbnailThread = (
             thumbnail_thread if thumbnail_thread is not None
             else ThumbnailThread(media_dir, thumbnail_dir, self)
         )
         self.thumbnail_thread.thumbnail_ready.connect(self.update_preview)
+        self.thumbnail_thread.blurred_thumbnail_ready.connect(self.update_blurred_preview)
 
         # 首次懸停達設定時間後顯示預覽
         self.preview_timer = QTimer(self)
@@ -175,8 +178,18 @@ class MediaPreviewMenu(QMenu):
         self.reset_timer.stop()
         self.preview_animation.stop()
         self.preview_action = None
+        self.blurred_thumbnail = None
         self.preview_mode = False
         self.preview.hide()
+
+
+    def _display_options(self, path: Path, screen: QScreen) -> tuple[str, str | None]:
+
+        media_path = path.relative_to(self.media_dir).as_posix()
+        geometry = screen.geometry()
+        orientation = "landscape" if geometry.width() >= geometry.height() else "portrait"
+        mode = get_scaling_mode(self.display_config, media_path, orientation)
+        return mode, self.display_config.get("backgroundColor", {}).get(media_path)
 
 
     def show_preview(self) -> None:
@@ -193,29 +206,46 @@ class MediaPreviewMenu(QMenu):
             return
 
         # 切換項目時先換成載入圖片, 不保留上一個項目的縮圖
+        self.blurred_thumbnail = None
         self.preview_pixmap = self.loading_pixmap
         self.display_preview()
 
+        path = Path(action.data())
+        screen = self.target_screen or QApplication.screenAt(cursor) or self.screen()
+        mode, background = self._display_options(path, screen)
         self.thumbnail_thread.request(
-            Path(action.data()), preview_size=self.preview_size, priority=True
+            path, preview_size=self.preview_size, priority=True,
+            include_blur=(mode == "fit" and background == "blur")
+        )
+
+
+    def _matches_preview(self, media_path: str, preview_size: int) -> bool:
+
+        action = self.preview_action
+        return (
+            self.preview_mode and action is not None and preview_size == self.preview_size and
+            Path(action.data()) == Path(media_path)
         )
 
 
     @Slot(str, int, QImage)
     def update_preview(self, media_path: str, preview_size: int, image: QImage) -> None:
 
-        action = self.preview_action
-        if (
-            not self.preview_mode or
-            action is None or
-            Path(action.data()) != Path(media_path) or
-            preview_size != self.preview_size or
-            image.isNull()
-        ):
+        if image.isNull() or not self._matches_preview(media_path, preview_size):
             return
 
         # 背景只傳遞 QImage, QPixmap 在主執行緒建立
         self.preview_pixmap = QPixmap.fromImage(image)
+        self.display_preview()
+
+
+    @Slot(str, int, QImage)
+    def update_blurred_preview(self, media_path: str, preview_size: int, image: QImage) -> None:
+
+        if image.isNull() or not self._matches_preview(media_path, preview_size):
+            return
+
+        self.blurred_thumbnail = image
         self.display_preview()
 
 
@@ -237,34 +267,28 @@ class MediaPreviewMenu(QMenu):
         available = screen.availableGeometry()
         preview_width = self.preview_size * 100
 
-        size = (self.target_screen or screen).geometry().size().scaled(
+        target_screen = self.target_screen or screen
+        size = target_screen.geometry().size().scaled(
             min(preview_width, max(1, available.width() - 8)),
             min(preview_width, max(1, available.height() - 8)),
             Qt.AspectRatioMode.KeepAspectRatio
         )
         size = QSize(max(1, size.width()), max(1, size.height()))
 
-        mode, color = "fill", "#000000"
+        mode, background = "fill", None
 
         if self.preview_pixmap.cacheKey() != self.loading_pixmap.cacheKey():
 
-            media_path = Path(action.data()).relative_to(self.media_dir).as_posix()
-            geometry = (self.target_screen or screen).geometry()
-            orientation = "landscape" if geometry.width() >= geometry.height() else "portrait"
-            mode = get_scaling_mode(self.display_config, media_path, orientation)
-            colors = self.display_config.get("backgroundColor", {})
-            color = colors.get(media_path, "#000000")
-            if color == "blur":
-                color = "#000000"
-
-            if mode == "fit" and media_path not in colors:
+            mode, background = self._display_options(Path(action.data()), target_screen)
+            if mode == "fit" and background is None:
                 average = self.preview_pixmap.toImage().scaled(
                     1, 1, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation
                 )
-                color = average.pixelColor(0, 0).name()
+                background = average.pixelColor(0, 0).name()
 
         source = QRectF(self.preview_pixmap.rect())
-        destination = QRectF(0, 0, size.width(), size.height())
+        bounds = QRectF(0, 0, size.width(), size.height())
+        destination = QRectF(bounds)
 
         if mode == "fill":
             # 直接繪製置中裁切範圍, 避免先放大整張極寬或極高的縮圖
@@ -275,12 +299,14 @@ class MediaPreviewMenu(QMenu):
         elif mode == "fit":
             fitted = source.size().scaled(destination.size(), Qt.AspectRatioMode.KeepAspectRatio)
             destination = QRectF(0, 0, fitted.width(), fitted.height())
-            destination.moveCenter(QRectF(0, 0, size.width(), size.height()).center())
+            destination.moveCenter(bounds.center())
 
         pixmap = QPixmap(size)
-        pixmap.fill(QColor(color))
+        pixmap.fill(QColor("#000000" if background is None or background == "blur" else background))
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        if mode == "fit" and background == "blur" and self.blurred_thumbnail is not None:
+            draw_cover_image(painter, bounds, self.blurred_thumbnail)
         painter.drawPixmap(destination, self.preview_pixmap, source)
         painter.end()
 
