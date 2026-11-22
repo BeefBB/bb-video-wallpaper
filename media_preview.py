@@ -254,6 +254,8 @@ class MediaPreviewMenu(QMenu):
             mode = get_scaling_mode(self.display_config, media_path, orientation)
             colors = self.display_config.get("backgroundColor", {})
             color = colors.get(media_path, "#000000")
+            if color == "blur":
+                color = "#000000"
 
             if mode == "fit" and media_path not in colors:
                 average = self.preview_pixmap.toImage().scaled(

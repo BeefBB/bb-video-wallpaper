@@ -12,6 +12,7 @@ import unittest
 from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, QRect, Qt, QTimer, Signal
+from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 from shiboken6 import isValid
 
@@ -257,6 +258,7 @@ class ImageDisplay:
         self.hwnd = 0
         self.deleteLater = mock.Mock()
         self.set_scaling = mock.Mock()
+        self.set_background_image = mock.Mock()
 
 
     def set_media(self, path: Path) -> None:
@@ -491,6 +493,48 @@ class PlaybackStateTests(QtTestCase):
         self.wallpaper.set_play_media(self.media_path)
         self.tray.play()
         self.assertEqual(self.player.state, "opening")
+
+
+    def test_delayed_blur_respects_current_media_mode_and_saved_choice(self) -> None:
+        """
+        背景產生期間換片, 切換縮放或選回純色, 已排隊的結果不可覆蓋新選擇
+        """
+
+        directory = self.media_path.parent
+        store = self.namespace["ConfigStore"](directory / "config.json", directory, ROOT / "lang")
+        self.namespace["config_store"] = store
+        self.wallpaper.set_play_media(self.media_path)
+        screen_id = self.wallpaper.screen_id
+        self.tray.set_scaling(screen_id, "fit")
+        self.tray.set_background_color(screen_id, "blur")
+        self.tray.thumbnail_thread.request_background.assert_called_with(self.media_path)
+        self.assertEqual(store.load()["backgroundColor"][self.media_path.name], "blur")
+
+        image = QImage(20, 10, QImage.Format.Format_RGB32)
+        image.fill(Qt.GlobalColor.blue)
+
+        def deliver() -> None:
+            self.tray.apply_blurred_background(str(self.media_path), image)
+
+        QTimer.singleShot(0, deliver)
+        self.wallpaper.set_play_media(directory / "new.mp4")
+        self.app.processEvents()
+        self.assertFalse(self.wallpaper.has_blurred_background)
+
+        self.wallpaper.set_play_media(self.media_path)
+        QTimer.singleShot(0, deliver)
+        self.tray.set_scaling(screen_id, "fill")
+        self.app.processEvents()
+        self.assertFalse(self.wallpaper.has_blurred_background)
+
+        self.tray.set_scaling(screen_id, "fit")
+        deliver()
+        self.assertIs(self.wallpaper.instance_video._background_image, image)
+        QTimer.singleShot(0, deliver)
+        self.tray.set_background_color(screen_id, "#123456")
+        self.app.processEvents()
+        self.assertIsNone(self.wallpaper.instance_video._background_image)
+        self.assertEqual(self.wallpaper.instance_video._background_color.name(), "#123456")
 
 
     def start_playing(self) -> None:

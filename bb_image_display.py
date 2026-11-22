@@ -23,8 +23,10 @@ import win32con
 import win32gui
 
 from PySide6.QtCore import QAbstractNativeEventFilter, QObject, QRectF, Qt, Slot
-from PySide6.QtGui import QColor, QImageReader, QPainter, QPaintEvent, QRasterWindow, QWindow
+from PySide6.QtGui import QColor, QImage, QImageReader, QPainter, QPaintEvent, QRasterWindow, QWindow
 from PySide6.QtWidgets import QApplication
+
+from display_painting import draw_cover_image
 
 
 __all__ = ["Instance"]
@@ -78,6 +80,7 @@ class _ImageWindow(QRasterWindow):
         self._target_events: _TargetEvents | None = None
         self.scaling_mode = "fill"
         self.background_color = QColor(Qt.GlobalColor.black)
+        self.background_image: QImage | None = None
 
         reader = QImageReader(str(image_path))
         reader.setAutoTransform(True)
@@ -183,20 +186,20 @@ class _ImageWindow(QRasterWindow):
             return
 
         bounds = QRectF(0, 0, self.width(), self.height())
+        painter = QPainter(self)
+        painter.fillRect(bounds, self.background_color)
+        if self.scaling_mode == "fill":
+            draw_cover_image(painter, bounds, self.image)
+            return
+
         source = QRectF(self.image.rect())
         target = QRectF(bounds)
-
-        # 只調整繪製範圍, 避免先建立放大後的圖片
-        if self.scaling_mode == "fill":
-            source.setSize(bounds.size().scaled(source.size(), Qt.AspectRatioMode.KeepAspectRatio))
-            source.moveCenter(QRectF(self.image.rect()).center())
-
-        elif self.scaling_mode == "fit":
+        if self.scaling_mode == "fit":
+            if self.background_image is not None:
+                draw_cover_image(painter, bounds, self.background_image)
             target.setSize(source.size().scaled(bounds.size(), Qt.AspectRatioMode.KeepAspectRatio))
             target.moveCenter(bounds.center())
 
-        painter = QPainter(self)
-        painter.fillRect(bounds, self.background_color)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         painter.drawImage(target, self.image, source)
 
@@ -336,6 +339,7 @@ class Instance(QObject):
         self.current_image: Path | None = None
         self._scaling_mode = "fill"
         self._background_color = QColor(Qt.GlobalColor.black)
+        self._background_image: QImage | None = None
 
         app.aboutToQuit.connect(self.close)
 
@@ -374,6 +378,7 @@ class Instance(QObject):
 
         if self.window is None:
             self.window = _ImageWindow(source, self._hwnd)
+            self.window.background_image = self._background_image
 
         else:
 
@@ -408,6 +413,14 @@ class Instance(QObject):
         if self.window is not None:
             self.window.scaling_mode = mode
             self.window.background_color = QColor(color)
+            self.window.update()
+
+
+    def set_background_image(self, image: QImage | None) -> None:
+
+        self._background_image = image
+        if self.window is not None:
+            self.window.background_image = image
             self.window.update()
 
 

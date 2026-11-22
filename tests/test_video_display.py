@@ -146,12 +146,13 @@ def run_display_probe(directory: Path, operation: str) -> None:
         )
 
 
-    def capture() -> QImage:
+    def capture(hwnd: int | None = None) -> QImage:
 
         # 擷取原生背景視窗, 不以繪圖替身代替 Qt 與 Windows 的輸出
-        window = display._window
-        assert window is not None
-        hwnd = window.host_hwnd
+        if hwnd is None:
+            window = display._window
+            assert window is not None
+            hwnd = window.host_hwnd
         _, _, width, height = win32gui.GetClientRect(hwnd)
         handle = win32gui.GetDC(hwnd)
         dc = win32ui.CreateDCFromHandle(handle)
@@ -218,6 +219,70 @@ def run_display_probe(directory: Path, operation: str) -> None:
                 display.set_media(directory / "base.mp4")
                 wait(lambda: (display.get_time() or 0) > 500)
                 wait(lambda: capture().pixelColor(200, 200).red() > 180)
+
+        elif operation == "fit-background":
+            import bb_image_display
+
+            # 正方形目標應裁掉最外側的黃色, 露出中間的綠色與藍色
+            background = QImage(400, 200, QImage.Format.Format_RGB32)
+            background.fill(Qt.GlobalColor.yellow)
+            painter = QPainter(background)
+            painter.fillRect(100, 0, 100, 200, Qt.GlobalColor.green)
+            painter.fillRect(200, 0, 100, 200, Qt.GlobalColor.blue)
+            painter.end()
+
+            def wait_background(hwnd: int, blurred: bool) -> None:
+                left, right = ("#00ff00", "#0000ff") if blurred else ("#123456", "#123456")
+
+                def samples() -> tuple[str, str, int]:
+                    actual = capture(hwnd)
+                    width, height = actual.width(), actual.height()
+                    return (
+                        actual.pixelColor(width // 20, height // 20).name(),
+                        actual.pixelColor(width * 19 // 20, height * 19 // 20).name(),
+                        actual.pixelColor(width // 8, height * 3 // 8).red()
+                    )
+
+                def matches() -> bool:
+                    first, last, red = samples()
+                    return (first, last) == (left, right) and red > 200
+
+                try:
+                    wait(matches)
+                except AssertionError:
+                    raise AssertionError((left, right, samples())) from None
+
+            display.set_media(directory / "base.mp4")
+            display.play()
+            wait(lambda: (display.get_time() or 0) > 500 and capture().pixelColor(100, 180).red() > 200)
+            display.pause()
+            player = display._player
+            assert player is not None
+            wait(lambda: player.get_state() == getattr(vlc.State, "Paused"))
+            position = display.get_time()
+            assert position is not None
+            assert display._window is not None
+            video_host = display._window.host_hwnd
+            wait_background(video_host, False)
+            display.set_background_image(background)
+            wait_background(video_host, True)
+            display.set_background_image(None)
+            wait_background(video_host, False)
+            assert display.get_time() == position and paused_at(position)
+            display.stop()
+
+            still = bb_image_display.Instance()
+            cleanup.callback(still.close)
+            still.set_hwnd(int(target.winId()))
+            still.set_scaling("fit", "#123456")
+            still.set_background_image(background)
+            still.set_media(directory / "pattern.png")
+            still.show()
+            assert still.window is not None
+            image_host = still.window._host_hwnd
+            wait_background(image_host, True)
+            still.set_background_image(None)
+            wait_background(image_host, False)
 
         elif operation == "crop-reset":
             display.set_media(directory / "base.mp4")
@@ -567,6 +632,14 @@ class VideoDisplayTests(unittest.TestCase):
         """
 
         self.assertIn("PASS crop-reset", self.run_probe("--display", "crop-reset"))
+
+
+    def test_fit_background_repaints_behind_still_image_and_paused_video(self) -> None:
+        """
+        比對模糊背景就緒與移除後的原生桌布畫面, 暫停中的影片應保留進度
+        """
+
+        self.assertIn("PASS fit-background", self.run_probe("--display", "fit-background"))
 
 
     def test_playing_and_paused_video_recover_after_host_process_ends(self) -> None:

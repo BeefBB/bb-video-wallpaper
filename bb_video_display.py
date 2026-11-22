@@ -34,8 +34,10 @@ from PySide6.QtCore import (
     QByteArray, QAbstractNativeEventFilter, QEventLoop, QObject, QRectF, QSizeF,
     Qt, QThread, Signal, Slot,
 )
-from PySide6.QtGui import QColor, QPainter, QPaintEvent, QRasterWindow, QWindow
+from PySide6.QtGui import QColor, QImage, QPainter, QPaintEvent, QRasterWindow, QWindow
 from PySide6.QtWidgets import QApplication
+
+from display_painting import draw_cover_image
 
 from windows_integration import wake_vlc_video_windows
 
@@ -119,6 +121,7 @@ class _VideoWindow(QRasterWindow):
         self.video_hwnd = 0
         self.host_window: QWindow | None = None
         self.background_color = QColor(color)
+        self.background_image: QImage | None = None
 
         self.setTitle("Qt video display")
         self.setFlags(
@@ -226,7 +229,10 @@ class _VideoWindow(QRasterWindow):
     def paintEvent(self, event: QPaintEvent) -> None:
 
         painter = QPainter(self)
-        painter.fillRect(QRectF(0, 0, self.width(), self.height()), self.background_color)
+        bounds = QRectF(0, 0, self.width(), self.height())
+        painter.fillRect(bounds, self.background_color)
+        if self.background_image is not None:
+            draw_cover_image(painter, bounds, self.background_image)
 
 
     def sync_geometry(self) -> None:
@@ -291,6 +297,7 @@ class Instance(QObject):
 
         self._scaling_mode = "fill"
         self._background_color = QColor(Qt.GlobalColor.black)
+        self._background_image: QImage | None = None
         self.current_media: Path | None = None
 
         self._player_event.connect(self._on_player_event, Qt.ConnectionType.QueuedConnection)
@@ -407,6 +414,17 @@ class Instance(QObject):
         self._scaling_mode = mode
         self._background_color = color
         self._layout()
+
+
+    def set_background_image(self, image: QImage | None) -> None:
+        """
+        更新 Qt 背景, 保留 VLC 的輸出與播放進度
+        """
+
+        self._background_image = image
+        if self._window is not None:
+            self._window.background_image = image if self._scaling_mode == "fit" else None
+            self._window.update()
 
 
     def show(self) -> None:
@@ -843,6 +861,7 @@ class Instance(QObject):
 
         window.sync_geometry()
         window.background_color = QColor(self._background_color)
+        window.background_image = self._background_image if self._scaling_mode == "fit" else None
         window.update()
 
         _, _, width, height = win32gui.GetClientRect(int(window.winId()))
