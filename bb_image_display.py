@@ -105,12 +105,8 @@ class _ImageWindow(QRasterWindow):
             self._sync_geometry()
             return
 
-        visible = self.isVisible()
         self._release_host()
         self._target_hwnd = hwnd
-
-        if visible and hwnd:
-            self.show()
 
 
     def show(self) -> None:
@@ -336,6 +332,7 @@ class Instance(QObject):
 
         self.window: _ImageWindow | None = None
         self._hwnd = 0
+        self._visible = False
         self.current_image: Path | None = None
         self._scaling_mode = "fill"
         self._background_color = QColor(Qt.GlobalColor.black)
@@ -356,6 +353,8 @@ class Instance(QObject):
 
         if self.window is not None:
             self.window.set_hwnd(hwnd)
+            if hwnd and self._visible and not self.window.isVisible():
+                self.window.show()
 
 
     def get_hwnd(self) -> int:
@@ -422,6 +421,7 @@ class Instance(QObject):
             raise RuntimeError("尚未設定圖片")
 
         self.window.show()
+        self._visible = True
 
 
     @Slot()
@@ -430,6 +430,7 @@ class Instance(QObject):
         隱藏輸出
         """
 
+        self._visible = False
         if self.window is not None:
             self.window.hide()
 
@@ -447,3 +448,4 @@ class Instance(QObject):
         finally:
             self.window = None
             self.current_image = None
+            self._visible = False

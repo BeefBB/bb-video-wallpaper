@@ -410,13 +410,19 @@ class ImageDisplayTests(QtTestCase):
         replacement = self.create_target()
         target_hwnd = int(replacement.winId())
         self.display.set_hwnd(target_hwnd)
-        self.display.show()
+        self.assertTrue(window.isVisible())
         self.assertIs(self.display.window, window)
         self.assertEqual(window.image.cacheKey(), image_key)
         self.assertEqual(win32gui.GetParent(window._host_hwnd), target_hwnd)
         self.assertTrue(win32gui.IsWindow(int(self.target.winId())))
-        self.assertTrue(window.isVisible())
 
+        self.display.hide()
+        self.display.set_hwnd(0)
+        self.display.set_hwnd(target_hwnd)
+        self.assertFalse(window.isVisible())
+        self.assertEqual(window.image.cacheKey(), image_key)
+
+        self.display.show()
         host = window._host_hwnd
         # 關閉時釋放圖片容器並保留目標供下次使用
         self.display.close()
@@ -426,9 +432,11 @@ class ImageDisplayTests(QtTestCase):
         self.assertIsNone(self.display.window)
         self.assertIsNone(self.display.current_image)
         self.display.set_media(self.image_path)
-        self.display.show()
         window = self.display.window
         assert window is not None
+        self.display.set_hwnd(target_hwnd)
+        self.assertFalse(window.isVisible())
+        self.display.show()
         self.assertEqual(win32gui.GetParent(window._host_hwnd), target_hwnd)
 
 
