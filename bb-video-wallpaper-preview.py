@@ -12,10 +12,15 @@ from config import SUPPORTED_LANGUAGES
 MenuItem = str | tuple[str, bool] | None
 
 
-def add_previews(menu: QMenu, code: str, text: dict[str, str], multiple: bool) -> None:
+def add_previews(
+    menu: QMenu, code: str, text: dict[str, str], chinese_text: dict[str, str], multiple: bool,
+) -> None:
 
-    prefix = f'{code}-{"多螢幕" if multiple else "單螢幕"}-'
-    screens = tuple(f'{text["monitor"]} {number}' for number in range(1, 5))
+    prefix = "多螢幕-" if multiple else "單螢幕-"
+    screens = tuple(f'{text["monitor"]} {number}' for number in range(1, 4))
+    preview_titles = chinese_text | {
+        screen: f'{chinese_text["monitor"]} {number}' for number, screen in enumerate(screens, 1)
+    }
     submenus = {
         "select_video", "options", "advanced", "font_size", "preview_size", "auto_pause", "language",
         "hardware_decoding", "reset_defaults", "scaling_mode", "background_color", "follow_monitor",
@@ -24,7 +29,7 @@ def add_previews(menu: QMenu, code: str, text: dict[str, str], multiple: bool) -
 
     def add_preview(name: str, *items: MenuItem) -> None:
 
-        title = text.get(name, name).partition(" (")[0]
+        title = preview_titles.get(name, name).partition(" (")[0]
         preview = menu.addMenu(prefix + title)
 
         for item in items:
@@ -118,12 +123,22 @@ def main() -> int:
         Qt.ConnectionType.QueuedConnection
     )
 
+    language_names = {
+        "zh-TW": "繁體中文",
+        "zh-CN": "簡體中文",
+        "ja-JP": "日文",
+        "ko-KR": "韓文",
+        "en-US": "英文",
+    }
+    texts = {}
     for code in SUPPORTED_LANGUAGES.values():
         with (base_dir / "lang" / f"{code}.json").open(encoding="utf-8") as language_file:
-            text = json.load(language_file)
+            texts[code] = json.load(language_file)
 
-        add_previews(menu, code, text, multiple=False)
-        add_previews(menu, code, text, multiple=True)
+    for code, text in texts.items():
+        language_menu = menu.addMenu(language_names[code])
+        add_previews(language_menu, code, text, texts["zh-TW"], multiple=False)
+        add_previews(language_menu, code, text, texts["zh-TW"], multiple=True)
 
     tray.setContextMenu(menu)
     tray.activated.connect(
