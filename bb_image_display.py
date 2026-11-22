@@ -36,7 +36,7 @@ class _TargetEvents(QAbstractNativeEventFilter):
     接收目標視窗的尺寸與銷毀事件
     """
 
-    def __init__(self, window: "ImageWallpaper") -> None:
+    def __init__(self, window: "_ImageWindow") -> None:
 
         super().__init__()
         self._window = weakref.ref(window)
@@ -63,7 +63,7 @@ class _TargetEvents(QAbstractNativeEventFilter):
         return False, 0
 
 
-class ImageWallpaper(QRasterWindow):
+class _ImageWindow(QRasterWindow):
     """
     繪圖所需的內部容器, 在指定視窗內繪製圖片與背景
     """
@@ -96,6 +96,115 @@ class ImageWallpaper(QRasterWindow):
             Qt.WindowType.WindowDoesNotAcceptFocus |
             Qt.WindowType.WindowTransparentForInput
         )
+
+
+    def set_hwnd(self, hwnd: int) -> None:
+        """
+        改用新的目標視窗
+        """
+
+        if hwnd == self._target_hwnd:
+            self._sync_geometry()
+            return
+
+        visible = self.isVisible()
+        self._release_host()
+        self._target_hwnd = hwnd
+
+        if visible and hwnd:
+            self.show()
+
+
+    def show(self) -> None:
+        """
+        顯示圖片, 第一次顯示時才建立內部容器
+        """
+
+        if not self._target_hwnd or not win32gui.IsWindow(self._target_hwnd):
+            self._release_host()
+            raise RuntimeError("必須先設定有效的目標視窗")
+
+        if self._host_hwnd and not win32gui.IsWindow(self._host_hwnd):
+            self._release_host()
+
+        if not self._host_hwnd:
+            self._create_host()
+
+        try:
+
+            super().show()
+
+            # 每次顯示後確保是原生子視窗, 避免 Qt 保留 WS_POPUP
+            hwnd = int(self.winId())
+            style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE) & 0xFFFFFFFF
+
+            win32gui.SetWindowLong(
+                hwnd,
+                win32con.GWL_STYLE,
+                (style & ~win32con.WS_POPUP) | win32con.WS_CHILD
+            )
+            win32gui.SetWindowPos(
+                hwnd, 0, 0, 0, 0, 0,
+                win32con.SWP_FRAMECHANGED |
+                win32con.SWP_NOMOVE |
+                win32con.SWP_NOSIZE |
+                win32con.SWP_NOZORDER |
+                win32con.SWP_NOACTIVATE
+            )
+
+            win32gui.ShowWindow(self._host_hwnd, win32con.SW_SHOWNOACTIVATE)
+            self._sync_geometry()
+
+        except Exception:
+            self._release_host()
+            raise
+
+
+    def hide(self) -> None:
+        """
+        隱藏圖片與內部容器
+        """
+
+        if self._host_hwnd and win32gui.IsWindow(self._host_hwnd):
+            win32gui.ShowWindow(self._host_hwnd, win32con.SW_HIDE)
+
+        super().hide()
+
+
+    def close(self) -> bool:
+        """
+        關閉圖片視窗並釋放內部容器
+        """
+
+        try:
+            return super().close()
+
+        finally:
+            self._release_host()
+
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+
+        if self.width() <= 0 or self.height() <= 0:
+            return
+
+        bounds = QRectF(0, 0, self.width(), self.height())
+        source = QRectF(self.image.rect())
+        target = QRectF(bounds)
+
+        # 只調整繪製範圍, 避免先建立放大後的圖片
+        if self.scaling_mode == "fill":
+            source.setSize(bounds.size().scaled(source.size(), Qt.AspectRatioMode.KeepAspectRatio))
+            source.moveCenter(QRectF(self.image.rect()).center())
+
+        elif self.scaling_mode == "fit":
+            target.setSize(source.size().scaled(bounds.size(), Qt.AspectRatioMode.KeepAspectRatio))
+            target.moveCenter(bounds.center())
+
+        painter = QPainter(self)
+        painter.fillRect(bounds, self.background_color)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.drawImage(target, self.image, source)
 
 
     def _create_host(self) -> None:
@@ -180,79 +289,6 @@ class ImageWallpaper(QRasterWindow):
         self.update()
 
 
-    def set_hwnd(self, hwnd: int) -> None:
-        """
-        改用新的目標視窗
-        """
-
-        if hwnd == self._target_hwnd:
-            self._sync_geometry()
-            return
-
-        visible = self.isVisible()
-        self._release_host()
-        self._target_hwnd = hwnd
-
-        if visible and hwnd:
-            self.show()
-
-
-    def show(self) -> None:
-        """
-        顯示圖片, 第一次顯示時才建立內部容器
-        """
-
-        if not self._target_hwnd or not win32gui.IsWindow(self._target_hwnd):
-            self._release_host()
-            raise RuntimeError("必須先設定有效的目標視窗")
-
-        if self._host_hwnd and not win32gui.IsWindow(self._host_hwnd):
-            self._release_host()
-
-        if not self._host_hwnd:
-            self._create_host()
-
-        try:
-
-            super().show()
-
-            # 每次顯示後確保是原生子視窗, 避免 Qt 保留 WS_POPUP
-            hwnd = int(self.winId())
-            style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE) & 0xFFFFFFFF
-
-            win32gui.SetWindowLong(
-                hwnd,
-                win32con.GWL_STYLE,
-                (style & ~win32con.WS_POPUP) | win32con.WS_CHILD
-            )
-            win32gui.SetWindowPos(
-                hwnd, 0, 0, 0, 0, 0,
-                win32con.SWP_FRAMECHANGED |
-                win32con.SWP_NOMOVE |
-                win32con.SWP_NOSIZE |
-                win32con.SWP_NOZORDER |
-                win32con.SWP_NOACTIVATE
-            )
-
-            win32gui.ShowWindow(self._host_hwnd, win32con.SW_SHOWNOACTIVATE)
-            self._sync_geometry()
-
-        except Exception:
-            self._release_host()
-            raise
-
-
-    def hide(self) -> None:
-        """
-        隱藏圖片與內部容器
-        """
-
-        if self._host_hwnd and win32gui.IsWindow(self._host_hwnd):
-            win32gui.ShowWindow(self._host_hwnd, win32con.SW_HIDE)
-
-        super().hide()
-
-
     def _release_host(self) -> None:
         """
         釋放內部原生容器
@@ -284,42 +320,6 @@ class ImageWallpaper(QRasterWindow):
                 win32gui.DestroyWindow(hwnd)
 
 
-    def close(self) -> bool:
-        """
-        關閉圖片視窗並釋放內部容器
-        """
-
-        try:
-            return super().close()
-
-        finally:
-            self._release_host()
-
-
-    def paintEvent(self, event: QPaintEvent) -> None:
-
-        if self.width() <= 0 or self.height() <= 0:
-            return
-
-        bounds = QRectF(0, 0, self.width(), self.height())
-        source = QRectF(self.image.rect())
-        target = QRectF(bounds)
-
-        # 只調整繪製範圍, 避免先建立放大後的圖片
-        if self.scaling_mode == "fill":
-            source.setSize(bounds.size().scaled(source.size(), Qt.AspectRatioMode.KeepAspectRatio))
-            source.moveCenter(QRectF(self.image.rect()).center())
-
-        elif self.scaling_mode == "fit":
-            target.setSize(source.size().scaled(bounds.size(), Qt.AspectRatioMode.KeepAspectRatio))
-            target.moveCenter(bounds.center())
-
-        painter = QPainter(self)
-        painter.fillRect(bounds, self.background_color)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        painter.drawImage(target, self.image, source)
-
-
 class Instance(QObject):
     """
     在 Qt 主執行緒使用, 將圖片輸出到主程式指定的 HWND
@@ -335,7 +335,7 @@ class Instance(QObject):
 
         super().__init__(app)
 
-        self.window: ImageWallpaper | None = None
+        self.window: _ImageWindow | None = None
         self._hwnd = 0
         self.current_image: Path | None = None
         self._scaling_mode = "fill"
@@ -375,7 +375,7 @@ class Instance(QObject):
         source = Path(path).resolve()
 
         if self.window is None:
-            self.window = ImageWallpaper(source, self._hwnd)
+            self.window = _ImageWindow(source, self._hwnd)
 
         else:
 
