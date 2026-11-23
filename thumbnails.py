@@ -28,7 +28,7 @@ SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".mov", ".avi",}
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp",}
 SUPPORTED_MEDIA_EXTENSIONS = (SUPPORTED_VIDEO_EXTENSIONS | SUPPORTED_IMAGE_EXTENSIONS)
 CACHE_NAME = re.compile(
-    r"(?P<source>[0-9a-f]{16})-(?P<digest>[0-9a-f]{8})(?P<variant>-[1-5](?:-blur)?|-full-blur)?\.(?:jpg|png)"
+    r"(?P<source>[0-9a-f]{16})-(?P<digest>[0-9a-f]{8})(?P<variant>-[1-5](?:-blur)?|-blur)?\.(?:jpg|png)"
 )
 
 
@@ -497,7 +497,7 @@ def _ensure_media_image(
     digest = fast_hash(path)
     source_id = hashlib.sha256(path.name.encode("utf-8")).hexdigest()[:16]
     directory = cache_dir / relative_path.parent
-    variant = "full-blur" if preview_size is None else str(preview_size)
+    variant = "blur" if preview_size is None else str(preview_size)
     destination = directory / f"{source_id}-{digest}-{variant}.png"
     thumbnail_width = None if preview_size is None else preview_size * 100
 
