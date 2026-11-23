@@ -7,6 +7,7 @@ from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack
 import ctypes
+import errno
 import hashlib
 import logging
 import os
@@ -34,8 +35,10 @@ CACHE_NAME = re.compile(
 
 def cleanup_orphaned_thumbnails(media_dir: Path, thumbnail_dir: Path) -> None:
     """
-    依媒體檔名清除失去來源的縮圖
+    清除失去媒體來源的縮圖與空的快取子目錄
     """
+
+    cache_subdirectories = []
 
     for root, subdirectories, filenames in os.walk(thumbnail_dir):
 
@@ -48,6 +51,9 @@ def cleanup_orphaned_thumbnails(media_dir: Path, thumbnail_dir: Path) -> None:
             if directory.resolve() != directory.absolute():
                 subdirectories.clear()
                 continue
+
+            if directory != thumbnail_dir:
+                cache_subdirectories.append(directory)
 
             with os.scandir(source_directory) as entries:
                 source_ids = {
@@ -76,6 +82,14 @@ def cleanup_orphaned_thumbnails(media_dir: Path, thumbnail_dir: Path) -> None:
 
             except OSError:
                 logger.warning("清除失效縮圖失敗 - %s", path, exc_info=True)
+
+    # 先刪除子目錄, 父目錄變空時才能一併清理
+    for directory in reversed(cache_subdirectories):
+        try:
+            directory.rmdir()
+        except OSError as error:
+            if error.errno not in (errno.ENOENT, errno.ENOTEMPTY):
+                logger.warning("清除空快取目錄失敗 - %s", directory, exc_info=True)
 
 
 def fast_hash(path: Path) -> str:
