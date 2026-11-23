@@ -67,7 +67,7 @@ def add_previews(
     add_preview("reset_defaults", "confirm_reset_defaults")
 
     files = (
-        "scaling_mode", None, ("Ocean.mp4", True), ("City Lights.mp4", False),
+        "scaling_mode", "background_color", None, ("Ocean.mp4", True), ("City Lights.mp4", False),
         ("Forest Walk.mp4", False), "clear_recent_videos", None,
 
         ("City Lights.mp4", False), ("Clouds.jpg", False), ("Forest Walk.mp4", False),
@@ -84,8 +84,7 @@ def add_previews(
         add_preview("follow_monitor", *((screen, screen == screens[0]) for screen in screens[:-1]))
 
     add_preview(
-        "scaling_mode", ("scaling_fill", False), ("scaling_fit", True),
-        ("scaling_stretch", False), None, "background_color",
+        "scaling_mode", ("scaling_fill", False), ("scaling_fit", True), ("scaling_stretch", False),
     )
 
     colors = ((key, False) for key in text if key.startswith("color_"))

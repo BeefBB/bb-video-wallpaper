@@ -1612,9 +1612,7 @@ class Tray:
         if wallpaper is None or wallpaper.current_media is None or wallpaper.scaling_mode != "fit":
             return
 
-        scaling_menu.addSeparator()
-
-        color_menu = scaling_menu.addMenu(tr("background_color"))
+        color_menu = menu.addMenu(tr("background_color"))
         color_group = QActionGroup(color_menu)
 
         colors = {
