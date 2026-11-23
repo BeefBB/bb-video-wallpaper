@@ -372,10 +372,6 @@ class ConfigStore:
             config["language"] = "zh-TW"
 
         recent = config.get("recentVideo", [])
-        # 相容舊版單筆紀錄
-        if isinstance(recent, str):
-            recent = [recent]
-
         normalized_recent = []
         seen = set()
 

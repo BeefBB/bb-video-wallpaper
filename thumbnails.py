@@ -29,7 +29,7 @@ SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".mov", ".avi",}
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp",}
 SUPPORTED_MEDIA_EXTENSIONS = (SUPPORTED_VIDEO_EXTENSIONS | SUPPORTED_IMAGE_EXTENSIONS)
 CACHE_NAME = re.compile(
-    r"(?P<source>[0-9a-f]{16})-(?P<digest>[0-9a-f]{8})(?P<variant>-[1-5](?:-blur)?|-blur)?\.(?:jpg|png)"
+    r"(?P<source>[0-9a-f]{16})-(?P<digest>[0-9a-f]{8})(?:-[1-5](?:-blur)?|-blur)\.png"
 )
 
 
@@ -558,7 +558,7 @@ def _ensure_media_image(
             match = CACHE_NAME.fullmatch(old_path.name)
             if match is None or not old_path.is_file():
                 continue
-            if match["digest"] != digest or match["variant"] is None or old_path.suffix == ".jpg":
+            if match["digest"] != digest:
                 old_path.unlink(missing_ok=True)
 
     except OSError:
