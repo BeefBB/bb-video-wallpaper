@@ -28,6 +28,7 @@ from thumbnails import (
     SUPPORTED_VIDEO_EXTENSIONS,
     SUPPORTED_IMAGE_EXTENSIONS,
     SUPPORTED_MEDIA_EXTENSIONS,
+    ImageCacheClearThread,
     ThumbnailThread,
     cleanup_orphaned_thumbnails,
 )
@@ -1071,6 +1072,9 @@ class Tray:
         self.thumbnail_thread.thumbnail_ready.connect(self.apply_background_color, Qt.ConnectionType.QueuedConnection)
         self.thumbnail_thread.background_ready.connect(self.apply_blurred_background, Qt.ConnectionType.QueuedConnection)
 
+        # 清除圖片快取的背景執行緒
+        self.image_cache_clear_thread = ImageCacheClearThread(THUMBNAIL_DIR, THUMBNAIL_DIR.parent / "backgrounds")
+
         # 設定檔
         config = config_store.load()
         # 語言代碼, 字型大小, 縮圖預覽大小, 首次顯示預覽的等待時間
@@ -1238,6 +1242,12 @@ class Tray:
         open_log_action = QAction(tr("open_log_folder"), self.advanced_menu)
         open_log_action.triggered.connect(self.open_log_folder)
         self.advanced_menu.addAction(open_log_action)
+
+        self.clear_image_cache_action = QAction(tr("clear_image_cache"), self.advanced_menu)
+        self.clear_image_cache_action.setEnabled(False)
+        self.clear_image_cache_action.triggered.connect(self.clear_image_cache)
+        self.advanced_menu.addAction(self.clear_image_cache_action)
+        self.advanced_menu.aboutToShow.connect(self.refresh_clear_image_cache_action)
 
         hardware_decoding_menu = self.advanced_menu.addMenu(tr("hardware_decoding"))
         hardware_decoding_group = QActionGroup(hardware_decoding_menu)
@@ -2152,6 +2162,28 @@ class Tray:
         os.startfile(str(LOG_DIR))
 
 
+    def refresh_clear_image_cache_action(self) -> None:
+        """
+        更新清除圖片快取按鈕的可用狀態(有檔案且沒有清除正在進行中)
+        """
+
+        worker = self.image_cache_clear_thread
+        self.clear_image_cache_action.setEnabled(
+            not self.is_exiting and not worker.isRunning() and
+            next(worker.iter_png_files(), None) is not None
+        )
+
+    def clear_image_cache(self) -> None:
+        """
+        清除圖片快取
+        """
+
+        if self.is_exiting or self.image_cache_clear_thread.isRunning():
+            return
+
+        self.clear_image_cache_action.setEnabled(False)
+        self.image_cache_clear_thread.start()
+
     def reset_defaults(self) -> None:
         """
         標記還原要求並執行重啟流程
@@ -2263,6 +2295,7 @@ class Tray:
             return
 
         self.is_exiting = True
+        self.image_cache_clear_thread.requestInterruption()
         self.follow_sync_timer.stop()
         self.follow_restore_timer.stop()
         self.follow_controller.shutdown()
@@ -2277,6 +2310,8 @@ class Tray:
 
         except Exception:
             logger.exception("退出時停止縮圖工作失敗")
+
+        self.image_cache_clear_thread.wait()
 
         for menu in self.screen_menus.values():
             menu.reset_preview()

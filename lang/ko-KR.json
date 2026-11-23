@@ -61,6 +61,7 @@
   "advanced": "고급",
   "open_config_file": "설정 파일 열기",
   "open_log_folder": "로그 폴더 열기",
+  "clear_image_cache": "이미지 캐시 지우기",
   "hardware_decoding": "하드웨어 디코딩 (자동으로 다시 시작됩니다)",
   "hardware_decoding_auto": "자동",
   "hardware_decoding_d3d11": "Direct3D 11",

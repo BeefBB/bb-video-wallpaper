@@ -61,6 +61,7 @@
   "advanced": "詳細設定",
   "open_config_file": "設定ファイルを開く",
   "open_log_folder": "ログフォルダーを開く",
+  "clear_image_cache": "画像キャッシュを削除",
   "hardware_decoding": "ハードウェアデコード (自動で再起動します)",
   "hardware_decoding_auto": "自動",
   "hardware_decoding_d3d11": "Direct3D 11",

@@ -4,7 +4,7 @@
 """
 
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack
 import ctypes
 import hashlib
@@ -616,6 +616,57 @@ def _save_cache_png(
 
 
     logger.info("已產生快取圖片 - %s", destination)
+
+
+class ImageCacheClearThread(QThread):
+    """
+    逐一刪除縮圖與模糊背景圖
+    """
+
+    def __init__(self, thumbnail_dir: Path, background_dir: Path) -> None:
+
+        super().__init__()
+
+        self.cache_dirs = (thumbnail_dir, background_dir)
+
+    def iter_png_files(self) -> Iterator[Path]:
+        """
+        遍歷快取目錄下的 PNG
+        """
+
+        for cache_dir in self.cache_dirs:
+            for root, subdirectories, filenames in os.walk(cache_dir):
+
+                directory = Path(root)
+
+                try:
+                    # 略過連結目錄, 避免清理其指向的其他位置
+                    if directory.resolve() != directory.absolute():
+                        subdirectories.clear()
+                        continue
+
+                except OSError:
+                    subdirectories.clear()
+                    continue
+
+                for name in filenames:
+                    if name.lower().endswith(".png"):
+                        yield directory / name
+
+    def run(self) -> None:
+        """
+        逐一刪除快取目錄下的 PNG
+        """
+
+        for path in self.iter_png_files():
+
+            if self.isInterruptionRequested():
+                return
+
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                logger.debug("清除快取圖片失敗 - %s", path, exc_info=True)
 
 
 class ThumbnailThread(QThread):

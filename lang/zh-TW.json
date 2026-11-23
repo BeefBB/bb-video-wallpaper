@@ -61,6 +61,7 @@
   "advanced": "進階",
   "open_config_file": "開啟設定檔",
   "open_log_folder": "開啟 log 資料夾",
+  "clear_image_cache": "清除圖片快取",
   "hardware_decoding": "硬體解碼 (將自動重啟)",
   "hardware_decoding_auto": "自動",
   "hardware_decoding_d3d11": "Direct3D 11",
