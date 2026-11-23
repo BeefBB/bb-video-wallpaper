@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 from types import TracebackType
+from typing import cast
 import unittest
 from unittest import mock
 
@@ -90,6 +91,8 @@ def run_display_probe(directory: Path, operation: str) -> None:
     assert module.initialize_vlc()
     import vlc
 
+    paused_state: vlc.State = getattr(vlc.State, "Paused")
+
     app = QApplication([])
     app.setQuitOnLastWindowClosed(False)
     display = bb_video_display.Instance()
@@ -118,6 +121,11 @@ def run_display_probe(directory: Path, operation: str) -> None:
             loop.exec()
 
 
+    def wait_paused(player: vlc.MediaPlayer) -> None:
+
+        wait(lambda: player.get_state() == paused_state)
+
+
     def create_target() -> tuple[QWidget, subprocess.Popen[str]]:
 
         host, process = hosts.enter_context(open_host())
@@ -142,7 +150,7 @@ def run_display_probe(directory: Path, operation: str) -> None:
         player = display._player
         return (
             current is not None and abs(current - position) < 250 and
-            player is not None and player.get_state() == getattr(vlc.State, "Paused")
+            player is not None and player.get_state() == paused_state
         )
 
 
@@ -258,7 +266,7 @@ def run_display_probe(directory: Path, operation: str) -> None:
             display.pause()
             player = display._player
             assert player is not None
-            wait(lambda: player.get_state() == getattr(vlc.State, "Paused"))
+            wait_paused(player)
             position = display.get_time()
             assert position is not None
             assert display._window is not None
@@ -291,7 +299,7 @@ def run_display_probe(directory: Path, operation: str) -> None:
             display.pause()
             player = display._player
             assert player is not None
-            wait(lambda: player.get_state() == getattr(vlc.State, "Paused"))
+            wait_paused(player)
             position = display.get_time()
 
             for mode, point in (("fit", (5, 200)), ("stretch", (5, 5))):
@@ -316,7 +324,7 @@ def run_display_probe(directory: Path, operation: str) -> None:
                 display.pause()
                 player = display._player
                 assert player is not None
-                wait(lambda: player.get_state() == getattr(vlc.State, "Paused"))
+                wait_paused(player)
 
                 for width, height in ((300, 500), (500, 300)):
                     win32gui.SetWindowPos(
@@ -352,7 +360,8 @@ def run_display_probe(directory: Path, operation: str) -> None:
                             actual = capture()
                             return actual.size() == expected.size() and all(
                                 max(abs(a - b) for a, b in zip(
-                                    actual.pixelColor(x, y).getRgb()[:3], color.getRgb()[:3]
+                                    cast(tuple[int, int, int, int], actual.pixelColor(x, y).getRgb())[:3],
+                                    cast(tuple[int, int, int, int], color.getRgb())[:3]
                                 )) <= 30
                                 for x, y, color in samples
                             )
@@ -481,9 +490,15 @@ def run_recovery_probe(media: Path, operation: str) -> None:
 
             if operation == "video":
                 wait_until(lambda: player.has_vout() > 0 and player.get_state() == playing_state)
-            elif operation == "image":
+            elif operation in ("image", "image-before-reattach"):
                 window = wallpaper.instance_image.window
-                assert window is not None and window.isVisible(), "換片後圖片沒有顯示"
+                assert window is not None
+                if operation == "image-before-reattach":
+                    assert not window.isVisible()
+                    host_hwnd, host_process = hosts.enter_context(open_host())
+                    wallpaper.reattach_to_desktop()
+                    assert win32gui.GetAncestor(int(wallpaper.winId()), win32con.GA_PARENT) == host_hwnd
+                assert window.isVisible(), "換圖後圖片沒有顯示"
 
             print(f"PASS {operation}: lost output, synchronous command", flush=True)
             return
@@ -654,7 +669,7 @@ class VideoDisplayTests(unittest.TestCase):
 
     def test_lost_video_output_stops_and_switches_media_without_qt_reentry(self) -> None:
         """
-        失效輸出在播放或暫停時可停止, 亦可切換影片與圖片, 期間不執行 Qt 回呼
+        失效輸出可停止或換片, 重掛前選擇的圖片會保存並在重掛後顯示
         """
 
         from PySide6.QtGui import QImage
@@ -663,7 +678,7 @@ class VideoDisplayTests(unittest.TestCase):
         image.fill(0xff336699)
         self.assertTrue(image.save(str(self.recovery_media.with_suffix(".png"))))
 
-        for operation in ("stop", "pause", "video", "image"):
+        for operation in ("stop", "pause", "video", "image", "image-before-reattach"):
             with self.subTest(operation=operation):
                 self.assertIn(f"PASS {operation}:", self.run_probe("--recovery", operation))
 

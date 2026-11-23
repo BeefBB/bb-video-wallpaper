@@ -433,7 +433,15 @@ class Instance(QObject):
         if self.window is None:
             raise RuntimeError("尚未設定圖片")
 
-        self.window.show()
+        try:
+            if self._hwnd and win32gui.IsWindow(self._hwnd):
+                self.window.show()
+
+        except (RuntimeError, win32gui.error):
+            # 目標視窗可能在檢查後被銷毀
+            if win32gui.IsWindow(self._hwnd):
+                raise
+
         self._visible = True
 
 
