@@ -1,5 +1,17 @@
-from PySide6.QtCore import QRectF, Qt
+from PySide6.QtCore import QRectF, QSizeF, Qt
 from PySide6.QtGui import QImage, QPainter
+
+
+def fit_image_rect(source_size: QSizeF, bounds: QRectF) -> QRectF:
+    """
+    計算圖片等比例置中後的顯示矩形
+    """
+
+    fitted = QRectF(bounds)
+    fitted.setSize(source_size.scaled(bounds.size(), Qt.AspectRatioMode.KeepAspectRatio))
+    fitted.moveCenter(bounds.center())
+
+    return fitted
 
 
 def draw_cover_image(painter: QPainter, bounds: QRectF, image: QImage) -> None:

@@ -10,7 +10,7 @@ from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QPropertyAnimation, QRe
 from PySide6.QtGui import QAction, QColor, QCursor, QImage, QPainter, QPixmap, QScreen
 
 from config import get_scaling_mode
-from display_painting import draw_cover_image
+from display_painting import draw_cover_image, fit_image_rect
 from thumbnails import ThumbnailThread
 
 
@@ -299,9 +299,7 @@ class MediaPreviewMenu(QMenu):
             source = QRectF((source.width() - width) / 2, (source.height() - height) / 2, width, height)
 
         elif mode == "fit":
-            fitted = source.size().scaled(destination.size(), Qt.AspectRatioMode.KeepAspectRatio)
-            destination = QRectF(0, 0, fitted.width(), fitted.height())
-            destination.moveCenter(bounds.center())
+            destination = fit_image_rect(source.size(), bounds)
 
         pixmap = QPixmap(size)
         pixmap.fill(QColor("#000000" if background is None or background == "blur" else background))

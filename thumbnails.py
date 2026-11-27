@@ -1,5 +1,5 @@
 """
-媒體縮圖, 模糊背景與快取工作
+媒體縮圖, 桌布背景與快取工作
 匯入時不載入 VLC 或建立資料夾
 """
 
@@ -19,8 +19,10 @@ import time
 from typing import Literal
 from uuid import UUID
 
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QImage, QImageReader, QImageWriter
+from PySide6.QtCore import QRect, QRectF, QSize, Qt, QThread, Signal
+from PySide6.QtGui import QColor, QImage, QImageReader, QImageWriter, QPainter, QRegion
+
+from display_painting import fit_image_rect
 
 
 logger = logging.getLogger(__name__)
@@ -29,9 +31,16 @@ logger = logging.getLogger(__name__)
 SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".mov", ".avi",}
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp",}
 SUPPORTED_MEDIA_EXTENSIONS = (SUPPORTED_VIDEO_EXTENSIONS | SUPPORTED_IMAGE_EXTENSIONS)
-ImageKind = Literal["thumbnail_orig", "thumbnail_blur", "background_blur"]
+ImageKind = Literal["thumbnail_orig", "thumbnail_blur", "background_blur", "thumbnail_ray", "background_ray"]
+RayMode = Literal["ray1", "ray2"]
+ThumbnailRequest = tuple[Path, ImageKind, int | None, tuple[int, int] | None, RayMode, int]
+DEFAULT_RAY_MODE: RayMode = "ray2"
+DEFAULT_RAY_DECAY = 35
 CACHE_NAME = re.compile(
-    r"(?P<source>[0-9a-f]{16})-(?P<digest>[0-9a-f]{8})(?:-[1-5](?:-blur)?|-blur)\.png"
+    r"(?P<source>[0-9a-f]{16})-(?P<digest>[0-9a-f]{8})"
+    r"(?:-[1-5](?:-blur)?|-blur|(?:-[1-5])?-(?:"
+    r"ray[12]-(?:100|[1-9]?[0-9])-[1-9][0-9]*-[1-9][0-9]*"
+    r"|ray-[1-9][0-9]*-[1-9][0-9]*(?:-d(?:100|[1-9]?[0-9]))?))\.png"
 )
 
 
@@ -461,6 +470,167 @@ def _gaussian_blur(image: QImage) -> QImage:
     return result
 
 
+def _opaque_on_black(image: QImage) -> QImage:
+    """
+    將含透明度的圖片合成到不透明黑底
+    """
+
+    if not image.hasAlphaChannel():
+        return image
+
+    opaque = QImage(image.size(), QImage.Format.Format_RGB32)
+    if opaque.isNull():
+        raise RuntimeError("無法配置黑底合成圖")
+    opaque.fill(Qt.GlobalColor.black)
+    with QPainter(opaque) as painter:
+        painter.drawImage(0, 0, image)
+
+    return opaque
+
+
+def _draw_ray_strip(
+    painter: QPainter, target: QRect, band: QImage, *,
+    sideways: bool, leading: bool, inner_distance: float, ray_mode: RayMode, ray_decay: int
+) -> None:
+    """
+    依指定的方向將原圖邊緣延伸到留白, 並往外柔化與衰減
+    """
+
+    # 清晰和柔化的取樣共用黑底, 過渡時只混合顏色
+    band = _opaque_on_black(band)
+    transform = Qt.TransformationMode.SmoothTransformation
+    ignore_aspect = Qt.AspectRatioMode.IgnoreAspectRatio
+
+    if sideways:
+        edge = band.copy(0 if leading else band.width() - 1, 0, 1, band.height())
+        soft = band.scaled(1, min(8, band.height()), ignore_aspect, transform)
+        depth = target.width()
+        steps = min(128, depth)
+        layer_size = QSize(steps, target.height())
+
+    else:
+        edge = band.copy(0, 0 if leading else band.height() - 1, band.width(), 1)
+        soft = band.scaled(min(8, band.width()), 1, ignore_aspect, transform)
+        depth = target.height()
+        steps = min(128, depth)
+        layer_size = QSize(target.width(), steps)
+
+    soft = soft.scaled(edge.size(), ignore_aspect, transform)
+
+    layer = QImage(layer_size, QImage.Format.Format_RGB32)
+    if layer.isNull():
+        raise RuntimeError("無法配置光暈圖層")
+    layer.fill(Qt.GlobalColor.black)
+
+    with QPainter(layer) as overlay:
+
+        overlay.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+
+        for index in range(steps):
+
+            progress = index / (steps - 1)
+
+            sample_ratio = 1.0
+            if ray_mode == "ray2":
+                # 越往外, 射線與原圖邊緣的交點越靠近邊緣中段
+                sample_ratio = inner_distance / (inner_distance + progress * (depth - 1))
+
+            position = steps - index - 1 if leading else index
+
+            if sideways:
+                height = edge.height() * sample_ratio
+                sample = QRectF(0, (edge.height() - height) / 2, 1, height)
+                strip = QRectF(position, 0, 1, layer.height())
+
+            else:
+                width = edge.width() * sample_ratio
+                sample = QRectF((edge.width() - width) / 2, 0, width, 1)
+                strip = QRectF(0, position, layer.width(), 1)
+
+            softness = 1 - max(0.0, 1 - 4 * progress) ** 3
+            overlay.setOpacity(1.0)
+            if softness < 1:
+                overlay.drawImage(strip, edge, sample)
+            overlay.setOpacity(softness)
+            overlay.drawImage(strip, soft, sample)
+
+            overlay.setOpacity(1.0)
+            opacity = round(255 * ray_decay / 100 * progress ** 2)
+            overlay.fillRect(strip, QColor(0, 0, 0, opacity))
+
+    painter.drawImage(target, layer)
+
+
+def _render_ray(
+    image: QImage, size: QSize, ray_mode: RayMode, ray_decay: int, *, include_foreground: bool
+) -> QImage:
+    """
+    依指定尺寸繪製光暈, 預覽時將原圖合成到同一張圖上
+    """
+
+    result = QImage(size, QImage.Format.Format_RGB32)
+    if result.isNull():
+        raise RuntimeError("無法配置光暈背景")
+    result.fill(Qt.GlobalColor.black)
+
+    source = QRectF(image.rect())
+    fitted = fit_image_rect(source.size(), QRectF(result.rect()))
+
+    # 分別對齊繪製矩形的兩端, 避免起點和寬度取整後推算出錯誤終點
+    start_pixel = fitted.topLeft().toPoint()
+    end_pixel = fitted.bottomRight().toPoint()
+    sideways = start_pixel.x() > 0 or end_pixel.x() < size.width()
+    extent = size.width() if sideways else size.height()
+    leading_gap = start_pixel.x() if sideways else start_pixel.y()
+    trailing_gap = extent - (end_pixel.x() if sideways else end_pixel.y())
+    if not leading_gap and not trailing_gap and not include_foreground:
+        return result
+
+    if include_foreground:
+        image = _opaque_on_black(image)
+
+    inner_distance = (fitted.width() if sideways else fitted.height()) / 2
+    source_extent = image.width() if sideways else image.height()
+    band_depth = max(1, round(source_extent * 0.025))
+
+    with QPainter(result) as painter:
+
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        if image.hasAlphaChannel():
+            # 純背景留給半透明前景的區域維持黑底, 讓前景只在顯示時合成一次
+            coverage = QRect(
+                start_pixel.x(), start_pixel.y(), end_pixel.x() - start_pixel.x(), end_pixel.y() - start_pixel.y()
+            )
+            painter.setClipRegion(QRegion(result.rect()).subtracted(QRegion(coverage)))
+
+        for leading, gutter in ((True, leading_gap), (False, trailing_gap)):
+
+            if not gutter:
+                continue
+
+            offset = 0 if leading else source_extent - band_depth
+            # 繪製矩形朝原圖延伸一個像素, 避免取整時露出黑線
+            start = 0 if leading else extent - gutter - 1
+
+            if sideways:
+                band = image.copy(offset, 0, band_depth, image.height())
+                target = QRect(start, 0, gutter + 1, size.height())
+
+            else:
+                band = image.copy(0, offset, image.width(), band_depth)
+                target = QRect(0, start, size.width(), gutter + 1)
+
+            _draw_ray_strip(
+                painter, target, band, sideways=sideways, leading=leading,
+                inner_distance=inner_distance, ray_mode=ray_mode, ray_decay=ray_decay
+            )
+
+        if include_foreground:
+            painter.drawImage(fitted, image, source)
+
+    return result
+
+
 def ensure_thumbnail(
     path: Path,
     cancelled: Callable[[], bool],
@@ -469,20 +639,52 @@ def ensure_thumbnail(
     media_dir: Path,
     thumbnail_dir: Path,
     background_dir: Path,
-    preview_size: int | None = None
+    preview_size: int | None = None,
+    screen_size: tuple[int, int] | None = None,
+    ray_mode: RayMode = DEFAULT_RAY_MODE,
+    ray_decay: int = DEFAULT_RAY_DECAY
 ) -> Path:
     """
     驗證指定成品的快取, 缺少時直接從素材取圖並產生
     """
 
-    if kind == "background_blur":
+    ray_size = None
+    valid_preview_size = type(preview_size) is int and 1 <= preview_size <= 5
+
+    if kind in ("background_ray", "thumbnail_ray"):
+
+        if screen_size is None or len(screen_size) != 2 or any(type(n) is not int or n <= 0 for n in screen_size):
+            raise ValueError("光暈背景需要有效的螢幕尺寸")
+        if ray_mode not in ("ray1", "ray2"):
+            raise ValueError("光暈模式需為 ray1 或 ray2")
+        if type(ray_decay) is not int or not 0 <= ray_decay <= 100:
+            raise ValueError("光暈衰減需為 0 到 100 的整數")
+
+        width, height = screen_size
+        ray_size = QSize(width, height)
+        variant = f"{ray_mode}-{ray_decay}-{width}-{height}"
+
+        if kind == "thumbnail_ray":
+            if not valid_preview_size or preview_size is None:
+                raise ValueError("光暈縮圖需要有效的預覽尺寸")
+            limit = preview_size * 100
+            ray_size = ray_size.scaled(limit, limit, Qt.AspectRatioMode.KeepAspectRatio).expandedTo(QSize(1, 1))
+            cache_dir, variant = thumbnail_dir, f"{preview_size}-{variant}"
+
+        else:
+            if preview_size is not None:
+                raise ValueError("桌布光暈背景使用螢幕尺寸")
+            cache_dir = background_dir
+
+    elif kind == "background_blur":
         if preview_size is not None:
             raise ValueError("桌布模糊背景使用原尺寸")
         cache_dir, variant = background_dir, "blur"
+
     else:
         if (
             kind not in ("thumbnail_orig", "thumbnail_blur") or
-            type(preview_size) is not int or not 1 <= preview_size <= 5
+            not valid_preview_size
         ):
             raise ValueError("縮圖種類或尺寸無效")
         cache_dir = thumbnail_dir
@@ -490,10 +692,11 @@ def ensure_thumbnail(
 
     path = path.resolve(strict=True)
     relative_path = path.relative_to(media_dir.resolve())
+    extension = path.suffix.lower()
 
     if (
         not path.is_file() or
-        path.suffix.lower() not in SUPPORTED_MEDIA_EXTENSIONS
+        extension not in (SUPPORTED_IMAGE_EXTENSIONS if ray_size is not None else SUPPORTED_MEDIA_EXTENSIONS)
     ):
         raise ValueError("不支援的縮圖來源")
 
@@ -507,12 +710,14 @@ def ensure_thumbnail(
     if cancelled():
         raise InterruptedError("縮圖工作已取消")
 
-    if destination.is_file() and not QImage(str(destination)).isNull():
-        return destination
+    if destination.is_file():
+        cached = QImage(str(destination))
+        if not cached.isNull() and (ray_size is None or cached.size() == ray_size):
+            return destination
 
     # 只清理取圖前已存在的快取, 避免刪除其他工作剛產生的新版本
     old_paths = list(directory.glob(f"{source_id}-*"))
-    if path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
+    if extension in SUPPORTED_IMAGE_EXTENSIONS:
 
         reader = QImageReader(str(path))
         reader.setAutoTransform(True)
@@ -526,16 +731,21 @@ def ensure_thumbnail(
     if cancelled():
         raise InterruptedError("縮圖工作已取消")
 
-    if preview_size is not None:
-        width = preview_size * 100
-        height = max(1, round(width * image.height() / image.width()))
-        image = image.scaled(width, height, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
-    if kind != "thumbnail_orig":
-        image = _gaussian_blur(image)
+    if ray_size is not None:
+        image = _render_ray(image, ray_size, ray_mode, ray_decay, include_foreground=kind == "thumbnail_ray")
+    else:
+        if preview_size is not None:
+            width = preview_size * 100
+            height = max(1, round(width * image.height() / image.width()))
+            image = image.scaled(
+                width, height, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation
+            )
+        if kind != "thumbnail_orig":
+            image = _gaussian_blur(image)
 
     _save_cache_png(image, destination, path, original_stat, cancelled)
 
-    # 保留相同素材版本的其他尺寸與其模糊圖
+    # 保留相同素材版本的其他尺寸與背景
     try:
         for old_path in old_paths:
             match = CACHE_NAME.fullmatch(old_path.name)
@@ -599,7 +809,7 @@ def _save_cache_png(
 
 class ImageCacheClearThread(QThread):
     """
-    逐一刪除縮圖與模糊背景圖
+    逐一刪除縮圖與桌布背景圖
     """
 
     def __init__(self, thumbnail_dir: Path, background_dir: Path) -> None:
@@ -656,6 +866,8 @@ class ThumbnailThread(QThread):
     thumbnail_ready = Signal(str, int, QImage)
     blurred_thumbnail_ready = Signal(str, int, QImage)
     background_ready = Signal(str, QImage)
+    ray_thumbnail_ready = Signal(str, int, QSize, str, int, QImage)
+    ray_background_ready = Signal(str, QSize, str, int, QImage)
 
 
     def __init__(
@@ -669,15 +881,16 @@ class ThumbnailThread(QThread):
         self.thumbnail_dir = thumbnail_dir
         self.background_dir = background_dir if background_dir is not None else thumbnail_dir.parent / "backgrounds"
 
-        self.queue: deque[tuple[Path, ImageKind, int | None]] = deque()
-        self.pending: set[tuple[Path, ImageKind, int | None]] = set()
+        self.queue: deque[ThumbnailRequest] = deque()
+        self.pending: set[ThumbnailRequest] = set()
         self.pending_lock = threading.Condition()
         self.stopping = False
 
 
     def request(
         self, path: Path, kind: ImageKind, *other_kinds: ImageKind, preview_size: int | None = None,
-        priority: bool = False
+        screen_size: tuple[int, int] | None = None, ray_mode: RayMode = DEFAULT_RAY_MODE,
+        ray_decay: int = DEFAULT_RAY_DECAY, priority: bool = False
     ) -> None:
         """
         按傳入順序排程, 每個種類各自產生和回傳
@@ -692,7 +905,11 @@ class ThumbnailThread(QThread):
 
             for image_kind in reversed(kinds) if priority else kinds:
 
-                request = (path, image_kind, preview_size)
+                is_ray = image_kind in ("background_ray", "thumbnail_ray")
+                size = screen_size if is_ray else None
+                mode = ray_mode if is_ray else DEFAULT_RAY_MODE
+                decay = ray_decay if is_ray else DEFAULT_RAY_DECAY
+                request = (path, image_kind, preview_size, size, mode, decay)
                 if request in self.pending:
 
                     if not priority:
@@ -737,13 +954,14 @@ class ThumbnailThread(QThread):
 
                 request = self.queue.popleft()
 
-            path, kind, preview_size = request
+            path, kind, preview_size, screen_size, ray_mode, ray_decay = request
 
             try:
 
                 image_path = ensure_thumbnail(
                     path, self.isInterruptionRequested, kind=kind, media_dir=self.media_dir,
-                    thumbnail_dir=self.thumbnail_dir, background_dir=self.background_dir, preview_size=preview_size
+                    thumbnail_dir=self.thumbnail_dir, background_dir=self.background_dir, preview_size=preview_size,
+                    screen_size=screen_size, ray_mode=ray_mode, ray_decay=ray_decay
                 )
                 image = QImage(str(image_path))
                 if image.isNull():
@@ -761,7 +979,14 @@ class ThumbnailThread(QThread):
                     self.pending.discard(request)
 
             if not self.isInterruptionRequested():
-                if kind == "background_blur":
+
+                if kind == "background_ray" and screen_size is not None:
+                    self.ray_background_ready.emit(str(path), QSize(*screen_size), ray_mode, ray_decay, image)
+                elif kind == "thumbnail_ray" and preview_size is not None and screen_size is not None:
+                    self.ray_thumbnail_ready.emit(
+                        str(path), preview_size, QSize(*screen_size), ray_mode, ray_decay, image
+                    )
+                elif kind == "background_blur":
                     self.background_ready.emit(str(path), image)
                 elif preview_size is not None:
                     if kind == "thumbnail_blur":
