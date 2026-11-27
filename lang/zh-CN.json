@@ -17,6 +17,8 @@
   "background_color": "留白颜色",
   "background_color_auto": "自动取色",
   "background_blur": "模糊背景",
+  "background_ray1": "光晕1",
+  "background_ray2": "光晕2",
   "color_black": "墨汁",
   "color_PMS419_moonless_night": "无月夜",
   "color_PMS425_sesame": "芝麻",

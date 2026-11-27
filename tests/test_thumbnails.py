@@ -17,7 +17,7 @@ import threading
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import QObject, QRect, Qt, Signal
+from PySide6.QtCore import QObject, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QImage, QPainter
 
 
@@ -28,7 +28,7 @@ if __name__ == "__main__":
 
 from app_loader import QtTestCase
 import media_preview
-from thumbnails import ImageKind, ThumbnailThread, ensure_thumbnail
+from thumbnails import DEFAULT_RAY_DECAY, ImageKind, ThumbnailThread, ensure_thumbnail
 
 
 VLC_DIR = ROOT / "VLC-lite"
@@ -299,6 +299,7 @@ class ThumbnailWorker(QObject):
 
     thumbnail_ready = Signal(str, int, QImage)
     blurred_thumbnail_ready = Signal(str, int, QImage)
+    ray_thumbnail_ready = Signal(str, int, QSize, str, int, QImage)
 
     def __init__(self) -> None:
         super().__init__()
@@ -451,6 +452,45 @@ class MediaPreviewTests(QtTestCase):
         self.menu.hide()
         self.app.processEvents()
         self.assertIsNone(self.menu.blurred_thumbnail)
+
+
+    def test_ray_preview_ignores_delayed_modes_and_resolutions(self) -> None:
+        """
+        滑鼠停在同一張圖時, 只顯示目前光暈模式與目標螢幕的合成預覽
+        """
+
+        path = Path(self.action.data()).with_name("sample.PNG")
+        self.action.setData(str(path))
+        screen = mock.Mock()
+        screen.geometry.return_value = QRect(0, 0, 200, 400)
+        self.enterContext(mock.patch.object(media_preview, "screen_pixel_size", return_value=QSize(300, 600)))
+        self.menu.target_screen = screen
+        self.menu.display_config = {
+            "scalingMode": {path.name: {"portrait": "fit"}},
+            "backgroundColor": {path.name: "ray1"}
+        }
+        self.enterContext(mock.patch.object(self.menu, "actionAt", return_value=self.action))
+        self.menu.show()
+        self.menu.preview_action = self.action
+        self.menu.show_preview()
+        self.worker.request.assert_called_with(
+            path, "thumbnail_ray", preview_size=3, screen_size=(300, 600), ray_mode="ray1", priority=True
+        )
+
+        image = QImage(150, 300, QImage.Format.Format_RGB32)
+        image.fill(Qt.GlobalColor.blue)
+        self.menu.display_config["backgroundColor"][path.name] = "ray2"
+        emit = self.worker.ray_thumbnail_ready.emit
+        emit(str(path), 3, QSize(300, 600), "ray1", DEFAULT_RAY_DECAY, image)
+        emit(str(path), 3, QSize(200, 400), "ray2", DEFAULT_RAY_DECAY, image)
+        self.assertIsNone(self.menu.ray_thumbnail)
+
+        emit(str(path), 3, QSize(300, 600), "ray2", DEFAULT_RAY_DECAY, image)
+        self.queue_thumbnail(3, Qt.GlobalColor.red)
+        self.app.processEvents()
+        result = self.menu.preview.pixmap().toImage()
+        self.assertEqual(result.pixelColor(5, 5), QColor("blue"))
+        self.assertEqual(result.pixelColor(result.width() // 2, result.height() // 2), QColor("blue"))
 
 
 @unittest.skipUnless(

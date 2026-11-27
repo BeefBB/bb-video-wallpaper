@@ -9,12 +9,12 @@ import time
 import subprocess
 import logging
 from logging.handlers import RotatingFileHandler
-from typing import cast
+from typing import Literal, cast
 
 from win32con import WM_DESTROY
 
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog, QMessageBox
-from PySide6.QtCore import QByteArray, Qt, QTimer, QThread, Signal
+from PySide6.QtCore import QByteArray, QSize, Qt, QTimer, QThread, Signal
 from PySide6.QtGui import QAction, QActionGroup, QIcon, QFont, QImage, QImageReader, QScreen, QCursor
 
 import bb_image_display
@@ -25,12 +25,15 @@ from media_preview import MediaPreviewMenu
 from playback import AutoPauseReason, PlaybackState, update_auto_pause
 from screen_follow import AutoPauseHandler, FollowController
 from thumbnails import (
+    DEFAULT_RAY_DECAY,
     SUPPORTED_VIDEO_EXTENSIONS,
     SUPPORTED_IMAGE_EXTENSIONS,
     SUPPORTED_MEDIA_EXTENSIONS,
     ImageCacheClearThread,
+    RayMode,
     ThumbnailThread,
     cleanup_orphaned_thumbnails,
+    get_ray_mode,
 )
 from windows_integration import (
     check_desktop_ready,
@@ -44,6 +47,7 @@ from windows_integration import (
     register_power_notification,
     register_taskbar_created_notification,
     run_as_admin,
+    screen_pixel_size,
     set_windows_as_wallpaper,
     task_exists,
     unregister_power_notification,
@@ -51,6 +55,9 @@ from windows_integration import (
 
 
 logger = logging.getLogger(__name__)
+
+
+BackgroundImageKey = tuple[Literal["blur"], None] | tuple[RayMode, QSize]
 
 
 # 由啟動流程設定的路徑
@@ -398,7 +405,8 @@ class Wallpaper(QWidget):
 
         # 正在退出
         self.is_exiting = False
-        self.has_blurred_background = False
+        # 目前套用的背景圖片識別鍵
+        self.background_image_key: BackgroundImageKey | None = None
         # 監聽螢幕亮滅的事件
         self.power_notify = None
         # 不掛在桌布視窗或 Explorer 之下的獨立頂層 HWND
@@ -842,8 +850,8 @@ class Wallpaper(QWidget):
             self.instance_image.close()
 
         self.current_media = path
-        if self.has_blurred_background:
-            self.set_blurred_background(None)
+        if self.background_image_key is not None:
+            self.set_background_image(None)
         self.apply_scaling()
         logger.info("設定播放的媒體檔案 - %s", path)
 
@@ -873,20 +881,40 @@ class Wallpaper(QWidget):
 
         media_path = self.current_media.relative_to(MEDIA_DIR).as_posix()
         self.scaling_mode = get_scaling_mode(config, media_path, self.get_orientation())
-        color = config.get("backgroundColor", {}).get(media_path, "#000000")
-        if self.has_blurred_background and (self.scaling_mode != "fit" or color != "blur"):
-            self.set_blurred_background(None)
-        if color == "blur":
-            color = "#000000"
+        background = config.get("backgroundColor", {}).get(media_path, "#000000")
+        if (
+            self.background_image_key is not None and
+            self.background_image_key != self.get_background_image_key(background)
+        ):
+            self.set_background_image(None)
+        color = "#000000" if background in ("blur", "ray1", "ray2") else background
         self.instance_image.set_scaling(self.scaling_mode, color)
         self.instance_video.set_scaling(self.scaling_mode, color)
 
 
-    def set_blurred_background(self, image: QImage | None) -> None:
+    def get_background_image_key(self, background: str | None) -> BackgroundImageKey | None:
+        """
+        取得桌布應套用的背景圖片識別鍵, 無須背景圖片時回傳 None
+        """
+
+        if self.scaling_mode != "fit" or self.current_media is None:
+            return None
+
+        if background == "blur":
+            return "blur", None
+
+        ray_mode = get_ray_mode(self.current_media, background)
+        if ray_mode is not None:
+            return ray_mode, screen_pixel_size(self.target_screen)
+
+        return None
+
+
+    def set_background_image(self, image: QImage | None, key: BackgroundImageKey | None = None) -> None:
 
         self.instance_image.set_background_image(image)
-        self.instance_video.set_background_image(image)
-        self.has_blurred_background = image is not None
+        self.instance_video.set_background_image(image if key == ("blur", None) else None)
+        self.background_image_key = key
 
 
     def select_media(self, path: Path) -> None:
@@ -1005,8 +1033,8 @@ class Wallpaper(QWidget):
             ("解除影片訊號", "instance_video", lambda: self.instance_video.playback_started.disconnect(self.playback_started)),
         ]
 
-        if self.has_blurred_background:
-            steps.append(("清除模糊背景", None, lambda: self.set_blurred_background(None)))
+        if self.background_image_key is not None:
+            steps.append(("清除背景圖片", None, lambda: self.set_background_image(None)))
         if desktop_events is not None:
             steps.extend([
                 ("解除桌面通知訊號", None, lambda: desktop_events.taskbar_created.disconnect(self.on_taskbar_created)),
@@ -1070,7 +1098,8 @@ class Tray:
         # 處理縮圖生成的背景執行緒
         self.thumbnail_thread = ThumbnailThread(MEDIA_DIR, THUMBNAIL_DIR)
         self.thumbnail_thread.thumbnail_ready.connect(self.apply_background_color, Qt.ConnectionType.QueuedConnection)
-        self.thumbnail_thread.background_ready.connect(self.apply_blurred_background, Qt.ConnectionType.QueuedConnection)
+        self.thumbnail_thread.background_ready.connect(self.apply_background_image, Qt.ConnectionType.QueuedConnection)
+        self.thumbnail_thread.ray_background_ready.connect(self.apply_ray_background, Qt.ConnectionType.QueuedConnection)
 
         # 清除圖片快取的背景執行緒
         self.image_cache_clear_thread = ImageCacheClearThread(THUMBNAIL_DIR, THUMBNAIL_DIR.parent / "backgrounds")
@@ -1624,10 +1653,13 @@ class Tray:
 
         color_menu = menu.addMenu(tr("background_color"))
         color_group = QActionGroup(color_menu)
+        is_image = wallpaper.is_image()
+        ray_options = {"ray1": "background_ray1", "ray2": "background_ray2"} if is_image else {}
 
-        colors = {
+        background_options = {
             None: "background_color_auto",
             "blur": "background_blur",
+            **ray_options,
             "#000000": "color_black",
             "#212322": "color_PMS419_moonless_night",
             "#54575a": "color_PMS425_sesame",
@@ -1653,19 +1685,22 @@ class Tray:
         }
 
         media_path = wallpaper.current_media.relative_to(MEDIA_DIR).as_posix()
-        color = config_store.load().get("backgroundColor", {}).get(media_path)
-        selected_color = color if color in colors else None
+        background = config_store.load().get("backgroundColor", {}).get(media_path)
+        selected_background = background if background in background_options else None
+        separator_after = "ray2" if is_image else "blur"
 
-        for color, label in colors.items():
+        for background, label in background_options.items():
+
             action = color_menu.addAction(tr(label))
             action.setCheckable(True)
-            action.setChecked(color == selected_color)
+            action.setChecked(background == selected_background)
             color_group.addAction(action)
 
             action.triggered.connect(
-                lambda checked=False, value=color: self.set_background_color(screen_id, value)
+                lambda checked=False, value=background: self.set_background_color(screen_id, value)
             )
-            if color == "blur":
+
+            if background == separator_after:
                 color_menu.addSeparator()
 
 
@@ -1731,16 +1766,16 @@ class Tray:
 
 
         for target in self.wallpapers.values():
-            if target.current_media == path and (color is not None or target.has_blurred_background):
+            if target.current_media == path and (color is not None or target.background_image_key is not None):
                 target.apply_scaling(config)
 
-        if color in (None, "blur"):
+        if color in (None, "blur", "ray1", "ray2"):
             self.request_backgrounds()
 
 
     def request_backgrounds(self) -> None:
         """
-        依完整顯示桌布的設定請求自動取色縮圖或原尺寸模糊背景
+        依完整顯示桌布的設定請求自動取色縮圖或背景圖片
         """
 
         if self.is_exiting:
@@ -1758,26 +1793,48 @@ class Tray:
             background = colors.get(path.relative_to(MEDIA_DIR).as_posix())
             if background is None:
                 self.thumbnail_thread.request(path, "thumbnail_orig", preview_size=3)
-            elif background == "blur" and not wallpaper.has_blurred_background:
+                continue
+
+            key = wallpaper.get_background_image_key(background)
+            if key is None or key == wallpaper.background_image_key:
+                continue
+            if key[0] == "blur":
                 self.thumbnail_thread.request(path, "background_blur")
+            else:
+                ray_mode, screen_size = key
+                self.thumbnail_thread.request(
+                    path, "background_ray", screen_size=screen_size.toTuple(), ray_mode=ray_mode
+                )
 
 
-    def apply_blurred_background(self, media_path: str, image: QImage) -> None:
+    def apply_ray_background(
+        self, media_path: str, screen_size: QSize, ray_mode: RayMode, decay: int, image: QImage
+    ) -> None:
+
+        if decay == DEFAULT_RAY_DECAY and image.size() == screen_size:
+            self.apply_background_image(media_path, image, (ray_mode, screen_size))
+
+
+    def apply_background_image(self, media_path: str, image: QImage, key: BackgroundImageKey = ("blur", None)) -> None:
         """
-        只更新仍以完整顯示播放同一素材且選用模糊背景的螢幕
+        只更新素材, 背景模式與尺寸仍相符的螢幕
         """
 
         if self.is_exiting or image.isNull():
             return
 
         path = Path(media_path)
-        key = path.relative_to(MEDIA_DIR).as_posix()
-        if config_store.load().get("backgroundColor", {}).get(key) != "blur":
+        media_key = path.relative_to(MEDIA_DIR).as_posix()
+        background = config_store.load().get("backgroundColor", {}).get(media_key)
+        if background != key[0]:
             return
 
         for wallpaper in self.wallpapers.values():
-            if not wallpaper.is_exiting and wallpaper.current_media == path and wallpaper.scaling_mode == "fit":
-                wallpaper.set_blurred_background(image)
+            if (
+                not wallpaper.is_exiting and wallpaper.current_media == path and
+                wallpaper.get_background_image_key(background) == key
+            ):
+                wallpaper.set_background_image(image, key)
 
 
     def apply_background_color(self, media_path: str, preview_size: int, image: QImage) -> None:

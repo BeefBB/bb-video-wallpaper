@@ -454,14 +454,14 @@ class ConfigStore:
                     if modes:
                         normalized_entries[normalized] = modes
 
-                elif value == "blur":
+                elif value in ("blur", "ray1", "ray2"):
                     normalized_entries[normalized] = value
 
                 elif isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value):
                     normalized_entries[normalized] = value.lower()
 
                 else:
-                    report("設定欄位 backgroundColor.%s 必須是六位色碼或 blur, 已移除", media_path)
+                    report("設定欄位 backgroundColor.%s 必須是六位色碼, blur, ray1 或 ray2, 已移除", media_path)
 
             config[key] = normalized_entries
 

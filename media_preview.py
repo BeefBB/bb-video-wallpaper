@@ -11,7 +11,8 @@ from PySide6.QtGui import QAction, QColor, QCursor, QImage, QPainter, QPixmap, Q
 
 from config import get_scaling_mode
 from display_painting import draw_cover_image, fit_image_rect
-from thumbnails import ThumbnailThread
+from thumbnails import DEFAULT_RAY_DECAY, ThumbnailThread, get_ray_mode
+from windows_integration import screen_pixel_size
 
 
 class MediaPreviewMenu(QMenu):
@@ -54,6 +55,7 @@ class MediaPreviewMenu(QMenu):
         self.preview_mode = False
         self.preview_action: QAction | None = None
         self.blurred_thumbnail: QImage | None = None
+        self.ray_thumbnail: QImage | None = None
 
         self.thumbnail_thread: ThumbnailThread = (
             thumbnail_thread if thumbnail_thread is not None
@@ -61,6 +63,7 @@ class MediaPreviewMenu(QMenu):
         )
         self.thumbnail_thread.thumbnail_ready.connect(self.update_preview)
         self.thumbnail_thread.blurred_thumbnail_ready.connect(self.update_blurred_preview)
+        self.thumbnail_thread.ray_thumbnail_ready.connect(self.update_ray_preview)
 
         # 首次懸停達設定時間後顯示預覽
         self.preview_timer = QTimer(self)
@@ -179,6 +182,7 @@ class MediaPreviewMenu(QMenu):
         self.preview_animation.stop()
         self.preview_action = None
         self.blurred_thumbnail = None
+        self.ray_thumbnail = None
         self.preview_mode = False
         self.preview.hide()
 
@@ -207,13 +211,20 @@ class MediaPreviewMenu(QMenu):
 
         # 切換項目時先換成載入圖片, 不保留上一個項目的縮圖
         self.blurred_thumbnail = None
+        self.ray_thumbnail = None
         self.preview_pixmap = self.loading_pixmap
         self.display_preview()
 
         path = Path(action.data())
         screen = self.target_screen or QApplication.screenAt(cursor) or self.screen()
         mode, background = self._display_options(path, screen)
-        if mode == "fit" and background == "blur":
+        ray_mode = get_ray_mode(path, background)
+        if mode == "fit" and ray_mode is not None:
+            self.thumbnail_thread.request(
+                path, "thumbnail_ray", preview_size=self.preview_size,
+                screen_size=screen_pixel_size(screen).toTuple(), ray_mode=ray_mode, priority=True
+            )
+        elif mode == "fit" and background == "blur":
             self.thumbnail_thread.request(
                 path, "thumbnail_orig", "thumbnail_blur", preview_size=self.preview_size, priority=True
             )
@@ -251,6 +262,22 @@ class MediaPreviewMenu(QMenu):
         self.display_preview()
 
 
+    @Slot(str, int, QSize, str, int, QImage)
+    def update_ray_preview(
+        self, media_path: str, preview_size: int, screen_size: QSize, ray_mode: str, decay: int, image: QImage
+    ) -> None:
+
+        if decay != DEFAULT_RAY_DECAY or image.isNull() or not self._matches_preview(media_path, preview_size):
+            return
+
+        path = Path(media_path)
+        screen = self.target_screen or QApplication.screenAt(QCursor.pos()) or self.screen()
+        mode, background = self._display_options(path, screen)
+        if mode == "fit" and get_ray_mode(path, background) == ray_mode and screen_pixel_size(screen) == screen_size:
+            self.ray_thumbnail = image
+            self.display_preview()
+
+
     def display_preview(self) -> None:
 
         action = self.preview_action
@@ -279,7 +306,7 @@ class MediaPreviewMenu(QMenu):
 
         mode, background = "fill", None
 
-        if self.preview_pixmap.cacheKey() != self.loading_pixmap.cacheKey():
+        if self.ray_thumbnail is not None or self.preview_pixmap.cacheKey() != self.loading_pixmap.cacheKey():
 
             mode, background = self._display_options(Path(action.data()), target_screen)
             if mode == "fit" and background is None:
@@ -302,12 +329,16 @@ class MediaPreviewMenu(QMenu):
             destination = fit_image_rect(source.size(), bounds)
 
         pixmap = QPixmap(size)
-        pixmap.fill(QColor("#000000" if background is None or background == "blur" else background))
+        pixmap.fill(QColor("#000000" if background in (None, "blur", "ray1", "ray2") else background))
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        if mode == "fit" and background == "blur" and self.blurred_thumbnail is not None:
-            draw_cover_image(painter, bounds, self.blurred_thumbnail)
-        painter.drawPixmap(destination, self.preview_pixmap, source)
+        if mode == "fit" and background in ("ray1", "ray2") and self.ray_thumbnail is not None:
+            # 光暈縮圖已合成原圖, 直接繪製整張縮圖
+            painter.drawImage(bounds, self.ray_thumbnail, QRectF(self.ray_thumbnail.rect()))
+        else:
+            if mode == "fit" and background == "blur" and self.blurred_thumbnail is not None:
+                draw_cover_image(painter, bounds, self.blurred_thumbnail)
+            painter.drawPixmap(destination, self.preview_pixmap, source)
         painter.end()
 
         self.preview.setPixmap(pixmap)

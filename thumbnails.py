@@ -44,6 +44,14 @@ CACHE_NAME = re.compile(
 )
 
 
+def get_ray_mode(path: Path, background: str | None) -> RayMode | None:
+
+    if path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS and (background == "ray1" or background == "ray2"):
+        return background
+
+    return None
+
+
 def cleanup_orphaned_thumbnails(media_dir: Path, thumbnail_dir: Path) -> None:
     """
     清除失去媒體來源的縮圖與空的快取子目錄

@@ -57,7 +57,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 `config.json`  | 語言, 自動暫停選項, 各螢幕桌布, 跟隨關係, 共用最近使用紀錄, 素材與螢幕方向的縮放模式及素材共用背景色
 `video/`       | 媒體資料夾, 匯入檔案存放在其下的 `_imports/`
 `thumbnails/`  | 縮圖快取
-`backgrounds/` | 桌布使用完整顯示與模糊背景時, 依圖片或影片的第一個解碼畫面產生的模糊背景
+`backgrounds/` | 桌布使用完整顯示與模糊或光暈背景時產生的圖片
 `log/log.log`  | 日誌, 達到上限後輪替
 
 ## 日常開發

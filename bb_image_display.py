@@ -26,7 +26,7 @@ from PySide6.QtCore import QAbstractNativeEventFilter, QObject, QRectF, Qt, Slot
 from PySide6.QtGui import QColor, QImage, QImageReader, QPainter, QPaintEvent, QRasterWindow, QWindow
 from PySide6.QtWidgets import QApplication
 
-from display_painting import draw_cover_image
+from display_painting import draw_cover_image, fit_image_rect
 
 
 __all__ = ["Instance"]
@@ -197,8 +197,7 @@ class _ImageWindow(QRasterWindow):
         if self.scaling_mode == "fit":
             if self.background_image is not None:
                 draw_cover_image(painter, bounds, self.background_image)
-            target.setSize(source.size().scaled(bounds.size(), Qt.AspectRatioMode.KeepAspectRatio))
-            target.moveCenter(bounds.center())
+            target = fit_image_rect(source.size(), bounds)
 
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         painter.drawImage(target, self.image, source)

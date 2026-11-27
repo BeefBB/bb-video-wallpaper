@@ -88,7 +88,10 @@ def add_previews(
     )
 
     colors = ((key, False) for key in text if key.startswith("color_"))
-    add_preview("background_color", ("background_color_auto", True), ("background_blur", False), None, *colors)
+    add_preview(
+        "background_color", ("background_color_auto", True), ("background_blur", False),
+        ("background_ray1", False), ("background_ray2", False), None, *colors
+    )
 
     sizes = ("size_largest", "size_large", "size_normal", "size_small", "size_smallest")
     add_preview("font_size", *((key, key == "size_small") for key in sizes))

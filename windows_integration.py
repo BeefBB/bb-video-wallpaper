@@ -19,6 +19,8 @@ import winerror
 
 from comtypes import GUID as ComGUID, HRESULT, IUnknown, COMMETHOD
 from comtypes.client import CreateObject
+from PySide6.QtCore import QSize
+from PySide6.QtGui import QScreen
 
 
 logger = logging.getLogger(__name__)
@@ -53,6 +55,18 @@ def get_monitor_id(hwnd: int) -> str:
 
     # 遠端或虛擬顯示器可能沒有裝置介面, 改以 Windows 顯示裝置名稱區分
     return f"display:{display_name.casefold()}"
+
+
+def screen_pixel_size(screen: QScreen) -> QSize:
+    """
+    讀取螢幕像素尺寸
+    """
+
+    origin = screen.geometry().topLeft().toTuple()
+    monitor = win32api.MonitorFromPoint(origin, win32con.MONITOR_DEFAULTTONULL)
+    left, top, right, bottom = win32api.GetMonitorInfo(monitor)["Monitor"]
+
+    return QSize(right - left, bottom - top)
 
 
 # 單一實例

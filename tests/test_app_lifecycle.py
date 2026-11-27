@@ -11,7 +11,7 @@ import threading
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import QCoreApplication, QEvent, QObject, QRect, Qt, QTimer, Signal
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 from shiboken6 import isValid
@@ -514,18 +514,18 @@ class PlaybackStateTests(QtTestCase):
         image.fill(Qt.GlobalColor.blue)
 
         def deliver() -> None:
-            self.tray.apply_blurred_background(str(self.media_path), image)
+            self.tray.apply_background_image(str(self.media_path), image)
 
         QTimer.singleShot(0, deliver)
         self.wallpaper.set_play_media(directory / "new.mp4")
         self.app.processEvents()
-        self.assertFalse(self.wallpaper.has_blurred_background)
+        self.assertIsNone(self.wallpaper.background_image_key)
 
         self.wallpaper.set_play_media(self.media_path)
         QTimer.singleShot(0, deliver)
         self.tray.set_scaling(screen_id, "fill")
         self.app.processEvents()
-        self.assertFalse(self.wallpaper.has_blurred_background)
+        self.assertIsNone(self.wallpaper.background_image_key)
 
         self.tray.set_scaling(screen_id, "fit")
         deliver()
@@ -535,6 +535,62 @@ class PlaybackStateTests(QtTestCase):
         self.app.processEvents()
         self.assertIsNone(self.wallpaper.instance_video._background_image)
         self.assertEqual(self.wallpaper.instance_video._background_color.name(), "#123456")
+
+
+    def test_ray_background_ignores_delayed_modes_and_routes_by_screen_resolution(self) -> None:
+        """
+        兩台螢幕顯示同一張圖片時, 只接受目前選擇和解析度相符的光暈背景
+        """
+
+        directory = self.image_path.parent
+        store = self.namespace["ConfigStore"](directory / "config.json", directory, ROOT / "lang")
+        self.namespace["config_store"] = store
+        self.wallpaper.target_screen._geometry = QRect(0, 0, 320, 180)
+        second = self.add_following_wallpaper(HeadlessScreen(QRect(320, 0, 160, 240)))
+        screen_sizes = {self.wallpaper.target_screen: QSize(320, 180), second.target_screen: QSize(240, 360)}
+        self.namespace["screen_pixel_size"] = screen_sizes.__getitem__
+
+        for wallpaper in (self.wallpaper, second):
+            wallpaper.set_play_media(self.image_path)
+        screen_id = self.wallpaper.screen_id
+        self.tray.set_scaling(screen_id, "fit")
+        self.tray.thumbnail_thread.request.reset_mock()
+        self.tray.set_background_color(screen_id, "ray1")
+        self.assertEqual(self.tray.thumbnail_thread.request.call_args_list, [
+            mock.call(self.image_path, "background_ray", screen_size=(320, 180), ray_mode="ray1"),
+            mock.call(self.image_path, "background_ray", screen_size=(240, 360), ray_mode="ray1"),
+        ])
+
+        landscape = QImage(320, 180, QImage.Format.Format_RGB32)
+        portrait = QImage(240, 360, QImage.Format.Format_RGB32)
+        decay = self.namespace["DEFAULT_RAY_DECAY"]
+        path = str(self.image_path)
+        QTimer.singleShot(0, lambda: self.tray.apply_ray_background(path, landscape.size(), "ray1", decay, landscape))
+        self.tray.set_background_color(screen_id, "ray2")
+        self.app.processEvents()
+        self.assertIsNone(self.wallpaper.background_image_key)
+        self.assertIsNone(second.background_image_key)
+
+        self.tray.apply_ray_background(path, portrait.size(), "ray2", decay, portrait)
+        self.assertIsNone(self.wallpaper.background_image_key)
+        self.assertEqual(second.background_image_key, ("ray2", portrait.size()))
+        second.instance_image.set_background_image.assert_called_with(portrait)
+        self.assertIsNone(second.instance_video._background_image)
+
+        self.tray.apply_ray_background(path, landscape.size(), "ray2", decay, landscape)
+        self.assertEqual(self.wallpaper.background_image_key, ("ray2", landscape.size()))
+        self.wallpaper.instance_image.set_background_image.assert_called_with(landscape)
+
+        second.target_screen._geometry = QRect(320, 0, 200, 300)
+        screen_sizes[second.target_screen] = QSize(300, 450)
+        second.apply_scaling()
+        self.tray.thumbnail_thread.request.reset_mock()
+        self.tray.request_backgrounds()
+        self.tray.thumbnail_thread.request.assert_called_once_with(
+            self.image_path, "background_ray", screen_size=(300, 450), ray_mode="ray2"
+        )
+        self.tray.apply_ray_background(path, portrait.size(), "ray2", decay, portrait)
+        self.assertIsNone(second.background_image_key)
 
 
     def start_playing(self) -> None:
@@ -547,7 +603,7 @@ class PlaybackStateTests(QtTestCase):
         self.app.processEvents()
 
 
-    def add_following_wallpaper(self):
+    def add_following_wallpaper(self, screen: HeadlessScreen | None = None):
         """
         登記第二台螢幕的桌布與跟隨事件, 並安排資源清理
         """
@@ -557,7 +613,7 @@ class PlaybackStateTests(QtTestCase):
         self.vlc.Instance.return_value = instance
         self.namespace["bb_image_display"].Instance.return_value = mock.Mock(wraps=ImageDisplay())
         self.namespace["get_monitor_id"].return_value = "screen-b"
-        wallpaper = self.namespace["Wallpaper"](target_screen=HeadlessScreen(QRect(0, 0, 1920, 1080)))
+        wallpaper = self.namespace["Wallpaper"](target_screen=screen or HeadlessScreen(QRect(0, 0, 1920, 1080)))
         self.addCleanup(lambda: wallpaper.deleteLater() if isValid(wallpaper) else None)
         self.addCleanup(wallpaper.shutdown)
         wallpaper.check_auto_pause_timer.stop()

@@ -17,6 +17,8 @@
   "background_color": "여백 색상",
   "background_color_auto": "자동",
   "background_blur": "배경 흐림",
+  "background_ray1": "빛 번짐 1",
+  "background_ray2": "빛 번짐 2",
   "color_black": "먹물",
   "color_PMS419_moonless_night": "달 없는 밤",
   "color_PMS425_sesame": "참깨",
