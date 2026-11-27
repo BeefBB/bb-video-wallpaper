@@ -213,10 +213,12 @@ class MediaPreviewMenu(QMenu):
         path = Path(action.data())
         screen = self.target_screen or QApplication.screenAt(cursor) or self.screen()
         mode, background = self._display_options(path, screen)
-        self.thumbnail_thread.request(
-            path, preview_size=self.preview_size, priority=True,
-            include_blur=(mode == "fit" and background == "blur")
-        )
+        if mode == "fit" and background == "blur":
+            self.thumbnail_thread.request(
+                path, "thumbnail_orig", "thumbnail_blur", preview_size=self.preview_size, priority=True
+            )
+        else:
+            self.thumbnail_thread.request(path, "thumbnail_orig", preview_size=self.preview_size, priority=True)
 
 
     def _matches_preview(self, media_path: str, preview_size: int) -> bool:

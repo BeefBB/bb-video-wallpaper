@@ -28,7 +28,7 @@ if __name__ == "__main__":
 
 from app_loader import QtTestCase
 import media_preview
-from thumbnails import ThumbnailThread, create_video_thumbnail
+from thumbnails import ImageKind, ThumbnailThread, ensure_thumbnail
 
 
 VLC_DIR = ROOT / "VLC-lite"
@@ -122,8 +122,14 @@ def thumbnail_probe(path: str, mode: str, connection) -> None:
 
         try:
 
-            with patch:
-                image = create_video_thumbnail(Path(path), cancelled.is_set)
+            source = Path(path)
+            with patch, tempfile.TemporaryDirectory(dir=source.parent) as directory:
+                cache_dir = Path(directory)
+                thumbnail = ensure_thumbnail(
+                    source, cancelled.is_set, kind="thumbnail_orig", media_dir=source.parent,
+                    thumbnail_dir=cache_dir / "thumbnails", background_dir=cache_dir / "backgrounds", preview_size=3
+                )
+                image = QImage(str(thumbnail))
 
             color = image.pixelColor(image.width() // 2, image.height() // 2)
             connection.send({
@@ -141,6 +147,63 @@ def thumbnail_probe(path: str, mode: str, connection) -> None:
         finally:
             connection.close()
 
+
+
+class ThumbnailCacheTests(QtTestCase):
+
+    def test_missing_results_read_the_video_and_cache_only_the_result(self) -> None:
+        """
+        驗證缺少的成品各自從影片取圖, 命中成品快取時略過取圖
+        """
+
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        media_dir = directory / "media"
+        path = media_dir / "subdirectory" / "clip.mp4"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"video")
+        thumbnail_dir = directory / "thumbnails"
+        background_dir = directory / "backgrounds"
+        cancelled = threading.Event().is_set
+        frame = QImage(800, 400, QImage.Format.Format_RGB32)
+        frame.fill(Qt.GlobalColor.blue)
+        decode = self.enterContext(mock.patch("thumbnails._read_video_frame", return_value=frame))
+        blur_sizes = []
+
+        def request_thumbnail(kind: ImageKind, *, preview_size: int | None = None) -> Path:
+            """
+            用同一份素材與快取目錄請求指定成品
+            """
+
+            return ensure_thumbnail(
+                path, cancelled, kind=kind, media_dir=media_dir, thumbnail_dir=thumbnail_dir,
+                background_dir=background_dir, preview_size=preview_size
+            )
+
+        def blur(image: QImage) -> QImage:
+            """
+            記錄送進模糊處理的尺寸
+            """
+
+            blur_sizes.append(image.size().toTuple())
+            return image
+
+        self.enterContext(mock.patch("thumbnails._gaussian_blur", side_effect=blur))
+
+        blurred = request_thumbnail("thumbnail_blur", preview_size=3)
+        self.assertEqual(list(thumbnail_dir.rglob("*.png")), [blurred])
+
+        clear = request_thumbnail("thumbnail_orig", preview_size=5)
+        background = request_thumbnail("background_blur")
+        self.assertEqual(decode.call_args_list, [mock.call(path.resolve(), cancelled)] * 3)
+        self.assertEqual(blur_sizes, [(300, 150), (800, 400)])
+        self.assertEqual(QImage(str(clear)).size().toTuple(), (500, 250))
+        self.assertEqual(QImage(str(background)).size().toTuple(), (800, 400))
+        self.assertEqual(set(directory.rglob("*.png")), {blurred, clear, background})
+
+        decode.reset_mock()
+        cached_blur = request_thumbnail("thumbnail_blur", preview_size=3)
+        self.assertEqual(cached_blur, blurred)
+        decode.assert_not_called()
 
 
 class ThumbnailThreadTests(QtTestCase):
@@ -165,10 +228,17 @@ class ThumbnailThreadTests(QtTestCase):
         started = threading.Event()
         release = threading.Event()
         completed = threading.Event()
-        processed: list[tuple[Path, int]] = []
+        clear_ready = threading.Event()
+        blur_ready = threading.Event()
+        processed: list[tuple[Path, str, int]] = []
+        clear_ready_before_blur = []
 
         def blocked_thumbnail(path, cancelled, **kwargs):
-            processed.append((path, kwargs["preview_size"]))
+            kind = kwargs["kind"]
+            processed.append((path, kind, kwargs["preview_size"]))
+
+            if path == queued and kind == "thumbnail_blur":
+                clear_ready_before_blur.append(clear_ready.is_set())
 
             if path == first:
 
@@ -188,24 +258,36 @@ class ThumbnailThreadTests(QtTestCase):
             lambda path, size, image: completed.set() if Path(path) == last else None,
             Qt.ConnectionType.DirectConnection
         )
-        worker.request(first)
+        worker.thumbnail_ready.connect(
+            lambda path, size, image: clear_ready.set() if Path(path) == queued else None,
+            Qt.ConnectionType.DirectConnection
+        )
+        worker.blurred_thumbnail_ready.connect(
+            lambda path, size, image: blur_ready.set() if Path(path) == queued else None,
+            Qt.ConnectionType.DirectConnection
+        )
+        worker.request(first, "thumbnail_orig", preview_size=3)
         self.assertTrue(started.wait(5), "首項縮圖工作未開始")
-        worker.request(ordinary)
-        worker.request(queued)
-        worker.request(last)
-        worker.request(first)
-        worker.request(first, priority=True)
-        worker.request(first, preview_size=4, priority=True)
-        worker.request(first, preview_size=4)
-        worker.request(queued, priority=True)
-        worker.request(newest, priority=True)
-        worker.request(queued, priority=True)
-        worker.request(ordinary)
+        worker.request(ordinary, "thumbnail_orig", preview_size=3)
+        worker.request(queued, "thumbnail_blur", preview_size=3)
+        worker.request(last, "thumbnail_orig", preview_size=3)
+        worker.request(first, "thumbnail_orig", preview_size=3)
+        worker.request(first, "thumbnail_orig", preview_size=3, priority=True)
+        worker.request(first, "thumbnail_orig", preview_size=4, priority=True)
+        worker.request(first, "thumbnail_orig", preview_size=4)
+        worker.request(queued, "thumbnail_orig", preview_size=3, priority=True)
+        worker.request(newest, "thumbnail_orig", preview_size=3, priority=True)
+        worker.request(queued, "thumbnail_orig", "thumbnail_blur", preview_size=3, priority=True)
+        worker.request(ordinary, "thumbnail_orig", preview_size=3)
         release.set()
         self.assertTrue(completed.wait(5), "縮圖佇列未處理完成")
         worker.stop()
+        self.assertTrue(blur_ready.is_set())
+        self.assertEqual(clear_ready_before_blur, [True])
         self.assertEqual(processed, [
-            (first, 3), (queued, 3), (newest, 3), (first, 4), (ordinary, 3), (last, 3)
+            (first, "thumbnail_orig", 3), (queued, "thumbnail_orig", 3), (queued, "thumbnail_blur", 3),
+            (newest, "thumbnail_orig", 3), (first, "thumbnail_orig", 4), (ordinary, "thumbnail_orig", 3),
+            (last, "thumbnail_orig", 3)
         ])
 
 
@@ -338,7 +420,7 @@ class MediaPreviewTests(QtTestCase):
         self.menu.show()
         self.menu.preview_action = self.action
         self.menu.show_preview()
-        self.worker.request.assert_called_with(path, preview_size=3, priority=True, include_blur=True)
+        self.worker.request.assert_called_with(path, "thumbnail_orig", "thumbnail_blur", preview_size=3, priority=True)
 
         self.queue_thumbnail(3, Qt.GlobalColor.red)
         self.app.processEvents()
@@ -359,12 +441,12 @@ class MediaPreviewTests(QtTestCase):
         self.menu.show_preview()
         self.app.processEvents()
         self.assertIsNone(self.menu.blurred_thumbnail)
-        self.worker.request.assert_called_with(Path(other.data()), preview_size=3, priority=True, include_blur=False)
+        self.worker.request.assert_called_with(Path(other.data()), "thumbnail_orig", preview_size=3, priority=True)
 
         screen.geometry.return_value = QRect(0, 0, 400, 200)
         self.menu.preview_action = self.action
         self.menu.show_preview()
-        self.worker.request.assert_called_with(path, preview_size=3, priority=True, include_blur=False)
+        self.worker.request.assert_called_with(path, "thumbnail_orig", preview_size=3, priority=True)
         self.queue_thumbnail(3, Qt.GlobalColor.yellow, blurred=True)
         self.menu.hide()
         self.app.processEvents()

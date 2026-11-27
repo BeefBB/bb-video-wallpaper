@@ -16,6 +16,7 @@ import re
 import tempfile
 import threading
 import time
+from typing import Literal
 from uuid import UUID
 
 from PySide6.QtCore import Qt, QThread, Signal
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".mov", ".avi",}
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp",}
 SUPPORTED_MEDIA_EXTENSIONS = (SUPPORTED_VIDEO_EXTENSIONS | SUPPORTED_IMAGE_EXTENSIONS)
+ImageKind = Literal["thumbnail_orig", "thumbnail_blur", "background_blur"]
 CACHE_NAME = re.compile(
     r"(?P<source>[0-9a-f]{16})-(?P<digest>[0-9a-f]{8})(?:-[1-5](?:-blur)?|-blur)\.png"
 )
@@ -120,11 +122,9 @@ def fast_hash(path: Path) -> str:
     return digest.hexdigest()[:8]
 
 
-def get_video_thumbnail_sizes(
-    media, cancelled: Callable[[], bool], thumbnail_width: int | None = 300
-) -> dict[int, tuple[int, int]]:
+def _get_video_frame_sizes(media, cancelled: Callable[[], bool]) -> dict[int, tuple[int, int]]:
     """
-    依影像軌 ID 記錄縮圖大小, 使用可見尺寸, 像素比例與方向
+    依影像軌 ID 記錄原尺寸畫面大小, 使用可見尺寸, 像素比例與方向
     """
 
     if cancelled():
@@ -196,10 +196,7 @@ def get_video_thumbnail_sizes(
             ):
                 width, height = height, width
 
-            if thumbnail_width is None:
-                sizes[track.id] = (max(1, round(width)), max(1, round(height)))
-            else:
-                sizes[track.id] = (thumbnail_width, max(1, round(thumbnail_width * height / width)))
+            sizes[track.id] = (max(1, round(width)), max(1, round(height)))
 
     finally:
         vlc.libvlc_media_tracks_release(track_array, count)
@@ -210,9 +207,7 @@ def get_video_thumbnail_sizes(
     return sizes
 
 
-def create_video_thumbnail(
-    path: Path, cancelled: Callable[[], bool], thumbnail_width: int | None = 300
-) -> QImage:
+def _read_video_frame(path: Path, cancelled: Callable[[], bool]) -> QImage:
     """
     使用獨立的靜音 VLC 播放器, 將第一個解碼畫面複製到記憶體, 不建立視窗
     """
@@ -222,7 +217,7 @@ def create_video_thumbnail(
 
     ready = threading.Event()
     frame = {}
-    thumbnail_size = None
+    frame_size = None
     uint_pointer = ctypes.POINTER(ctypes.c_uint)
 
 
@@ -242,25 +237,23 @@ def create_video_thumbnail(
 
             # AV1 可能在選定影像軌前就要求緩衝區
             # 回呼內不呼叫 VLC 播放器 API, 避免停止播放時卡住
-            if thumbnail_size is not None:
-                scaled_width, scaled_height = thumbnail_size
+            if frame_size is not None:
+                frame_width, frame_height = frame_size
 
             else:
 
                 if not width[0] or not height[0]:
                     raise RuntimeError("影片沒有可用的緩衝區尺寸")
 
-                scaled_width = width[0] if thumbnail_width is None else thumbnail_width
-                scaled_height = max(1, round(scaled_width * height[0] / width[0]))
+                frame_width, frame_height = width[0], height[0]
 
-            pitch = (scaled_width * 4 + 31) & ~31
-            padded_height = (scaled_height + 31) & ~31
-            if thumbnail_width is None:
-                allocation_limit = QImageReader.allocationLimit()
-                if allocation_limit > 0 and pitch * padded_height > allocation_limit * 1024 * 1024:
-                    raise MemoryError("影片畫面超出 Qt 圖片記憶體上限")
+            pitch = (frame_width * 4 + 31) & ~31
+            padded_height = (frame_height + 31) & ~31
+            allocation_limit = QImageReader.allocationLimit()
+            if allocation_limit > 0 and pitch * padded_height > allocation_limit * 1024 * 1024:
+                raise MemoryError("影片畫面超出 Qt 圖片記憶體上限")
 
-            width[0], height[0] = scaled_width, scaled_height
+            width[0], height[0] = frame_width, frame_height
             pitches[0], lines[0] = pitch, padded_height
             ctypes.memmove(chroma, b"RV32", 4)
 
@@ -268,8 +261,8 @@ def create_video_thumbnail(
             # VLC 要求像素平面對齊 32 bytes, 並保留 buffer 至播放器釋放後
             frame["buffer"] = ctypes.create_string_buffer(pitches[0] * lines[0] + 31)
             frame["address"] = (ctypes.addressof(frame["buffer"]) + 31) & ~31
-            frame["width"] = scaled_width
-            frame["height"] = scaled_height
+            frame["width"] = frame_width
+            frame["height"] = frame_height
             frame["pitch"] = pitches[0]
 
             return 1
@@ -333,10 +326,10 @@ def create_video_thumbnail(
             raise RuntimeError("無法建立縮圖播放器")
 
         media = instance.media_new(str(path))
-        thumbnail_sizes = get_video_thumbnail_sizes(media, cancelled, thumbnail_width)
+        frame_sizes = _get_video_frame_sizes(media, cancelled)
 
-        if len(thumbnail_sizes) == 1:
-            thumbnail_size = next(iter(thumbnail_sizes.values()))
+        if len(frame_sizes) == 1:
+            frame_size = next(iter(frame_sizes.values()))
 
         player.set_media(media)
         player.video_set_callbacks(lock, unlock, None, None)
@@ -355,8 +348,8 @@ def create_video_thumbnail(
             # 在縮圖工作執行緒查詢選軌, 不從 VLC 的原生回呼呼叫播放器 API
             track_id = player.video_get_track()
 
-            if track_id in thumbnail_sizes:
-                thumbnail_size = thumbnail_sizes[track_id]
+            if track_id in frame_sizes:
+                frame_size = frame_sizes[track_id]
 
             if ready.is_set():
 
@@ -365,7 +358,7 @@ def create_video_thumbnail(
                 if image is None or image.isNull():
                     raise RuntimeError("無法取得影片畫面")
 
-                if thumbnail_size is not None:
+                if frame_size is not None:
                     break
 
             if time.monotonic() >= deadline:
@@ -378,7 +371,7 @@ def create_video_thumbnail(
             ):
                 raise RuntimeError("影片沒有可用的畫面")
 
-            if thumbnail_size is None:
+            if frame_size is None:
                 time.sleep(0.05)
 
             else:
@@ -390,7 +383,7 @@ def create_video_thumbnail(
 
         # 選軌前的緩衝區可能使用暫定比例; 最後以實際影像軌的可見尺寸校正
         return image.scaled(
-            *thumbnail_size,
+            *frame_size,
             Qt.AspectRatioMode.IgnoreAspectRatio,
             Qt.TransformationMode.SmoothTransformation
         )
@@ -472,30 +465,28 @@ def ensure_thumbnail(
     path: Path,
     cancelled: Callable[[], bool],
     *,
+    kind: ImageKind,
     media_dir: Path,
     thumbnail_dir: Path,
-    preview_size: int = 3
+    background_dir: Path,
+    preview_size: int | None = None
 ) -> Path:
     """
-    驗證指定尺寸的縮圖或產生 PNG; 成功後才清除同來源舊版本的各尺寸縮圖
+    驗證指定成品的快取, 缺少時直接從素材取圖並產生
     """
 
-    return _ensure_media_image(path, cancelled, media_dir, thumbnail_dir, preview_size)
-
-
-def ensure_blurred_background(
-    path: Path, cancelled: Callable[[], bool], *, media_dir: Path, background_dir: Path
-) -> Path:
-    """
-    從原圖或影片第一個解碼畫面產生原尺寸的桌布模糊背景
-    """
-
-    return _ensure_media_image(path, cancelled, media_dir, background_dir, None)
-
-
-def _ensure_media_image(
-    path: Path, cancelled: Callable[[], bool], media_dir: Path, cache_dir: Path, preview_size: int | None
-) -> Path:
+    if kind == "background_blur":
+        if preview_size is not None:
+            raise ValueError("桌布模糊背景使用原尺寸")
+        cache_dir, variant = background_dir, "blur"
+    else:
+        if (
+            kind not in ("thumbnail_orig", "thumbnail_blur") or
+            type(preview_size) is not int or not 1 <= preview_size <= 5
+        ):
+            raise ValueError("縮圖種類或尺寸無效")
+        cache_dir = thumbnail_dir
+        variant = str(preview_size) if kind == "thumbnail_orig" else f"{preview_size}-blur"
 
     path = path.resolve(strict=True)
     relative_path = path.relative_to(media_dir.resolve())
@@ -511,9 +502,7 @@ def _ensure_media_image(
     digest = fast_hash(path)
     source_id = hashlib.sha256(path.name.encode("utf-8")).hexdigest()[:16]
     directory = cache_dir / relative_path.parent
-    variant = "blur" if preview_size is None else str(preview_size)
     destination = directory / f"{source_id}-{digest}-{variant}.png"
-    thumbnail_width = None if preview_size is None else preview_size * 100
 
     if cancelled():
         raise InterruptedError("縮圖工作已取消")
@@ -527,28 +516,22 @@ def _ensure_media_image(
 
         reader = QImageReader(str(path))
         reader.setAutoTransform(True)
-        size = reader.size()
-
-        if thumbnail_width is not None and size.isValid() and size.width() > 0:
-
-            size.setHeight(max(1, round(thumbnail_width * size.height() / size.width())))
-            size.setWidth(thumbnail_width)
-            reader.setScaledSize(size)
-
         image = reader.read()
 
     else:
-        image = create_video_thumbnail(path, cancelled, thumbnail_width)
+        image = _read_video_frame(path, cancelled)
 
     if image.isNull():
         raise RuntimeError("無法讀取縮圖來源")
     if cancelled():
         raise InterruptedError("縮圖工作已取消")
 
-    if thumbnail_width is None:
+    if preview_size is not None:
+        width = preview_size * 100
+        height = max(1, round(width * image.height() / image.width()))
+        image = image.scaled(width, height, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    if kind != "thumbnail_orig":
         image = _gaussian_blur(image)
-    else:
-        image = image.scaledToWidth(thumbnail_width, Qt.TransformationMode.SmoothTransformation)
 
     _save_cache_png(image, destination, path, original_stat, cancelled)
 
@@ -562,26 +545,8 @@ def _ensure_media_image(
                 old_path.unlink(missing_ok=True)
 
     except OSError:
-        logger.warning("清除舊縮圖失敗 - %s", path, exc_info=True)
+        logger.warning("清除舊快取圖片失敗 - %s", path, exc_info=True)
 
-    return destination
-
-
-def ensure_blurred_thumbnail(thumbnail_path: Path, cancelled: Callable[[], bool]) -> Path:
-    """
-    從已產生的清晰縮圖補同尺寸的 -blur.png, 兩張圖共用一次素材取圖
-    """
-
-    if cancelled():
-        raise InterruptedError("縮圖工作已取消")
-
-    destination = thumbnail_path.with_stem(thumbnail_path.stem + "-blur")
-    original_stat = thumbnail_path.stat()
-    if destination.is_file() and not QImage(str(destination)).isNull():
-        return destination
-
-    image = _gaussian_blur(QImage(str(thumbnail_path)))
-    _save_cache_png(image, destination, thumbnail_path, original_stat, cancelled)
     return destination
 
 
@@ -685,7 +650,7 @@ class ImageCacheClearThread(QThread):
 
 class ThumbnailThread(QThread):
     """
-    依序處理縮圖要求, 預覽項目可插隊, 同一路徑與尺寸不重複加入
+    依序處理縮圖要求, 預覽項目可插隊, 同一路徑, 種類與尺寸不重複加入
     """
 
     thumbnail_ready = Signal(str, int, QImage)
@@ -704,58 +669,52 @@ class ThumbnailThread(QThread):
         self.thumbnail_dir = thumbnail_dir
         self.background_dir = background_dir if background_dir is not None else thumbnail_dir.parent / "backgrounds"
 
-        self.queue: deque[tuple[Path, int | None, bool]] = deque()
-        self.pending: set[tuple[Path, int | None, bool]] = set()
+        self.queue: deque[tuple[Path, ImageKind, int | None]] = deque()
+        self.pending: set[tuple[Path, ImageKind, int | None]] = set()
         self.pending_lock = threading.Condition()
         self.stopping = False
 
 
     def request(
-        self, path: Path, *, preview_size: int = 3, priority: bool = False, include_blur: bool = False
+        self, path: Path, kind: ImageKind, *other_kinds: ImageKind, preview_size: int | None = None,
+        priority: bool = False
     ) -> None:
         """
-        產生指定尺寸的預覽縮圖, include_blur 會一併補齊同尺寸的模糊圖
+        按傳入順序排程, 每個種類各自產生和回傳
         """
 
-        self._enqueue((path, preview_size, include_blur), priority)
-
-
-    def request_background(self, path: Path, *, priority: bool = False) -> None:
-        """
-        排入原尺寸的桌布模糊背景, 完成後以 background_ready 回傳
-        """
-
-        self._enqueue((path, None, False), priority)
-
-
-    def _enqueue(self, request: tuple[Path, int | None, bool], priority: bool) -> None:
+        kinds = (kind, *other_kinds)
 
         with self.pending_lock:
 
             if self.stopping:
                 return
 
-            if request in self.pending:
+            for image_kind in reversed(kinds) if priority else kinds:
 
-                if not priority:
-                    return
+                request = (path, image_kind, preview_size)
+                if request in self.pending:
 
-                try:
-                    self.queue.remove(request)
+                    if not priority:
+                        continue
 
-                except ValueError:
-                    # 已取出的工作正在處理, 不重複排入
-                    return
+                    try:
+                        self.queue.remove(request)
 
-            else:
-                self.pending.add(request)
+                    except ValueError:
+                        # 已取出的工作正在處理, 不重複排入
+                        continue
 
-            if priority:
-                self.queue.appendleft(request)
+                else:
+                    self.pending.add(request)
 
-            else:
-                self.queue.append(request)
+                if priority:
+                    self.queue.appendleft(request)
+                else:
+                    self.queue.append(request)
 
+            if not self.queue:
+                return
             self.pending_lock.notify()
 
             if not self.isRunning():
@@ -763,6 +722,9 @@ class ThumbnailThread(QThread):
 
 
     def run(self) -> None:
+        """
+        逐一產生佇列中的成品, 依種類送出對應訊號
+        """
 
         while not self.isInterruptionRequested():
 
@@ -775,49 +737,37 @@ class ThumbnailThread(QThread):
 
                 request = self.queue.popleft()
 
-            path, preview_size, include_blur = request
-            image = QImage()
-            blurred_image = QImage()
+            path, kind, preview_size = request
 
             try:
 
-                if preview_size is None:
-                    image_path = ensure_blurred_background(
-                        path, self.isInterruptionRequested, media_dir=self.media_dir, background_dir=self.background_dir
-                    )
-                else:
-                    image_path = ensure_thumbnail(
-                        path, self.isInterruptionRequested, media_dir=self.media_dir,
-                        thumbnail_dir=self.thumbnail_dir, preview_size=preview_size
-                    )
-
+                image_path = ensure_thumbnail(
+                    path, self.isInterruptionRequested, kind=kind, media_dir=self.media_dir,
+                    thumbnail_dir=self.thumbnail_dir, background_dir=self.background_dir, preview_size=preview_size
+                )
                 image = QImage(str(image_path))
                 if image.isNull():
-                    raise RuntimeError("無法讀取縮圖")
-
-                if include_blur:
-                    blur_path = ensure_blurred_thumbnail(image_path, self.isInterruptionRequested)
-                    blurred_image = QImage(str(blur_path))
-                    if blurred_image.isNull():
-                        raise RuntimeError("無法讀取模糊縮圖")
+                    raise RuntimeError("無法讀取快取圖片")
 
             except InterruptedError:
                 break
 
             except Exception:
-                logger.exception("產生縮圖失敗 - %s", path)
+                logger.exception("產生快取圖片失敗 (%s) - %s", kind, path)
+                continue
 
             finally:
                 with self.pending_lock:
                     self.pending.discard(request)
 
-            if not image.isNull() and not self.isInterruptionRequested():
-                if preview_size is None:
+            if not self.isInterruptionRequested():
+                if kind == "background_blur":
                     self.background_ready.emit(str(path), image)
-                else:
-                    self.thumbnail_ready.emit(str(path), preview_size, image)
-                    if not blurred_image.isNull():
-                        self.blurred_thumbnail_ready.emit(str(path), preview_size, blurred_image)
+                elif preview_size is not None:
+                    if kind == "thumbnail_blur":
+                        self.blurred_thumbnail_ready.emit(str(path), preview_size, image)
+                    else:
+                        self.thumbnail_ready.emit(str(path), preview_size, image)
 
 
     def stop(self) -> None:

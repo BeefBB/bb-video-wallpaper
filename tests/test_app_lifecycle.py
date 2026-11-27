@@ -507,7 +507,7 @@ class PlaybackStateTests(QtTestCase):
         screen_id = self.wallpaper.screen_id
         self.tray.set_scaling(screen_id, "fit")
         self.tray.set_background_color(screen_id, "blur")
-        self.tray.thumbnail_thread.request_background.assert_called_with(self.media_path)
+        self.tray.thumbnail_thread.request.assert_called_with(self.media_path, "background_blur")
         self.assertEqual(store.load()["backgroundColor"][self.media_path.name], "blur")
 
         image = QImage(20, 10, QImage.Format.Format_RGB32)
@@ -1103,7 +1103,9 @@ class ImportMenuTests(QtTestCase):
         self.assertIsNone(self.tray.import_thread)
         self.wallpaper.manual_stop.assert_called_once_with()
         self.tray.play_from_menu.assert_not_called()
-        self.tray.thumbnail_thread.request.assert_called_once_with(self.destination, preview_size=self.tray.preview_size)
+        self.tray.thumbnail_thread.request.assert_called_once_with(
+            self.destination, "thumbnail_orig", preview_size=self.tray.preview_size
+        )
         self.namespace["config_store"].remember_recent.assert_called_once_with(self.destination)
         self.tray.refresh_media_menu.assert_called_once_with()
 

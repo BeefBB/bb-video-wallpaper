@@ -1757,9 +1757,9 @@ class Tray:
 
             background = colors.get(path.relative_to(MEDIA_DIR).as_posix())
             if background is None:
-                self.thumbnail_thread.request(path)
+                self.thumbnail_thread.request(path, "thumbnail_orig", preview_size=3)
             elif background == "blur" and not wallpaper.has_blurred_background:
-                self.thumbnail_thread.request_background(path)
+                self.thumbnail_thread.request(path, "background_blur")
 
 
     def apply_blurred_background(self, media_path: str, image: QImage) -> None:
@@ -2108,7 +2108,7 @@ class Tray:
 
             if self.preview_size > 0:
                 for destination in dict.fromkeys(worker.destinations):
-                    self.thumbnail_thread.request(destination, preview_size=self.preview_size)
+                    self.thumbnail_thread.request(destination, "thumbnail_orig", preview_size=self.preview_size)
 
             if not worker.cancelled and worker.destination is not None:
                 config_store.remember_recent(worker.destination)
