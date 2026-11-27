@@ -15,7 +15,7 @@ from win32con import WM_DESTROY
 
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog, QMessageBox
 from PySide6.QtCore import QByteArray, Qt, QTimer, QThread, Signal
-from PySide6.QtGui import QAction, QActionGroup, QIcon, QFont, QImage, QScreen, QCursor
+from PySide6.QtGui import QAction, QActionGroup, QIcon, QFont, QImage, QImageReader, QScreen, QCursor
 
 import bb_image_display
 import bb_video_display
@@ -2393,6 +2393,9 @@ def main() -> int:
 
     if "--task" not in sys.argv:
         run_as_admin()
+
+    # 靜態圖讀取與影片取圖共用 Qt 單張圖片配置的上限
+    QImageReader.setAllocationLimit(512)
 
     # 建立 Qt 應用程式
     app = QApplication(sys.argv)
