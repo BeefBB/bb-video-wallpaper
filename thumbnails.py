@@ -18,6 +18,7 @@ import threading
 import time
 from typing import Literal
 from uuid import UUID
+import numpy as np
 
 from PySide6.QtCore import QRect, QRectF, QSize, Qt, QThread, Signal
 from PySide6.QtGui import QColor, QImage, QImageReader, QImageWriter, QPainter, QRegion
@@ -35,13 +36,15 @@ ImageKind = Literal["thumbnail_orig", "thumbnail_blur", "background_blur", "thum
 RayMode = Literal["ray1", "ray2"]
 ThumbnailRequest = tuple[Path, ImageKind, int | None, tuple[int, int] | None, RayMode, int]
 DEFAULT_RAY_MODE: RayMode = "ray2"
-DEFAULT_RAY_DECAY = 35
 CACHE_NAME = re.compile(
     r"(?P<source>[0-9a-f]{16})-(?P<digest>[0-9a-f]{8})"
     r"(?:-[1-5](?:-blur)?|-blur|(?:-[1-5])?-(?:"
     r"ray[12]-(?:100|[1-9]?[0-9])-[1-9][0-9]*-[1-9][0-9]*"
     r"|ray-[1-9][0-9]*-[1-9][0-9]*(?:-d(?:100|[1-9]?[0-9]))?))\.png"
 )
+
+# 光暈亮度衰減
+DEFAULT_RAY_DECAY = 55
 
 
 def get_ray_mode(path: Path, background: str | None) -> RayMode | None:
@@ -478,6 +481,29 @@ def _gaussian_blur(image: QImage) -> QImage:
     return result
 
 
+def _gaussian_blur_1d(profile: np.ndarray, sigma: float) -> np.ndarray:
+
+    if sigma <= 0:
+        return profile
+
+    radius = max(1, int(np.ceil(sigma * 3)))
+
+    x = np.arange(-radius, radius + 1, dtype=np.float32)
+    kernel = np.exp(-0.5 * (x / sigma) ** 2)
+    kernel /= kernel.sum()
+
+    padded = np.pad(
+        profile,
+        ((radius, radius), (0, 0)),
+        mode="edge"
+    )
+
+    return np.stack([
+        np.convolve(padded[:, channel], kernel, mode="valid")
+        for channel in range(3)
+    ], axis=1)
+
+
 def _opaque_on_black(image: QImage) -> QImage:
     """
     將含透明度的圖片合成到不透明黑底
@@ -498,10 +524,136 @@ def _opaque_on_black(image: QImage) -> QImage:
 
 def _draw_ray_strip(
     painter: QPainter, target: QRect, band: QImage, *,
+    sideways: bool, leading: bool, inner_distance: float,
+    ray_mode: RayMode, ray_decay: int
+) -> None:
+    """
+    依指定的方向將原圖邊緣延伸到留白, 並往外柔化與衰減
+    """
+
+    band = _opaque_on_black(band).convertToFormat(
+        QImage.Format.Format_RGBA8888
+    )
+
+    pixels = np.frombuffer(
+        band.constBits(), dtype=np.uint8
+    ).reshape(band.height(), band.bytesPerLine())
+
+    pixels = pixels[:, :band.width() * 4].reshape(
+        band.height(), band.width(), 4
+    )[:, :, :3].astype(np.float32)
+
+    if sideways:
+        edge = pixels[:, 0 if leading else -1]
+        profile = pixels.mean(axis=1)
+        depth = target.width()
+        length = target.height()
+
+    else:
+        edge = pixels[0 if leading else -1, :]
+        profile = pixels.mean(axis=0)
+        depth = target.height()
+        length = target.width()
+
+    if depth <= 0 or length <= 0:
+        return
+
+    # 一維高斯模糊
+    sigma = len(profile) * 0.08
+    soft = _gaussian_blur_1d(profile, sigma)
+
+    # 建立輸出圖層
+    output = np.empty(
+        (target.height(), target.width(), 4),
+        dtype=np.uint8
+    )
+    output[:, :, 3] = 255
+
+    # 對齊來源與輸出的像素中心
+    center = (len(edge) - 1) / 2
+    coordinates = (
+        (np.arange(length, dtype=np.float32) + 0.5)
+        * len(edge) / length - 0.5
+    )
+
+    rng = np.random.default_rng(0)
+
+    for index in range(depth):
+
+        progress = index / max(1, depth - 1)
+
+        # 射線取樣位置
+        sample_ratio = 1.0
+
+        if ray_mode == "ray2":
+            sample_ratio = inner_distance / max(
+                1e-6, inner_distance + index
+            )
+
+        sample = center + (coordinates - center) * sample_ratio
+        sample = np.clip(sample, 0, len(edge) - 1)
+
+        # 浮點數線性插值
+        low = sample.astype(np.int32)
+        high = np.minimum(low + 1, len(edge) - 1)
+        fraction = (sample - low).astype(np.float32)[:, None]
+
+        sharp_color = (
+            edge[low] * (1 - fraction) +
+            edge[high] * fraction
+        )
+
+        soft_color = (
+            soft[low] * (1 - fraction) +
+            soft[high] * fraction
+        )
+
+        # Smoothstep 柔化曲線
+        t = min(1.0, progress / 0.75)
+        softness = t * t * (3 - 2 * t)
+
+        color = (
+            sharp_color * (1 - softness) +
+            soft_color * softness
+        )
+
+        # 亮度衰減
+        color *= 1 - ray_decay / 100 * progress ** 2
+
+        # Dithering, 減少 8-bit 色彩斷層
+        noise = rng.random(
+            (length, 1), dtype=np.float32
+        ) - 0.5
+
+        color = np.clip(
+            np.rint(color + noise), 0, 255
+        ).astype(np.uint8)
+
+        position = depth - index - 1 if leading else index
+
+        if sideways:
+            output[:, position, :3] = color
+        else:
+            output[position, :, :3] = color
+
+    layer = QImage(
+        output.data,
+        target.width(),
+        target.height(),
+        output.strides[0],
+        QImage.Format.Format_RGBA8888
+    ).copy()
+
+    painter.drawImage(target, layer)
+
+
+def _draw_ray_strip1(
+    painter: QPainter, target: QRect, band: QImage, *,
     sideways: bool, leading: bool, inner_distance: float, ray_mode: RayMode, ray_decay: int
 ) -> None:
     """
     依指定的方向將原圖邊緣延伸到留白, 並往外柔化與衰減
+    (舊版. 快速, 但可能出現斷層?)
     """
 
     # 清晰和柔化的取樣共用黑底, 過渡時只混合顏色
