@@ -220,11 +220,15 @@ class MediaPreviewMenu(QMenu):
         mode, background = self._display_options(path, screen)
         ray_mode = get_ray_mode(path, background)
         if mode == "fit" and ray_mode is not None:
-            self.thumbnail_thread.request(
-                path, "thumbnail_ray", preview_size=self.preview_size,
-                screen_size=screen_pixel_size(screen).toTuple(), ray_mode=ray_mode, priority=True
-            )
-        elif mode == "fit" and background == "blur":
+            screen_size = screen_pixel_size(screen)
+            if screen_size is not None:
+                self.thumbnail_thread.request(
+                    path, "thumbnail_ray", preview_size=self.preview_size,
+                    screen_size=screen_size.toTuple(), ray_mode=ray_mode, priority=True
+                )
+                return
+
+        if mode == "fit" and background == "blur":
             self.thumbnail_thread.request(
                 path, "thumbnail_orig", "thumbnail_blur", preview_size=self.preview_size, priority=True
             )
@@ -273,7 +277,13 @@ class MediaPreviewMenu(QMenu):
         path = Path(media_path)
         screen = self.target_screen or QApplication.screenAt(QCursor.pos()) or self.screen()
         mode, background = self._display_options(path, screen)
-        if mode == "fit" and get_ray_mode(path, background) == ray_mode and screen_pixel_size(screen) == screen_size:
+        if mode != "fit" or get_ray_mode(path, background) != ray_mode:
+            return
+
+        current_size = screen_pixel_size(screen)
+        if current_size is None:
+            self.thumbnail_thread.request(path, "thumbnail_orig", preview_size=preview_size, priority=True)
+        elif current_size == screen_size:
             self.ray_thumbnail = image
             self.display_preview()
 

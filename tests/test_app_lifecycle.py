@@ -27,6 +27,7 @@ if __name__ == "__main__":
 from playback import PlaybackState
 from app_loader import QtTestCase, load_app_module
 import bb_video_display
+import windows_integration as windows
 
 
 class HeadlessWidget(QObject):
@@ -591,6 +592,45 @@ class PlaybackStateTests(QtTestCase):
         )
         self.tray.apply_ray_background(path, portrait.size(), "ray2", decay, portrait)
         self.assertIsNone(second.background_image_key)
+
+
+    def test_missing_ray_monitor_does_not_block_other_screens(self) -> None:
+        """
+        原生螢幕在 Qt 更新前消失, 其餘螢幕仍收到光暈背景
+        """
+
+        second = self.add_following_wallpaper(HeadlessScreen(QRect(1920, 0, 160, 240)))
+        config = self.namespace["config_store"].load.return_value
+        config["scalingMode"] = {self.image_path.name: {"landscape": "fit", "portrait": "fit"}}
+        config["backgroundColor"] = {self.image_path.name: "ray1"}
+        for wallpaper in (self.wallpaper, second):
+            wallpaper.set_play_media(self.image_path)
+
+        monitors = {(0, 0): None, (1920, 0): 2}
+        self.enterContext(mock.patch.object(
+            windows.win32api, "MonitorFromPoint", side_effect=lambda origin, flags: monitors[origin]
+        ))
+
+        def get_monitor_info(monitor: int) -> dict[str, tuple[int, int, int, int]]:
+            if monitor == 1:
+                raise windows.win32api.error(windows.winerror.ERROR_INVALID_MONITOR_HANDLE, "GetMonitorInfo", "")
+            return {"Monitor": (1920, 0, 2160, 360)}
+
+        get_info = self.enterContext(mock.patch.object(windows.win32api, "GetMonitorInfo", side_effect=get_monitor_info))
+
+        self.tray.request_backgrounds()
+        get_info.assert_called_once_with(2)
+        self.tray.thumbnail_thread.request.assert_called_once_with(
+            self.image_path, "background_ray", screen_size=(240, 360), ray_mode="ray1"
+        )
+
+        monitors[(0, 0)] = 1
+        image = QImage(240, 360, QImage.Format.Format_RGB32)
+        self.tray.apply_ray_background(
+            str(self.image_path), image.size(), "ray1", self.namespace["DEFAULT_RAY_DECAY"], image
+        )
+        self.assertIsNone(self.wallpaper.background_image_key)
+        self.assertEqual(second.background_image_key, ("ray1", image.size()))
 
 
     def start_playing(self) -> None:

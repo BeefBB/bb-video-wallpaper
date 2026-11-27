@@ -894,7 +894,7 @@ class Wallpaper(QWidget):
 
     def get_background_image_key(self, background: str | None) -> BackgroundImageKey | None:
         """
-        取得桌布應套用的背景圖片識別鍵, 無須背景圖片時回傳 None
+        取得桌布應套用的背景圖片識別鍵, 無須背景圖片或無法取得光暈尺寸時回傳 None
         """
 
         if self.scaling_mode != "fit" or self.current_media is None:
@@ -905,7 +905,9 @@ class Wallpaper(QWidget):
 
         ray_mode = get_ray_mode(self.current_media, background)
         if ray_mode is not None:
-            return ray_mode, screen_pixel_size(self.target_screen)
+            screen_size = screen_pixel_size(self.target_screen)
+            if screen_size is not None:
+                return ray_mode, screen_size
 
         return None
 

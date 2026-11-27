@@ -463,7 +463,7 @@ class MediaPreviewTests(QtTestCase):
         self.action.setData(str(path))
         screen = mock.Mock()
         screen.geometry.return_value = QRect(0, 0, 200, 400)
-        self.enterContext(mock.patch.object(media_preview, "screen_pixel_size", return_value=QSize(300, 600)))
+        pixel_size = self.enterContext(mock.patch.object(media_preview, "screen_pixel_size", return_value=QSize(300, 600)))
         self.menu.target_screen = screen
         self.menu.display_config = {
             "scalingMode": {path.name: {"portrait": "fit"}},
@@ -485,6 +485,17 @@ class MediaPreviewTests(QtTestCase):
         emit(str(path), 3, QSize(200, 400), "ray2", DEFAULT_RAY_DECAY, image)
         self.assertIsNone(self.menu.ray_thumbnail)
 
+        pixel_size.return_value = None
+        self.worker.request.reset_mock()
+        emit(str(path), 3, QSize(300, 600), "ray2", DEFAULT_RAY_DECAY, image)
+        self.assertIsNone(self.menu.ray_thumbnail)
+        self.worker.request.assert_called_once_with(path, "thumbnail_orig", preview_size=3, priority=True)
+
+        self.worker.request.reset_mock()
+        self.menu.show_preview()
+        self.worker.request.assert_called_once_with(path, "thumbnail_orig", preview_size=3, priority=True)
+
+        pixel_size.return_value = QSize(300, 600)
         emit(str(path), 3, QSize(300, 600), "ray2", DEFAULT_RAY_DECAY, image)
         self.queue_thumbnail(3, Qt.GlobalColor.red)
         self.app.processEvents()

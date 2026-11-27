@@ -57,14 +57,21 @@ def get_monitor_id(hwnd: int) -> str:
     return f"display:{display_name.casefold()}"
 
 
-def screen_pixel_size(screen: QScreen) -> QSize:
+def screen_pixel_size(screen: QScreen) -> QSize | None:
     """
-    讀取螢幕像素尺寸
+    讀取螢幕像素尺寸, 找不到原生螢幕時回傳 None
     """
 
     origin = screen.geometry().topLeft().toTuple()
-    monitor = win32api.MonitorFromPoint(origin, win32con.MONITOR_DEFAULTTONULL)
-    left, top, right, bottom = win32api.GetMonitorInfo(monitor)["Monitor"]
+    try:
+        monitor = win32api.MonitorFromPoint(origin, win32con.MONITOR_DEFAULTTONULL)
+        if monitor is None:
+            return None
+        left, top, right, bottom = win32api.GetMonitorInfo(monitor)["Monitor"]
+
+    except win32api.error:
+        # 螢幕可能在取得控制代碼後被移除
+        return None
 
     return QSize(right - left, bottom - top)
 
