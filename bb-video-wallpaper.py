@@ -56,6 +56,9 @@ from windows_integration import (
 
 logger = logging.getLogger(__name__)
 
+# 啟動時等待桌面逾時
+DESKTOP_READY_TIMEOUT_SECONDS = 120
+
 
 BackgroundImageKey = tuple[Literal["blur"], None] | tuple[RayMode, QSize]
 
@@ -2444,11 +2447,16 @@ def main() -> int:
     cleanup_orphaned_thumbnails(MEDIA_DIR, THUMBNAIL_DIR)
     cleanup_orphaned_thumbnails(MEDIA_DIR, THUMBNAIL_DIR.parent / "backgrounds")
 
-    while True:
-        time.sleep(1)
+    desktop_ready_deadline = time.monotonic() + DESKTOP_READY_TIMEOUT_SECONDS
+    while not check_desktop_ready():
 
-        if check_desktop_ready():
-            break
+        remaining = desktop_ready_deadline - time.monotonic()
+        if remaining <= 0:
+            logger.error("啟動時等待 Windows 桌面就緒逾時 (%s 秒)", DESKTOP_READY_TIMEOUT_SECONDS)
+            mutex.Close()  # type: ignore
+            return 1
+
+        time.sleep(1)
 
     if "--task" not in sys.argv:
         run_as_admin()

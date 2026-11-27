@@ -148,6 +148,7 @@ Retry interval after wallpaper reattachment fails |  | 2 s
 Wallpaper reattachment retry limit |  | 2 retries, 3 attempts in total including the initial attempt
 Wake interval when stopping VLC |  | 0.05 s
 Desktop readiness check interval on startup |  | 1 s
+Desktop readiness timeout on startup |  | 120 s
 Notification display duration |  | 3 s
 Log level |  | INFO
 Maximum size per log file |  | 2 MiB
