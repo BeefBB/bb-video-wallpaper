@@ -509,7 +509,7 @@ def _opaque_on_black(image: QImage) -> QImage:
 def _draw_ray_strip(
     painter: QPainter, target: QRect, strip: QImage, *,
     sideways: bool, leading: bool, inner_distance: float,
-    ray_mode: RayMode, ray_decay: float, blur: Callable[[QImage], QImage]
+    ray_mode: RayMode, ray_decay: float, blur: Callable[[QImage], QImage], cancelled: Callable[[], bool]
 ) -> None:
     """
     依指定的方向將原圖邊緣延伸到留白, 並往外柔化與衰減
@@ -518,6 +518,9 @@ def _draw_ray_strip(
 
     depth = target.width() if sideways else target.height()
     for index in range(depth):
+
+        if cancelled():
+            raise InterruptedError("縮圖工作已取消")
 
         progress = index / max(1, depth - 1)
 
@@ -549,7 +552,7 @@ def _draw_ray_strip(
             strip = blur(strip)
 
 
-def _render_ray(image: QImage, size: QSize, ray_mode: RayMode) -> QImage:
+def _render_ray(image: QImage, size: QSize, ray_mode: RayMode, cancelled: Callable[[], bool]) -> QImage:
     """
     依指定尺寸合成原圖與光暈背景
     """
@@ -607,7 +610,7 @@ def _render_ray(image: QImage, size: QSize, ray_mode: RayMode) -> QImage:
 
             _draw_ray_strip(
                 painter, target, edge, sideways=sideways, leading=leading,
-                inner_distance=inner_distance, ray_mode=ray_mode, ray_decay=RAY_DECAY, blur=blur
+                inner_distance=inner_distance, ray_mode=ray_mode, ray_decay=RAY_DECAY, blur=blur, cancelled=cancelled
             )
 
         painter.drawImage(fitted, image, source)
@@ -750,7 +753,7 @@ def ensure_thumbnail(
         raise InterruptedError("縮圖工作已取消")
 
     if kind == "background_ray" and canvas_size is not None:
-        image = _render_ray(image, canvas_size, ray_mode)
+        image = _render_ray(image, canvas_size, ray_mode, cancelled)
     elif blur_path is not None and canvas_size is not None:
         background = QImage(str(blur_path))
         if background.isNull() or background.size() != image.size():
