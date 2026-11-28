@@ -917,7 +917,7 @@ class Wallpaper(QWidget):
 
     def set_background_image(self, image: QImage | None, key: BackgroundImageKey | None = None) -> None:
 
-        self.instance_image.set_background_image(image)
+        self.instance_image.set_background_image(image, includes_foreground=key is not None and key[0] != "blur")
         self.instance_video.set_background_image(image if key == ("blur", None) else None)
         self.background_image_key = key
 

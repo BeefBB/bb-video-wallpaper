@@ -81,6 +81,7 @@ class _ImageWindow(QRasterWindow):
         self.scaling_mode = "fill"
         self.background_color = QColor(Qt.GlobalColor.black)
         self.background_image: QImage | None = None
+        self.background_includes_foreground = False
 
         reader = QImageReader(str(image_path))
         reader.setAutoTransform(True)
@@ -195,8 +196,10 @@ class _ImageWindow(QRasterWindow):
         source = QRectF(self.image.rect())
         target = QRectF(bounds)
         if self.scaling_mode == "fit":
-            if self.background_image is not None:
+            if self.background_image is not None and not self.background_image.isNull():
                 draw_cover_image(painter, bounds, self.background_image)
+                if self.background_includes_foreground:
+                    return
             target = fit_image_rect(source.size(), bounds)
 
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
@@ -339,6 +342,7 @@ class Instance(QObject):
         self._scaling_mode = "fill"
         self._background_color = QColor(Qt.GlobalColor.black)
         self._background_image: QImage | None = None
+        self._background_includes_foreground = False
 
         app.aboutToQuit.connect(self.close)
 
@@ -378,6 +382,7 @@ class Instance(QObject):
         if self.window is None:
             self.window = _ImageWindow(source, self._hwnd)
             self.window.background_image = self._background_image
+            self.window.background_includes_foreground = self._background_includes_foreground
 
         else:
 
@@ -415,11 +420,13 @@ class Instance(QObject):
             self.window.update()
 
 
-    def set_background_image(self, image: QImage | None) -> None:
+    def set_background_image(self, image: QImage | None, *, includes_foreground: bool = False) -> None:
 
         self._background_image = image
+        self._background_includes_foreground = includes_foreground
         if self.window is not None:
             self.window.background_image = image
+            self.window.background_includes_foreground = includes_foreground
             self.window.update()
 
 

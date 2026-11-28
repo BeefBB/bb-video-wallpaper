@@ -575,12 +575,12 @@ class PlaybackStateTests(QtTestCase):
         self.tray.apply_ray_background(path, portrait.size(), "ray2", decay, portrait)
         self.assertIsNone(self.wallpaper.background_image_key)
         self.assertEqual(second.background_image_key, ("ray2", portrait.size()))
-        second.instance_image.set_background_image.assert_called_with(portrait)
+        second.instance_image.set_background_image.assert_called_with(portrait, includes_foreground=True)
         self.assertIsNone(second.instance_video._background_image)
 
         self.tray.apply_ray_background(path, landscape.size(), "ray2", decay, landscape)
         self.assertEqual(self.wallpaper.background_image_key, ("ray2", landscape.size()))
-        self.wallpaper.instance_image.set_background_image.assert_called_with(landscape)
+        self.wallpaper.instance_image.set_background_image.assert_called_with(landscape, includes_foreground=True)
 
         second.target_screen._geometry = QRect(320, 0, 200, 300)
         screen_sizes[second.target_screen] = QSize(300, 450)

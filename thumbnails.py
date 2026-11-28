@@ -18,7 +18,6 @@ import threading
 import time
 from typing import Literal
 from uuid import UUID
-import numpy as np
 
 from PySide6.QtCore import QRect, QRectF, QSize, Qt, QThread, Signal
 from PySide6.QtGui import QColor, QImage, QImageReader, QImageWriter, QPainter, QRegion
@@ -121,7 +120,7 @@ def fast_hash(path: Path) -> str:
 
     digest = hashlib.sha256()
     # 將縮圖演算法版本納入識別碼計算
-    digest.update(b"thumbnail-v5\0")
+    digest.update(b"thumbnail-v6\0")
 
     with path.open("rb") as file:
 
@@ -437,7 +436,7 @@ class _BlurParams(ctypes.Structure):
     _fields_ = [("radius", ctypes.c_float), ("expand_edge", ctypes.c_int)]
 
 
-def _gaussian_blur(image: QImage) -> QImage:
+def _gaussian_blur(image: QImage, radius: float | None = None) -> QImage:
     """
     在原尺寸的預乘 BGRA 像素上套用 Windows GDI+ 高斯模糊
     """
@@ -473,35 +472,14 @@ def _gaussian_blur(image: QImage) -> QImage:
         check(gdip.GdipCreateEffect(blur_guid, ctypes.byref(effect)))
         resources.callback(gdip.GdipDeleteEffect, effect)
 
-        radius = min(255.0, max(result.width(), result.height()) * 0.03)
+        if radius is None:
+            radius = max(result.width(), result.height()) * 0.03
+        radius = min(255.0, radius)
         params = _BlurParams(radius, False)
         check(gdip.GdipSetEffectParameters(effect, ctypes.byref(params), ctypes.sizeof(params)))
         check(gdip.GdipBitmapApplyEffect(bitmap, effect, None, False, None, None))
 
     return result
-
-
-def _gaussian_blur_1d(profile: np.ndarray, sigma: float) -> np.ndarray:
-
-    if sigma <= 0:
-        return profile
-
-    radius = max(1, int(np.ceil(sigma * 3)))
-
-    x = np.arange(-radius, radius + 1, dtype=np.float32)
-    kernel = np.exp(-0.5 * (x / sigma) ** 2)
-    kernel /= kernel.sum()
-
-    padded = np.pad(
-        profile,
-        ((radius, radius), (0, 0)),
-        mode="edge"
-    )
-
-    return np.stack([
-        np.convolve(padded[:, channel], kernel, mode="valid")
-        for channel in range(3)
-    ], axis=1)
 
 
 def _opaque_on_black(image: QImage) -> QImage:
@@ -529,122 +507,51 @@ def _draw_ray_strip(
 ) -> None:
     """
     依指定的方向將原圖邊緣延伸到留白, 並往外柔化與衰減
+    (逐次高斯模糊)
     """
 
-    band = _opaque_on_black(band).convertToFormat(
-        QImage.Format.Format_RGBA8888
-    )
-
-    pixels = np.frombuffer(
-        band.constBits(), dtype=np.uint8
-    ).reshape(band.height(), band.bytesPerLine())
-
-    pixels = pixels[:, :band.width() * 4].reshape(
-        band.height(), band.width(), 4
-    )[:, :, :3].astype(np.float32)
+    band = _opaque_on_black(band)
 
     if sideways:
-        edge = pixels[:, 0 if leading else -1]
-        profile = pixels.mean(axis=1)
+        edge = band.copy(0 if leading else band.width() - 1, 0, 1, band.height())
         depth = target.width()
-        length = target.height()
 
     else:
-        edge = pixels[0 if leading else -1, :]
-        profile = pixels.mean(axis=0)
+        edge = band.copy(0, 0 if leading else band.height() - 1, band.width(), 1)
         depth = target.height()
-        length = target.width()
 
-    if depth <= 0 or length <= 0:
-        return
-
-    # 一維高斯模糊
-    sigma = len(profile) * 0.08
-    soft = _gaussian_blur_1d(profile, sigma)
-
-    # 建立輸出圖層
-    output = np.empty(
-        (target.height(), target.width(), 4),
-        dtype=np.uint8
-    )
-    output[:, :, 3] = 255
-
-    # 對齊來源與輸出的像素中心
-    center = (len(edge) - 1) / 2
-    coordinates = (
-        (np.arange(length, dtype=np.float32) + 0.5)
-        * len(edge) / length - 0.5
-    )
-
-    rng = np.random.default_rng(0)
+    strip = edge
 
     for index in range(depth):
 
         progress = index / max(1, depth - 1)
 
-        # 射線取樣位置
         sample_ratio = 1.0
-
         if ray_mode == "ray2":
-            sample_ratio = inner_distance / max(
-                1e-6, inner_distance + index
-            )
-
-        sample = center + (coordinates - center) * sample_ratio
-        sample = np.clip(sample, 0, len(edge) - 1)
-
-        # 浮點數線性插值
-        low = sample.astype(np.int32)
-        high = np.minimum(low + 1, len(edge) - 1)
-        fraction = (sample - low).astype(np.float32)[:, None]
-
-        sharp_color = (
-            edge[low] * (1 - fraction) +
-            edge[high] * fraction
-        )
-
-        soft_color = (
-            soft[low] * (1 - fraction) +
-            soft[high] * fraction
-        )
-
-        # Smoothstep 柔化曲線
-        t = min(1.0, progress / 0.75)
-        softness = t * t * (3 - 2 * t)
-
-        color = (
-            sharp_color * (1 - softness) +
-            soft_color * softness
-        )
-
-        # 亮度衰減
-        color *= 1 - ray_decay / 100 * progress ** 2
-
-        # Dithering, 減少 8-bit 色彩斷層
-        noise = rng.random(
-            (length, 1), dtype=np.float32
-        ) - 0.5
-
-        color = np.clip(
-            np.rint(color + noise), 0, 255
-        ).astype(np.uint8)
+            sample_ratio = inner_distance / max(1e-6, inner_distance + index)
 
         position = depth - index - 1 if leading else index
 
         if sideways:
-            output[:, position, :3] = color
+            height = strip.height() * sample_ratio
+            sample = QRectF(0, (strip.height() - height) / 2, 1, height)
+            destination = QRectF(target.x() + position, target.y(), 1, target.height())
+
         else:
-            output[position, :, :3] = color
+            width = strip.width() * sample_ratio
+            sample = QRectF((strip.width() - width) / 2, 0, width, 1)
+            destination = QRectF(target.x(), target.y() + position, target.width(), 1)
 
-    layer = QImage(
-        output.data,
-        target.width(),
-        target.height(),
-        output.strides[0],
-        QImage.Format.Format_RGBA8888
-    ).copy()
+        # 繪製目前的像素列
+        painter.drawImage(destination, strip, sample)
 
-    painter.drawImage(target, layer)
+        # 亮度衰減
+        darken = ray_decay / 100 * progress ** 2
+        painter.fillRect(destination, QColor.fromRgbF(0.0, 0.0, 0.0, darken))
+
+        # 將目前的像素列模糊後作為下一列
+        if index < depth - 1:
+            strip = _gaussian_blur(strip, 5)
 
 
 def _draw_ray_strip1(
@@ -708,15 +615,110 @@ def _draw_ray_strip1(
                 strip = QRectF(0, position, layer.width(), 1)
 
             softness = 1 - max(0.0, 1 - 4 * progress) ** 3
+
+            # 畫清晰 edge
             overlay.setOpacity(1.0)
             if softness < 1:
                 overlay.drawImage(strip, edge, sample)
+
+            # 疊柔化結果
             overlay.setOpacity(softness)
             overlay.drawImage(strip, soft, sample)
 
             overlay.setOpacity(1.0)
             opacity = round(255 * ray_decay / 100 * progress ** 2)
             overlay.fillRect(strip, QColor(0, 0, 0, opacity))
+
+    painter.drawImage(target, layer)
+
+
+def _draw_ray_strip2(
+    painter: QPainter, target: QRect, band: QImage, *,
+    sideways: bool, leading: bool, inner_distance: float,
+    ray_mode: RayMode, ray_decay: int
+) -> None:
+    """
+    依指定的方向將原圖邊緣延伸到留白, 並往外柔化與衰減
+    (舊版2. 慢些, 但好的多)
+    """
+
+    STEPS = 512
+
+    # 清晰和柔化的取樣共用黑底, 過渡時只混合顏色
+    band = _opaque_on_black(band)
+    transform = Qt.TransformationMode.SmoothTransformation
+    ignore_aspect = Qt.AspectRatioMode.IgnoreAspectRatio
+
+    if sideways:
+        edge = band.copy(0 if leading else band.width() - 1, 0, 1, band.height())
+        soft = band.scaled(1, band.height(), ignore_aspect, transform)
+        depth = target.width()
+        steps = min(STEPS, depth)
+        layer_size = QSize(steps, target.height())
+
+    else:
+        edge = band.copy(0, 0 if leading else band.height() - 1, band.width(), 1)
+        soft = band.scaled(band.width(), 1, ignore_aspect, transform)
+        depth = target.height()
+        steps = min(STEPS, depth)
+        layer_size = QSize(target.width(), steps)
+
+    # 高斯模糊
+    soft = _gaussian_blur(soft)
+
+    # soft 要和 edge 尺寸一致, 後面才能共用同一套 sample 幾何
+    soft = soft.scaled(edge.size(), ignore_aspect, transform)
+
+    # 維持 RGB32, 想減少中間量化可試 RGBX64
+    layer = QImage(layer_size, QImage.Format.Format_RGB32)
+    if layer.isNull():
+        raise RuntimeError("無法配置光暈圖層")
+    layer.fill(Qt.GlobalColor.black)
+
+    with QPainter(layer) as overlay:
+
+        overlay.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+
+        for index in range(steps):
+
+            progress = index / max(1, steps - 1)
+
+            sample_ratio = 1.0
+            if ray_mode == "ray2":
+                # 越往外, 射線與原圖邊緣的交點越靠近中段
+                sample_ratio = inner_distance / max(1e-6, inner_distance + progress * (depth - 1))
+
+            position = steps - index - 1 if leading else index
+
+            if sideways:
+                height = edge.height() * sample_ratio
+                sample = QRectF(0, (edge.height() - height) / 2, 1, height)
+                strip = QRectF(position, 0, 1, layer.height())
+
+            else:
+                width = edge.width() * sample_ratio
+                sample = QRectF((edge.width() - width) / 2, 0, width, 1)
+                strip = QRectF(0, position, layer.width(), 1)
+
+            # 柔化距離
+            t = min(1.0, progress / 0.75)
+            # softness = t**2 * (3 - 2 * t)  # 3
+            softness = t**3 * (10 - 15 * t + 6 * t**2)  # 5
+            # softness = t**4 * (35 - 84 * t + 70 * t**2 - 20 * t**3)  # 7
+
+            # 畫清晰 edge
+            overlay.setOpacity(1.0)
+            if softness < 1.0:
+                overlay.drawImage(strip, edge, sample)
+
+            # 疊柔化結果
+            overlay.setOpacity(softness)
+            overlay.drawImage(strip, soft, sample)
+
+            # 用浮點 alpha 疊黑, 減少中間量化誤差
+            overlay.setOpacity(1.0)
+            darken = ray_decay / 100 * progress ** 2
+            overlay.fillRect(strip, QColor.fromRgbF(0.0, 0.0, 0.0, darken))
 
     painter.drawImage(target, layer)
 
@@ -892,7 +894,7 @@ def ensure_thumbnail(
         raise InterruptedError("縮圖工作已取消")
 
     if ray_size is not None:
-        image = _render_ray(image, ray_size, ray_mode, ray_decay, include_foreground=kind == "thumbnail_ray")
+        image = _render_ray(image, ray_size, ray_mode, ray_decay, include_foreground=True)
     else:
         if preview_size is not None:
             width = preview_size * 100
