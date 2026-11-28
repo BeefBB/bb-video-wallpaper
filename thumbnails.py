@@ -5,7 +5,7 @@
 
 from collections import deque
 from collections.abc import Callable, Iterator
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import ctypes
 import errno
 import hashlib
@@ -435,14 +435,11 @@ class _BlurParams(ctypes.Structure):
     _fields_ = [("radius", ctypes.c_float), ("expand_edge", ctypes.c_int)]
 
 
-def _gaussian_blur(image: QImage, radius: float | None = None) -> QImage:
+@contextmanager
+def _gdiplus_blur(radius: float) -> Iterator[Callable[[QImage], QImage]]:
     """
-    在原尺寸的預乘 BGRA 像素上套用 Windows GDI+ 高斯模糊
+    建立指定半徑的 GDI+ 模糊效果
     """
-
-    result = image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
-    if result.isNull():
-        raise ValueError("無法取得模糊來源的像素")
 
     gdip = ctypes.WinDLL("gdiplus")
     gdip.GdiplusShutdown.restype = None
@@ -450,35 +447,48 @@ def _gaussian_blur(image: QImage, radius: float | None = None) -> QImage:
     gdip.GdipCreateEffect.argtypes = [_EffectGuid, ctypes.POINTER(ctypes.c_void_p)]
     blur_guid = _EffectGuid.from_buffer_copy(UUID("633c80a4-1843-482b-9ef2-be2834c5fdd4").bytes_le)
     token = ctypes.c_size_t()
-    bitmap = ctypes.c_void_p()
     effect = ctypes.c_void_p()
-    pixels = ctypes.c_ubyte.from_buffer(memoryview(result.bits()))
 
     def check(status: int) -> None:
         if status != 0:
             raise RuntimeError(f"GDI+ 高斯模糊失敗 (status={status})")
 
-    with ExitStack() as resources:
-        check(gdip.GdiplusStartup(ctypes.byref(token), ctypes.byref(_GdiplusStartupInput(1)), None))
-        resources.callback(gdip.GdiplusShutdown, token)
+    def apply_blur(image: QImage) -> QImage:
+
+        result = image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+        if result.isNull():
+            raise ValueError("無法取得模糊來源的像素")
 
         # PixelFormat32bppPARGB 與 Qt 的預乘 BGRA 共用同一塊記憶體
+        bitmap = ctypes.c_void_p()
+        pixels = ctypes.c_ubyte.from_buffer(memoryview(result.bits()))
         check(gdip.GdipCreateBitmapFromScan0(
             result.width(), result.height(), result.bytesPerLine(), 0x000E200B,
             ctypes.byref(pixels), ctypes.byref(bitmap)
         ))
-        resources.callback(gdip.GdipDisposeImage, bitmap)
+        try:
+            check(gdip.GdipBitmapApplyEffect(bitmap, effect, None, False, None, None))
+        finally:
+            gdip.GdipDisposeImage(bitmap)
+
+        return result
+
+    with ExitStack() as resources:
+        check(gdip.GdiplusStartup(ctypes.byref(token), ctypes.byref(_GdiplusStartupInput(1)), None))
+        resources.callback(gdip.GdiplusShutdown, token)
         check(gdip.GdipCreateEffect(blur_guid, ctypes.byref(effect)))
         resources.callback(gdip.GdipDeleteEffect, effect)
 
-        if radius is None:
-            radius = max(result.width(), result.height()) * 0.03
-        radius = min(255.0, radius)
-        params = _BlurParams(radius, False)
+        params = _BlurParams(min(255.0, radius), False)
         check(gdip.GdipSetEffectParameters(effect, ctypes.byref(params), ctypes.sizeof(params)))
-        check(gdip.GdipBitmapApplyEffect(bitmap, effect, None, False, None, None))
+        yield apply_blur
 
-    return result
+
+def _gaussian_blur(image: QImage) -> QImage:
+
+    radius = max(image.width(), image.height()) * 0.03
+    with _gdiplus_blur(radius) as blur:
+        return blur(image)
 
 
 def _opaque_on_black(image: QImage) -> QImage:
@@ -502,7 +512,7 @@ def _opaque_on_black(image: QImage) -> QImage:
 def _draw_ray_strip(
     painter: QPainter, target: QRect, strip: QImage, *,
     sideways: bool, leading: bool, inner_distance: float,
-    ray_mode: RayMode, ray_decay: int
+    ray_mode: RayMode, ray_decay: int, blur: Callable[[QImage], QImage]
 ) -> None:
     """
     依指定的方向將原圖邊緣延伸到留白, 並往外柔化與衰減
@@ -540,7 +550,7 @@ def _draw_ray_strip(
 
         # 將目前的像素列模糊後作為下一列
         if index < depth - 1:
-            strip = _gaussian_blur(strip, 5)
+            strip = blur(strip)
 
 
 def _render_ray(image: QImage, size: QSize, ray_mode: RayMode, ray_decay: int) -> QImage:
@@ -567,14 +577,18 @@ def _render_ray(image: QImage, size: QSize, ray_mode: RayMode, ray_decay: int) -
     image = _opaque_on_black(image)
     inner_distance = (fitted.width() if sideways else fitted.height()) / 2
 
-    with QPainter(result) as painter:
+    with QPainter(result) as painter, ExitStack() as resources:
 
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        blur = None
 
         for leading, gutter in ((True, leading_gap), (False, trailing_gap)):
 
             if not gutter:
                 continue
+
+            if blur is None:
+                blur = resources.enter_context(_gdiplus_blur(5))
 
             # 繪製矩形朝原圖延伸一個像素, 避免取整時露出黑線
             start = 0 if leading else extent - gutter - 1
@@ -589,7 +603,7 @@ def _render_ray(image: QImage, size: QSize, ray_mode: RayMode, ray_decay: int) -
 
             _draw_ray_strip(
                 painter, target, edge, sideways=sideways, leading=leading,
-                inner_distance=inner_distance, ray_mode=ray_mode, ray_decay=ray_decay
+                inner_distance=inner_distance, ray_mode=ray_mode, ray_decay=ray_decay, blur=blur
             )
 
         painter.drawImage(fitted, image, source)
