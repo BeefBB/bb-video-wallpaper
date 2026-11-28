@@ -579,17 +579,9 @@ class ConfigStore:
             return False
 
 
-    def load_language(self, language_code: str = "") -> dict:
+    def load_language(self) -> dict:
 
-        config = self.load()
-
-        if language_code:
-            config["language"] = language_code
-            self.save(config)
-
-        else:
-            language_code = config["language"]
-
+        language_code = self.load()["language"]
         path = self.lang_dir / f"{language_code}.json"
         if not path.is_file():
             path = self.lang_dir / "zh-TW.json"

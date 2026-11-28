@@ -11,7 +11,7 @@ from PySide6.QtGui import QAction, QColor, QCursor, QImage, QPainter, QPixmap, Q
 
 from config import get_scaling_mode
 from display_painting import fit_image_rect
-from thumbnails import DEFAULT_RAY_DECAY, ThumbnailThread, get_ray_mode
+from thumbnails import ThumbnailThread, get_ray_mode
 from windows_integration import screen_pixel_size
 
 
@@ -247,8 +247,8 @@ class MediaPreviewMenu(QMenu):
         )
 
 
-    @Slot(str, int, QImage)
-    def update_preview(self, media_path: str, preview_size: int, image: QImage) -> None:
+    @Slot(str, QImage, int)
+    def update_preview(self, media_path: str, image: QImage, preview_size: int) -> None:
 
         if image.isNull() or not self._matches_preview(media_path, preview_size):
             return
@@ -274,12 +274,12 @@ class MediaPreviewMenu(QMenu):
         self.display_preview()
 
 
-    @Slot(str, int, QSize, str, int, QImage)
+    @Slot(str, int, QSize, str, QImage)
     def update_ray_preview(
-        self, media_path: str, preview_size: int, screen_size: QSize, ray_mode: str, decay: int, image: QImage
+        self, media_path: str, preview_size: int, screen_size: QSize, ray_mode: str, image: QImage
     ) -> None:
 
-        if decay != DEFAULT_RAY_DECAY or image.isNull() or not self._matches_preview(media_path, preview_size):
+        if image.isNull() or not self._matches_preview(media_path, preview_size):
             return
 
         path = Path(media_path)

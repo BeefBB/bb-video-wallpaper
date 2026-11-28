@@ -256,11 +256,12 @@ class FollowController:
         self._pending_selection.intersection_update(self.graph.sources)
 
 
-    def on_ready(self, screen_id: str, wallpaper: FollowWallpaper) -> None:
+    def on_ready(self, wallpaper: FollowWallpaper) -> None:
         """
         只處理登錄表中仍指向同一桌布物件的通知
         """
 
+        screen_id = wallpaper.screen_id
         if not self.is_exiting and self.wallpapers.get(screen_id) is wallpaper:
             self.synchronize(screen_id)
 

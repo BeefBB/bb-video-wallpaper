@@ -461,7 +461,7 @@ class PlaybackStateTests(QtTestCase):
         wallpaper.auto_pause_handler = self.tray.follow_controller.check_auto_pause
         for signal in (wallpaper.playback_started, wallpaper.reattach_finished):
             signal.connect(
-                lambda s=wallpaper.screen_id, w=wallpaper: self.tray.follow_controller.on_ready(s, w),
+                lambda w=wallpaper: self.tray.follow_controller.on_ready(w),
                 Qt.ConnectionType.QueuedConnection
             )
 
@@ -564,21 +564,20 @@ class PlaybackStateTests(QtTestCase):
 
         landscape = QImage(320, 180, QImage.Format.Format_RGB32)
         portrait = QImage(240, 360, QImage.Format.Format_RGB32)
-        decay = self.namespace["DEFAULT_RAY_DECAY"]
         path = str(self.image_path)
-        QTimer.singleShot(0, lambda: self.tray.apply_ray_background(path, landscape.size(), "ray1", decay, landscape))
+        QTimer.singleShot(0, lambda: self.tray.apply_ray_background(path, landscape.size(), "ray1", landscape))
         self.tray.set_background_color(screen_id, "ray2")
         self.app.processEvents()
         self.assertIsNone(self.wallpaper.background_image_key)
         self.assertIsNone(second.background_image_key)
 
-        self.tray.apply_ray_background(path, portrait.size(), "ray2", decay, portrait)
+        self.tray.apply_ray_background(path, portrait.size(), "ray2", portrait)
         self.assertIsNone(self.wallpaper.background_image_key)
         self.assertEqual(second.background_image_key, ("ray2", portrait.size()))
         second.instance_image.set_background_image.assert_called_with(portrait, includes_foreground=True)
         self.assertIsNone(second.instance_video._background_image)
 
-        self.tray.apply_ray_background(path, landscape.size(), "ray2", decay, landscape)
+        self.tray.apply_ray_background(path, landscape.size(), "ray2", landscape)
         self.assertEqual(self.wallpaper.background_image_key, ("ray2", landscape.size()))
         self.wallpaper.instance_image.set_background_image.assert_called_with(landscape, includes_foreground=True)
 
@@ -590,7 +589,7 @@ class PlaybackStateTests(QtTestCase):
         self.tray.thumbnail_thread.request.assert_called_once_with(
             self.image_path, "background_ray", screen_size=(300, 450), ray_mode="ray2"
         )
-        self.tray.apply_ray_background(path, portrait.size(), "ray2", decay, portrait)
+        self.tray.apply_ray_background(path, portrait.size(), "ray2", portrait)
         self.assertIsNone(second.background_image_key)
 
 
@@ -626,9 +625,7 @@ class PlaybackStateTests(QtTestCase):
 
         monitors[(0, 0)] = 1
         image = QImage(240, 360, QImage.Format.Format_RGB32)
-        self.tray.apply_ray_background(
-            str(self.image_path), image.size(), "ray1", self.namespace["DEFAULT_RAY_DECAY"], image
-        )
+        self.tray.apply_ray_background(str(self.image_path), image.size(), "ray1", image)
         self.assertIsNone(self.wallpaper.background_image_key)
         self.assertEqual(second.background_image_key, ("ray1", image.size()))
 

@@ -33,7 +33,7 @@ SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp",}
 SUPPORTED_MEDIA_EXTENSIONS = (SUPPORTED_VIDEO_EXTENSIONS | SUPPORTED_IMAGE_EXTENSIONS)
 ImageKind = Literal["thumbnail_orig", "thumbnail_blur", "background_blur", "thumbnail_ray", "background_ray"]
 RayMode = Literal["ray1", "ray2"]
-ThumbnailRequest = tuple[Path, ImageKind, int | None, tuple[int, int] | None, RayMode, int]
+ThumbnailRequest = tuple[Path, ImageKind, int | None, tuple[int, int] | None, RayMode]
 DEFAULT_RAY_MODE: RayMode = "ray2"
 CACHE_NAME = re.compile(
     r"(?P<source>[0-9a-f]{16})-(?P<digest>[0-9a-f]{8})-"
@@ -42,7 +42,7 @@ CACHE_NAME = re.compile(
 )
 
 # 光暈亮度衰減
-DEFAULT_RAY_DECAY = 55
+RAY_DECAY = 55
 
 
 def get_ray_mode(path: Path, background: str | None) -> RayMode | None:
@@ -512,7 +512,7 @@ def _opaque_on_black(image: QImage) -> QImage:
 def _draw_ray_strip(
     painter: QPainter, target: QRect, strip: QImage, *,
     sideways: bool, leading: bool, inner_distance: float,
-    ray_mode: RayMode, ray_decay: int, blur: Callable[[QImage], QImage]
+    ray_mode: RayMode, blur: Callable[[QImage], QImage]
 ) -> None:
     """
     依指定的方向將原圖邊緣延伸到留白, 並往外柔化與衰減
@@ -545,7 +545,7 @@ def _draw_ray_strip(
         painter.drawImage(destination, strip, sample)
 
         # 亮度衰減
-        darken = ray_decay / 100 * progress ** 2
+        darken = RAY_DECAY / 100 * progress ** 2
         painter.fillRect(destination, QColor.fromRgbF(0.0, 0.0, 0.0, darken))
 
         # 將目前的像素列模糊後作為下一列
@@ -553,7 +553,7 @@ def _draw_ray_strip(
             strip = blur(strip)
 
 
-def _render_ray(image: QImage, size: QSize, ray_mode: RayMode, ray_decay: int) -> QImage:
+def _render_ray(image: QImage, size: QSize, ray_mode: RayMode) -> QImage:
     """
     依指定尺寸合成原圖與光暈背景
     """
@@ -603,7 +603,7 @@ def _render_ray(image: QImage, size: QSize, ray_mode: RayMode, ray_decay: int) -
 
             _draw_ray_strip(
                 painter, target, edge, sideways=sideways, leading=leading,
-                inner_distance=inner_distance, ray_mode=ray_mode, ray_decay=ray_decay, blur=blur
+                inner_distance=inner_distance, ray_mode=ray_mode, blur=blur
             )
 
         painter.drawImage(fitted, image, source)
@@ -640,8 +640,7 @@ def ensure_thumbnail(
     background_dir: Path,
     preview_size: int | None = None,
     screen_size: tuple[int, int] | None = None,
-    ray_mode: RayMode = DEFAULT_RAY_MODE,
-    ray_decay: int = DEFAULT_RAY_DECAY
+    ray_mode: RayMode = DEFAULT_RAY_MODE
 ) -> Path:
     """
     驗證指定成品的快取, 缺少時產生並回傳路徑
@@ -662,9 +661,7 @@ def ensure_thumbnail(
         if is_ray:
             if ray_mode not in ("ray1", "ray2"):
                 raise ValueError("光暈模式需為 ray1 或 ray2")
-            if type(ray_decay) is not int or not 0 <= ray_decay <= 100:
-                raise ValueError("光暈衰減需為 0 到 100 的整數")
-            variant = f"{ray_mode}-{ray_decay}-{width}-{height}"
+            variant = f"{ray_mode}-{RAY_DECAY}-{width}-{height}"
         else:
             variant = f"blur-{width}-{height}"
 
@@ -730,7 +727,7 @@ def ensure_thumbnail(
 
         background_path = ensure_thumbnail(
             path, cancelled, kind="background_ray", media_dir=media_dir, thumbnail_dir=thumbnail_dir,
-            background_dir=background_dir, screen_size=screen_size, ray_mode=ray_mode, ray_decay=ray_decay
+            background_dir=background_dir, screen_size=screen_size, ray_mode=ray_mode
         )
         image = QImage(str(background_path))
 
@@ -749,7 +746,7 @@ def ensure_thumbnail(
         raise InterruptedError("縮圖工作已取消")
 
     if kind == "background_ray" and canvas_size is not None:
-        image = _render_ray(image, canvas_size, ray_mode, ray_decay)
+        image = _render_ray(image, canvas_size, ray_mode)
     elif blur_path is not None and canvas_size is not None:
         background = QImage(str(blur_path))
         if background.isNull() or background.size() != image.size():
@@ -837,11 +834,11 @@ class ImageCacheClearThread(QThread):
     逐一刪除縮圖與桌布背景圖
     """
 
-    def __init__(self, thumbnail_dir: Path, background_dir: Path) -> None:
+    def __init__(self, thumbnail_dir: Path) -> None:
 
         super().__init__()
 
-        self.cache_dirs = (thumbnail_dir, background_dir)
+        self.cache_dirs = (thumbnail_dir, thumbnail_dir.parent / "backgrounds")
 
     def iter_png_files(self) -> Iterator[Path]:
         """
@@ -888,23 +885,22 @@ class ThumbnailThread(QThread):
     依序處理縮圖要求, 預覽項目可插隊, 同一路徑, 種類與尺寸不重複加入
     """
 
-    thumbnail_ready = Signal(str, int, QImage)
+    # 自動取色只接收路徑與圖片
+    thumbnail_ready = Signal(str, QImage, int)
     blurred_thumbnail_ready = Signal(str, int, QSize, QImage)
     background_ready = Signal(str, QImage)
-    ray_thumbnail_ready = Signal(str, int, QSize, str, int, QImage)
-    ray_background_ready = Signal(str, QSize, str, int, QImage)
+    ray_thumbnail_ready = Signal(str, int, QSize, str, QImage)
+    ray_background_ready = Signal(str, QSize, str, QImage)
 
 
-    def __init__(
-        self, media_dir: Path, thumbnail_dir: Path, parent=None, *, background_dir: Path | None = None
-    ) -> None:
+    def __init__(self, media_dir: Path, thumbnail_dir: Path, parent=None) -> None:
 
         super().__init__(parent)
 
 
         self.media_dir = media_dir
         self.thumbnail_dir = thumbnail_dir
-        self.background_dir = background_dir if background_dir is not None else thumbnail_dir.parent / "backgrounds"
+        self.background_dir = thumbnail_dir.parent / "backgrounds"
 
         self.queue: deque[ThumbnailRequest] = deque()
         self.pending: set[ThumbnailRequest] = set()
@@ -915,7 +911,7 @@ class ThumbnailThread(QThread):
     def request(
         self, path: Path, kind: ImageKind, *other_kinds: ImageKind, preview_size: int | None = None,
         screen_size: tuple[int, int] | None = None, ray_mode: RayMode = DEFAULT_RAY_MODE,
-        ray_decay: int = DEFAULT_RAY_DECAY, priority: bool = False
+        priority: bool = False
     ) -> None:
         """
         按傳入順序排程, 每個種類各自產生和回傳
@@ -933,8 +929,7 @@ class ThumbnailThread(QThread):
                 is_ray = image_kind in ("background_ray", "thumbnail_ray")
                 size = screen_size if is_ray or image_kind == "thumbnail_blur" else None
                 mode = ray_mode if is_ray else DEFAULT_RAY_MODE
-                decay = ray_decay if is_ray else DEFAULT_RAY_DECAY
-                request = (path, image_kind, preview_size, size, mode, decay)
+                request = (path, image_kind, preview_size, size, mode)
                 if request in self.pending:
 
                     if not priority:
@@ -979,14 +974,14 @@ class ThumbnailThread(QThread):
 
                 request = self.queue.popleft()
 
-            path, kind, preview_size, screen_size, ray_mode, ray_decay = request
+            path, kind, preview_size, screen_size, ray_mode = request
 
             try:
 
                 image_path = ensure_thumbnail(
                     path, self.isInterruptionRequested, kind=kind, media_dir=self.media_dir,
                     thumbnail_dir=self.thumbnail_dir, background_dir=self.background_dir, preview_size=preview_size,
-                    screen_size=screen_size, ray_mode=ray_mode, ray_decay=ray_decay
+                    screen_size=screen_size, ray_mode=ray_mode
                 )
                 image = QImage(str(image_path))
                 if image.isNull():
@@ -1006,17 +1001,17 @@ class ThumbnailThread(QThread):
             if not self.isInterruptionRequested():
 
                 if kind == "background_ray" and screen_size is not None:
-                    self.ray_background_ready.emit(str(path), QSize(*screen_size), ray_mode, ray_decay, image)
+                    self.ray_background_ready.emit(str(path), QSize(*screen_size), ray_mode, image)
                 elif kind == "thumbnail_ray" and preview_size is not None and screen_size is not None:
                     self.ray_thumbnail_ready.emit(
-                        str(path), preview_size, QSize(*screen_size), ray_mode, ray_decay, image
+                        str(path), preview_size, QSize(*screen_size), ray_mode, image
                     )
                 elif kind == "background_blur":
                     self.background_ready.emit(str(path), image)
                 elif kind == "thumbnail_blur" and preview_size is not None and screen_size is not None:
                     self.blurred_thumbnail_ready.emit(str(path), preview_size, QSize(*screen_size), image)
                 elif kind == "thumbnail_orig" and preview_size is not None:
-                    self.thumbnail_ready.emit(str(path), preview_size, image)
+                    self.thumbnail_ready.emit(str(path), image, preview_size)
 
 
     def stop(self) -> None:

@@ -28,7 +28,7 @@ if __name__ == "__main__":
 
 from app_loader import QtTestCase
 import media_preview
-from thumbnails import DEFAULT_RAY_DECAY, ImageKind, ThumbnailThread, ensure_thumbnail
+from thumbnails import ImageKind, ThumbnailThread, ensure_thumbnail
 
 
 VLC_DIR = ROOT / "VLC-lite"
@@ -259,15 +259,15 @@ class ThumbnailThreadTests(QtTestCase):
         self.addCleanup(worker.stop)
         self.addCleanup(release.set)
         worker.thumbnail_ready.connect(
-            lambda path, size, image: completed.set() if Path(path) == last else None,
+            lambda path: completed.set() if Path(path) == last else None,
             Qt.ConnectionType.DirectConnection
         )
         worker.thumbnail_ready.connect(
-            lambda path, size, image: clear_ready.set() if Path(path) == queued else None,
+            lambda path: clear_ready.set() if Path(path) == queued else None,
             Qt.ConnectionType.DirectConnection
         )
         worker.blurred_thumbnail_ready.connect(
-            lambda path, size, screen_size, image: blur_ready.set() if Path(path) == queued else None,
+            lambda path: blur_ready.set() if Path(path) == queued else None,
             Qt.ConnectionType.DirectConnection
         )
         worker.request(first, "thumbnail_orig", preview_size=3)
@@ -301,9 +301,9 @@ class ThumbnailWorker(QObject):
     由測試控制縮圖結果訊號
     """
 
-    thumbnail_ready = Signal(str, int, QImage)
+    thumbnail_ready = Signal(str, QImage, int)
     blurred_thumbnail_ready = Signal(str, int, QSize, QImage)
-    ray_thumbnail_ready = Signal(str, int, QSize, str, int, QImage)
+    ray_thumbnail_ready = Signal(str, int, QSize, str, QImage)
 
     def __init__(self) -> None:
         super().__init__()
@@ -357,7 +357,7 @@ class MediaPreviewTests(QtTestCase):
         image.fill(color)
         path = self.action.data()
         if screen_size is None:
-            thread = threading.Thread(target=self.worker.thumbnail_ready.emit, args=(path, size, image))
+            thread = threading.Thread(target=self.worker.thumbnail_ready.emit, args=(path, image, size))
         else:
             thread = threading.Thread(
                 target=self.worker.blurred_thumbnail_ready.emit, args=(path, size, screen_size, image)
@@ -492,13 +492,13 @@ class MediaPreviewTests(QtTestCase):
         image.fill(Qt.GlobalColor.blue)
         self.menu.display_config["backgroundColor"][path.name] = "ray2"
         emit = self.worker.ray_thumbnail_ready.emit
-        emit(str(path), 3, QSize(300, 600), "ray1", DEFAULT_RAY_DECAY, image)
-        emit(str(path), 3, QSize(200, 400), "ray2", DEFAULT_RAY_DECAY, image)
+        emit(str(path), 3, QSize(300, 600), "ray1", image)
+        emit(str(path), 3, QSize(200, 400), "ray2", image)
         self.assertIsNone(self.menu.ray_thumbnail)
 
         pixel_size.return_value = None
         self.worker.request.reset_mock()
-        emit(str(path), 3, QSize(300, 600), "ray2", DEFAULT_RAY_DECAY, image)
+        emit(str(path), 3, QSize(300, 600), "ray2", image)
         self.assertIsNone(self.menu.ray_thumbnail)
         self.worker.request.assert_called_once_with(path, "thumbnail_orig", preview_size=3, priority=True)
 
@@ -507,7 +507,7 @@ class MediaPreviewTests(QtTestCase):
         self.worker.request.assert_called_once_with(path, "thumbnail_orig", preview_size=3, priority=True)
 
         pixel_size.return_value = QSize(300, 600)
-        emit(str(path), 3, QSize(300, 600), "ray2", DEFAULT_RAY_DECAY, image)
+        emit(str(path), 3, QSize(300, 600), "ray2", image)
         self.queue_thumbnail(3, Qt.GlobalColor.red)
         self.app.processEvents()
         result = self.menu.preview.pixmap().toImage()

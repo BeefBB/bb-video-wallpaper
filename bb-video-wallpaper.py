@@ -25,7 +25,6 @@ from media_preview import MediaPreviewMenu
 from playback import AutoPauseReason, PlaybackState, update_auto_pause
 from screen_follow import AutoPauseHandler, FollowController
 from thumbnails import (
-    DEFAULT_RAY_DECAY,
     SUPPORTED_VIDEO_EXTENSIONS,
     SUPPORTED_IMAGE_EXTENSIONS,
     SUPPORTED_MEDIA_EXTENSIONS,
@@ -289,8 +288,9 @@ class MediaImportThread(QThread):
                 self.progress.emit(self, min(99, completed_size * 100 // max(1, total_size)), index, True)
 
                 copying = False
+                source_size = size
 
-                def report_progress(percent: int, source_size: int = size) -> None:
+                def report_progress(percent: int) -> None:
                     """
                     將單檔複製百分比換算為整批進度
                     """
@@ -1107,7 +1107,7 @@ class Tray:
         self.thumbnail_thread.ray_background_ready.connect(self.apply_ray_background, Qt.ConnectionType.QueuedConnection)
 
         # 清除圖片快取的背景執行緒
-        self.image_cache_clear_thread = ImageCacheClearThread(THUMBNAIL_DIR, THUMBNAIL_DIR.parent / "backgrounds")
+        self.image_cache_clear_thread = ImageCacheClearThread(THUMBNAIL_DIR)
 
         # 設定檔
         config = config_store.load()
@@ -1383,7 +1383,7 @@ class Tray:
 
         for signal in (wallpaper.playback_started, wallpaper.reattach_finished):
             signal.connect(
-                lambda s=wallpaper.screen_id, w=wallpaper: self.follow_controller.on_ready(s, w),
+                lambda w=wallpaper: self.follow_controller.on_ready(w),
                 Qt.ConnectionType.QueuedConnection
             )
         wallpaper.show()
@@ -1814,10 +1814,10 @@ class Tray:
 
 
     def apply_ray_background(
-        self, media_path: str, screen_size: QSize, ray_mode: RayMode, decay: int, image: QImage
+        self, media_path: str, screen_size: QSize, ray_mode: RayMode, image: QImage
     ) -> None:
 
-        if decay == DEFAULT_RAY_DECAY and image.size() == screen_size:
+        if image.size() == screen_size:
             self.apply_background_image(media_path, image, (ray_mode, screen_size))
 
 
@@ -1843,7 +1843,7 @@ class Tray:
                 wallpaper.set_background_image(image, key)
 
 
-    def apply_background_color(self, media_path: str, preview_size: int, image: QImage) -> None:
+    def apply_background_color(self, media_path: str, image: QImage) -> None:
         """
         從縮圖取得平均色, 保存並套用為背景色
         """
@@ -1986,14 +1986,13 @@ class Tray:
     def add_media_menu_action(
         self,
         media_path: Path,
-        screen_id: str | None = None,
-        menu: MediaPreviewMenu | None = None
+        screen_id: str | None,
+        menu: MediaPreviewMenu
     ) -> None:
         """
         新增媒體選單項目
         """
 
-        menu = self.media_menu if menu is None else menu
         menu.setToolTipsVisible(True)
 
         wallpaper = self.wallpapers.get(screen_id) if screen_id is not None else None
@@ -2035,7 +2034,7 @@ class Tray:
         self.restart()
 
 
-    def play_from_menu(self, path: Path, screen_id: str | None = None) -> None:
+    def play_from_menu(self, path: Path, screen_id: str | None) -> None:
 
         if screen_id is None and len(self.wallpapers) == 1:
             screen_id = next(iter(self.wallpapers))
@@ -2123,11 +2122,9 @@ class Tray:
             self.cancel_import_action.setEnabled(False)
 
 
-    def finish_import(self, expected_worker: MediaImportThread | None = None) -> None:
+    def finish_import(self, worker: MediaImportThread) -> None:
 
-        worker = self.import_thread
-
-        if worker is None or (expected_worker is not None and worker is not expected_worker):
+        if self.import_thread is not worker:
             return
 
         screen_ids: tuple[str, ...] = ()

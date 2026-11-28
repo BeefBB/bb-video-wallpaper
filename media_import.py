@@ -29,7 +29,7 @@ def check_import_cancelled(cancelled: Callable[[], bool]) -> None:
         raise MediaImportCancelled()
 
 
-def calculate_sha256(path: Path, cancelled: Callable[[], bool] = lambda: False) -> bytes:
+def calculate_sha256(path: Path, cancelled: Callable[[], bool]) -> bytes:
     """
     計算 SHA-256
     """
@@ -56,7 +56,7 @@ def import_media(
     import_dir: Path,
     *,
     translate: Callable[[str], str],
-    progress: Callable[[int], None] | None = None,
+    progress: Callable[[int], None] | None,
     cancelled: Callable[[], bool] = lambda: False,
     expected_size: int | None = None
 ) -> Path:

@@ -399,7 +399,7 @@ class Instance(QObject):
             self._start_player()
 
 
-    def set_scaling(self, mode: str, background_color: QColor | str = "#000000") -> None:
+    def set_scaling(self, mode: str, background_color: QColor | str) -> None:
         """
         設定縮放模式(fill/fit/stretch)及不透明背景色
         """
