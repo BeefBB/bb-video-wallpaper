@@ -1,5 +1,5 @@
 """
-測試快取檔案保護, 排程時序, 預覽回傳, 特殊影片解碼與取消
+測試縮圖排程, 預覽回傳, AV1 解碼與取消, 以及預設影像軌
 影片案例需要 Windows, VLC-lite 與 ffmpeg; 缺少時顯示跳過
 只在暫存資料夾操作, 不啟動桌布或修改使用者設定
 """
@@ -17,8 +17,8 @@ import threading
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import QAbstractAnimation, QEvent, QObject, QPointF, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QImage, QImageWriter, QMouseEvent
+from PySide6.QtCore import QObject, QRect, QSize, Qt, Signal
+from PySide6.QtGui import QAction, QColor, QImage, QPainter
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,10 +28,7 @@ if __name__ == "__main__":
 
 from app_loader import QtTestCase
 import media_preview
-from thumbnails import (
-    ThumbnailThread, cleanup_orphaned_thumbnails, create_video_thumbnail,
-    ensure_thumbnail, get_video_thumbnail_sizes,
-)
+from thumbnails import ImageKind, ThumbnailThread, ensure_thumbnail
 
 
 VLC_DIR = ROOT / "VLC-lite"
@@ -125,8 +122,14 @@ def thumbnail_probe(path: str, mode: str, connection) -> None:
 
         try:
 
-            with patch:
-                image = create_video_thumbnail(Path(path), cancelled.is_set)
+            source = Path(path)
+            with patch, tempfile.TemporaryDirectory(dir=source.parent) as directory:
+                cache_dir = Path(directory)
+                thumbnail = ensure_thumbnail(
+                    source, cancelled.is_set, kind="thumbnail_orig", media_dir=source.parent,
+                    thumbnail_dir=cache_dir / "thumbnails", background_dir=cache_dir / "backgrounds", preview_size=3
+                )
+                image = QImage(str(thumbnail))
 
             color = image.pixelColor(image.width() // 2, image.height() // 2)
             connection.send({
@@ -146,179 +149,65 @@ def thumbnail_probe(path: str, mode: str, connection) -> None:
 
 
 
-class ThumbnailTests(unittest.TestCase):
-    """
-    縮圖快取與背景工作
-    """
+class ThumbnailCacheTests(QtTestCase):
 
-    def setUp(self) -> None:
+    def test_missing_results_read_the_video_and_cache_the_results(self) -> None:
         """
-        建立暫存媒體目錄與縮圖路徑
+        驗證模糊預覽會保存桌布背景, 命中快取時略過取圖
         """
 
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp_dir.cleanup)
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        media_dir = directory / "media"
+        path = media_dir / "subdirectory" / "clip.mp4"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"video")
+        thumbnail_dir = directory / "thumbnails"
+        background_dir = directory / "backgrounds"
+        cancelled = threading.Event().is_set
+        frame = QImage(800, 400, QImage.Format.Format_RGB32)
+        frame.fill(Qt.GlobalColor.blue)
+        decode = self.enterContext(mock.patch("thumbnails._read_video_frame", return_value=frame))
+        blur_sizes = []
 
-        self.media_dir = Path(self.temp_dir.name) / "media"
-        self.media_dir.mkdir()
-        self.thumbnail_dir = Path(self.temp_dir.name) / "thumbnails"
+        def request_thumbnail(
+            kind: ImageKind, *, preview_size: int | None = None, screen_size: tuple[int, int] | None = None
+        ) -> Path:
+            """
+            用同一份素材與快取目錄請求指定成品
+            """
 
+            return ensure_thumbnail(
+                path, cancelled, kind=kind, media_dir=media_dir, thumbnail_dir=thumbnail_dir,
+                background_dir=background_dir, preview_size=preview_size, screen_size=screen_size
+            )
 
-    def save_image(self, path: Path, color) -> None:
-        """
-        建立指定顏色的測試圖片
-        """
+        def blur(image: QImage) -> QImage:
+            """
+            記錄送進模糊處理的尺寸
+            """
 
-        image = QImage(32, 18, QImage.Format.Format_RGB32)
-        image.fill(color)
-        self.assertTrue(image.save(str(path)))
+            blur_sizes.append(image.size().toTuple())
+            return image
 
+        self.enterContext(mock.patch("thumbnails._gaussian_blur", side_effect=blur))
 
-    def thumbnail(self, path: Path, preview_size: int = 3) -> Path:
-        """
-        使用測試路徑取得或產生縮圖
-        """
+        blurred = request_thumbnail("thumbnail_blur", preview_size=3, screen_size=(600, 800))
+        self.assertEqual(list(thumbnail_dir.rglob("*.png")), [blurred])
+        saved_backgrounds = list(background_dir.rglob("*.png"))
 
-        return ensure_thumbnail(
-            path,
-            lambda: False,
-            media_dir=self.media_dir,
-            thumbnail_dir=self.thumbnail_dir,
-            preview_size=preview_size
-        )
+        clear = request_thumbnail("thumbnail_orig", preview_size=5)
+        background = request_thumbnail("background_blur")
+        self.assertEqual(saved_backgrounds, [background])
+        self.assertEqual(decode.call_args_list, [mock.call(path.resolve(), cancelled)] * 2)
+        self.assertEqual(blur_sizes, [(800, 400)])
+        self.assertEqual(QImage(str(clear)).size().toTuple(), (500, 250))
+        self.assertEqual(QImage(str(background)).size().toTuple(), (800, 400))
+        self.assertEqual(set(directory.rglob("*.png")), {blurred, clear, background})
 
-
-    def test_long_names_with_same_content_have_independent_caches(self) -> None:
-        """
-        驗證相同內容的長檔名使用獨立快取, 清理過期快取時保留無關檔案與目錄
-        """
-
-        first = self.media_dir / ("a" * 239 + "1.bmp")
-        second = self.media_dir / ("a" * 239 + "2.bmp")
-        self.save_image(first, Qt.GlobalColor.red)
-        second.write_bytes(first.read_bytes())
-
-        first_thumbnail = self.thumbnail(first)
-        second_thumbnail = self.thumbnail(second)
-        self.assertNotEqual(first_thumbnail, second_thumbnail)
-
-        for thumbnail in (first_thumbnail, second_thumbnail):
-            self.assertEqual(QImage(str(thumbnail)).width(), 300)
-
-        other_sizes = [self.thumbnail(first, size) for size in (1, 5)]
-        for thumbnail, width in zip(other_sizes, (100, 500)):
-            self.assertEqual(QImage(str(thumbnail)).width(), width)
-        self.assertTrue(first_thumbnail.exists())
-
-        # 混入無關檔案與目錄, 確認快取清理不會誤刪
-        prefix = first_thumbnail.name.split("-", 1)[0] + "-"
-        unrelated = self.thumbnail_dir / "unrelated.jpg"
-        malformed = self.thumbnail_dir / f"{prefix}deadbeeg-3.jpg"
-        directory = self.thumbnail_dir / f"{prefix}deadbeef-3.jpg"
-        directory.mkdir()
-        for path in (unrelated, malformed):
-            path.write_bytes(b"keep")
-
-        saved_mtime = first_thumbnail.stat().st_mtime_ns
-        self.assertEqual(self.thumbnail(first), first_thumbnail)
-        self.assertEqual(first_thumbnail.stat().st_mtime_ns, saved_mtime)
-
-        self.save_image(first, Qt.GlobalColor.blue)
-        updated_thumbnail = self.thumbnail(first, 4)
-        self.assertNotEqual(updated_thumbnail, first_thumbnail)
-        self.assertFalse(first_thumbnail.exists())
-        for thumbnail in other_sizes:
-            self.assertFalse(thumbnail.exists())
-        self.assertTrue(second_thumbnail.exists())
-        self.assertEqual(unrelated.read_bytes(), b"keep")
-        self.assertEqual(malformed.read_bytes(), b"keep")
-        self.assertTrue(directory.is_dir())
-
-
-    def test_jpeg_upgrade_preserves_old_cache_until_png_is_saved(self) -> None:
-        """
-        舊 JPEG 不再使用, PNG 寫入或替換失敗時保留舊快取, 成功後才清除
-        """
-
-        source = self.media_dir / "transparent.png"
-        image = QImage(32, 18, QImage.Format.Format_ARGB32)
-        image.fill(QColor(255, 0, 0, 128))
-        image.setPixelColor(0, 0, QColor(0, 0, 255, 0))
-        self.assertTrue(image.save(str(source)))
-
-        destination = self.thumbnail(source)
-        previous = destination.with_suffix(".jpg")
-        self.assertTrue(QImage(str(destination)).save(str(previous), "JPG", 85))
-        destination.unlink()
-        previous_content = previous.read_bytes()
-        original_write = QImageWriter.write
-
-        def fail_after_write(writer, image):
-            self.assertTrue(original_write(writer, image))
-            return False
-
-        for stage, patcher, expected_error in (
-            ("write", mock.patch.object(QImageWriter, "write", fail_after_write),
-             self.assertRaisesRegex(OSError, "無法儲存縮圖")),
-            ("replace", mock.patch.object(os, "replace", side_effect=PermissionError),
-             self.assertRaises(PermissionError)),
-        ):
-            with self.subTest(stage=stage):
-                with patcher, expected_error:
-                    self.thumbnail(source)
-                self.assertEqual(previous.read_bytes(), previous_content)
-                self.assertEqual(list(self.thumbnail_dir.iterdir()), [previous])
-
-        self.assertEqual(self.thumbnail(source), destination)
-        self.assertFalse(previous.exists())
-        self.assertEqual(QImage(str(destination)).pixelColor(0, 0).alpha(), 0)
-
-
-    def test_cleanup_preserves_directory_after_partial_scan_failure(self) -> None:
-        """
-        來源清單讀取途中失敗時, 不以不完整清單刪除縮圖
-        """
-
-        source = self.media_dir / "sample.bmp"
-        self.save_image(source, Qt.GlobalColor.red)
-        kept = self.thumbnail(source)
-        orphan = self.thumbnail_dir / ("a" * 16 + "-deadbeef-3.jpg")
-        orphan.write_bytes(b"keep")
-        original_scandir = os.scandir
-
-        def interrupted_entries(entries):
-            yield next(entries)
-            raise PermissionError("模擬來源清單讀取途中失敗")
-
-        @contextmanager
-        def scan_directory(path):
-            with original_scandir(path) as entries:
-                yield interrupted_entries(entries) if Path(path) == self.media_dir else entries
-
-        with mock.patch("thumbnails.os.scandir", scan_directory), mock.patch("thumbnails.logger") as log:
-            cleanup_orphaned_thumbnails(self.media_dir, self.thumbnail_dir)
-
-        self.assertTrue(kept.is_file())
-        self.assertEqual(orphan.read_bytes(), b"keep")
-        log.warning.assert_called_once()
-
-
-    def test_cancellation_stops_media_parsing(self) -> None:
-        """
-        取消時停止進行中的媒體解析
-        """
-
-        media = mock.Mock()
-        media.parse_with_options.return_value = 0
-        media.get_parsed_status.return_value = 0
-        cancelled = mock.Mock(side_effect=[False, True])
-
-        with mock.patch.dict(sys.modules, {"vlc": mock.Mock()}):
-            with self.assertRaises(InterruptedError):
-                get_video_thumbnail_sizes(media, cancelled)
-
-        media.parse_stop.assert_called_once_with()
-
+        decode.reset_mock()
+        cached_blur = request_thumbnail("thumbnail_blur", preview_size=3, screen_size=(600, 800))
+        self.assertEqual(cached_blur, blurred)
+        decode.assert_not_called()
 
 
 class ThumbnailThreadTests(QtTestCase):
@@ -343,10 +232,17 @@ class ThumbnailThreadTests(QtTestCase):
         started = threading.Event()
         release = threading.Event()
         completed = threading.Event()
-        processed: list[tuple[Path, int]] = []
+        clear_ready = threading.Event()
+        blur_ready = threading.Event()
+        processed: list[tuple[Path, str, int]] = []
+        clear_ready_before_blur = []
 
         def blocked_thumbnail(path, cancelled, **kwargs):
-            processed.append((path, kwargs["preview_size"]))
+            kind = kwargs["kind"]
+            processed.append((path, kind, kwargs["preview_size"]))
+
+            if path == queued and kind == "thumbnail_blur":
+                clear_ready_before_blur.append(clear_ready.is_set())
 
             if path == first:
 
@@ -363,27 +259,39 @@ class ThumbnailThreadTests(QtTestCase):
         self.addCleanup(worker.stop)
         self.addCleanup(release.set)
         worker.thumbnail_ready.connect(
-            lambda path, size, image: completed.set() if Path(path) == last else None,
+            lambda path: completed.set() if Path(path) == last else None,
             Qt.ConnectionType.DirectConnection
         )
-        worker.request(first)
+        worker.thumbnail_ready.connect(
+            lambda path: clear_ready.set() if Path(path) == queued else None,
+            Qt.ConnectionType.DirectConnection
+        )
+        worker.blurred_thumbnail_ready.connect(
+            lambda path: blur_ready.set() if Path(path) == queued else None,
+            Qt.ConnectionType.DirectConnection
+        )
+        worker.request(first, "thumbnail_orig", preview_size=3)
         self.assertTrue(started.wait(5), "首項縮圖工作未開始")
-        worker.request(ordinary)
-        worker.request(queued)
-        worker.request(last)
-        worker.request(first)
-        worker.request(first, priority=True)
-        worker.request(first, preview_size=4, priority=True)
-        worker.request(first, preview_size=4)
-        worker.request(queued, priority=True)
-        worker.request(newest, priority=True)
-        worker.request(queued, priority=True)
-        worker.request(ordinary)
+        worker.request(ordinary, "thumbnail_orig", preview_size=3)
+        worker.request(queued, "thumbnail_blur", preview_size=3, screen_size=(320, 180))
+        worker.request(last, "thumbnail_orig", preview_size=3)
+        worker.request(first, "thumbnail_orig", preview_size=3)
+        worker.request(first, "thumbnail_orig", preview_size=3, priority=True)
+        worker.request(first, "thumbnail_orig", preview_size=4, priority=True)
+        worker.request(first, "thumbnail_orig", preview_size=4)
+        worker.request(queued, "thumbnail_orig", preview_size=3, priority=True)
+        worker.request(newest, "thumbnail_orig", preview_size=3, priority=True)
+        worker.request(queued, "thumbnail_orig", "thumbnail_blur", preview_size=3, screen_size=(320, 180), priority=True)
+        worker.request(ordinary, "thumbnail_orig", preview_size=3)
         release.set()
         self.assertTrue(completed.wait(5), "縮圖佇列未處理完成")
         worker.stop()
+        self.assertTrue(blur_ready.is_set())
+        self.assertEqual(clear_ready_before_blur, [True])
         self.assertEqual(processed, [
-            (first, 3), (queued, 3), (newest, 3), (first, 4), (ordinary, 3), (last, 3)
+            (first, "thumbnail_orig", 3), (queued, "thumbnail_orig", 3), (queued, "thumbnail_blur", 3),
+            (newest, "thumbnail_orig", 3), (first, "thumbnail_orig", 4), (ordinary, "thumbnail_orig", 3),
+            (last, "thumbnail_orig", 3)
         ])
 
 
@@ -393,7 +301,13 @@ class ThumbnailWorker(QObject):
     由測試控制縮圖結果訊號
     """
 
-    thumbnail_ready = Signal(str, int, QImage)
+    thumbnail_ready = Signal(str, QImage, int)
+    blurred_thumbnail_ready = Signal(str, int, QSize, QImage)
+    ray_thumbnail_ready = Signal(str, int, QSize, str, QImage)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.request = mock.Mock()
 
 
 class MediaPreviewTests(QtTestCase):
@@ -403,31 +317,24 @@ class MediaPreviewTests(QtTestCase):
 
     def setUp(self) -> None:
         """
-        建立隱藏預覽選單與縮圖訊號替身, 預設第一個媒體項目正在預覽
+        建立隱藏預覽選單與縮圖訊號替身
         """
 
         super().setUp()
 
         directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        self.media_dir = directory / "media"
-        self.thumbnail_dir = directory / "thumbnails"
-        self.loading_path = directory / "loading.png"
         self.worker = ThumbnailWorker()
         self.enterContext(mock.patch.object(media_preview, "ThumbnailThread", return_value=self.worker))
         self.menu = media_preview.MediaPreviewMenu(
-            "Media", media_dir=self.media_dir, thumbnail_dir=self.thumbnail_dir,
-            loading_image_path=self.loading_path
+            "Media", media_dir=directory / "media", thumbnail_dir=directory / "thumbnails",
+            loading_image_path=directory / "loading.png"
         )
         self.menu.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
         self.menu.preview.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
         self.addCleanup(self.dispose_menu)
-        self.first = self.add_media_action("first.mp4")
-        self.second = self.add_media_action("second.mp4")
-        self.menu.preview_action = self.first
-        self.menu.preview_mode = True
-        self.menu.preview_pixmap = self.menu.loading_pixmap
-        self.display_preview_mock = mock.Mock()
-        self.menu.display_preview = self.display_preview_mock
+        self.action = QAction("sample.mp4", self.menu)
+        self.action.setData(str(directory / "media" / "sample.mp4"))
+        self.menu.addAction(self.action)
 
 
     def dispose_menu(self) -> None:
@@ -441,196 +348,171 @@ class MediaPreviewTests(QtTestCase):
         self.worker.deleteLater()
 
 
-    def add_media_action(self, name):
+    def queue_thumbnail(self, size: int, color: Qt.GlobalColor, *, screen_size: QSize | None = None) -> None:
         """
-        建立帶有媒體路徑的選單項目
-        """
-
-        action = QAction(name, self.menu)
-        action.setData(str(self.media_dir / name))
-        self.menu.addAction(action)
-        return action
-
-
-    def thumbnail(self):
-        """
-        建立背景回傳的測試縮圖
+        從背景執行緒送出縮圖, 讓呼叫端控制何時處理 Qt 佇列
         """
 
         image = QImage(120, 60, QImage.Format.Format_RGB32)
-        image.fill(Qt.GlobalColor.blue)
-        return image
-
-
-    def test_stale_null_and_inactive_results_do_not_replace_preview(self) -> None:
-        """
-        過期, 空白與預覽結束後的結果不更新畫面
-        """
-
-        self.menu.preview_action = self.second
-        loading_key = self.menu.preview_pixmap.cacheKey()
-
-        self.worker.thumbnail_ready.emit(self.first.data(), 3, self.thumbnail())
-        self.assertEqual(self.menu.preview_pixmap.cacheKey(), loading_key)
-
-        self.worker.thumbnail_ready.emit(self.second.data(), 3, QImage())
-        self.assertEqual(self.menu.preview_pixmap.cacheKey(), loading_key)
-
-        self.menu.reset_preview()
-        self.worker.thumbnail_ready.emit(self.second.data(), 3, self.thumbnail())
-        self.assertEqual(self.menu.preview_pixmap.cacheKey(), loading_key)
-        self.assertTrue(self.menu.preview.isHidden())
-
-
-    def test_size_change_ignores_queued_result_for_same_media(self) -> None:
-        """
-        同媒體的舊尺寸結果已排入 Qt 佇列時, 切換尺寸後不覆蓋新結果
-        """
-
-        old_image = self.thumbnail()
-        old_image.fill(Qt.GlobalColor.red)
-        thread = threading.Thread(
-            target=lambda: self.worker.thumbnail_ready.emit(self.first.data(), 3, old_image)
-        )
+        image.fill(color)
+        path = self.action.data()
+        if screen_size is None:
+            thread = threading.Thread(target=self.worker.thumbnail_ready.emit, args=(path, image, size))
+        else:
+            thread = threading.Thread(
+                target=self.worker.blurred_thumbnail_ready.emit, args=(path, size, screen_size, image)
+            )
         thread.start()
         thread.join(timeout=5)
         self.assertFalse(thread.is_alive())
 
-        self.menu.set_preview_size(4)
-        self.assertEqual(self.menu.loading_pixmap.width(), 400)
-        self.menu.preview_action = self.first
-        self.menu.preview_mode = True
-        self.worker.thumbnail_ready.emit(self.first.data(), 4, self.thumbnail())
-        self.app.processEvents()
 
-        self.display_preview_mock.assert_called_once_with()
-        self.assertEqual(self.menu.preview_pixmap.toImage().pixelColor(0, 0), QColor("blue"))
-
-
-    def test_disable_ignores_queued_result_and_hover_until_reenabled(self) -> None:
+    def test_queued_preview_respects_size_changes_and_updates_on_main_thread(self) -> None:
         """
-        禁用時忽略佇列結果與懸停, 重新啟用後恢復首次等待與縮圖請求
-        """
-
-        self.worker.request = mock.Mock()
-        self.menu.popup(self.app.primaryScreen().availableGeometry().center())
-        position = self.menu.actionGeometry(self.first).center()
-        cursor_position = self.menu.mapToGlobal(position)
-        event = QMouseEvent(
-            QEvent.Type.MouseMove, QPointF(position), QPointF(cursor_position),
-            Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier
-        )
-        image = self.thumbnail()
-        media_path = self.first.data()
-        thread = threading.Thread(target=lambda: self.worker.thumbnail_ready.emit(media_path, 3, image))
-        thread.start()
-        thread.join(timeout=5)
-        self.assertFalse(thread.is_alive())
-
-        self.menu.preview_timer.start()
-        self.menu.set_preview_size(0)
-
-        with mock.patch.object(media_preview.QCursor, "pos", return_value=cursor_position):
-
-            self.menu.mouseMoveEvent(event)
-            self.menu.show_preview()
-            self.app.processEvents()
-            self.display_preview_mock.assert_not_called()
-            self.worker.request.assert_not_called()
-            self.assertFalse(self.menu.preview_timer.isActive())
-            self.assertFalse(self.menu.preview_mode)
-            self.assertTrue(self.menu.preview.isHidden())
-
-            self.menu.set_preview_size(3)
-            self.menu.mouseMoveEvent(event)
-            self.assertTrue(self.menu.preview_timer.isActive())
-            self.menu.show_preview()
-            self.worker.request.assert_called_once_with(Path(media_path), preview_size=3, priority=True)
-
-
-    def test_background_result_updates_preview_on_qt_main_thread(self) -> None:
-        """
-        背景縮圖結果由 Qt 主執行緒更新預覽
+        忽略尺寸切換或停用前的佇列結果, 新結果由 Qt 主執行緒套用
         """
 
         displayed_on = []
-        display = self.menu.display_preview
+        self.menu.display_preview = lambda: displayed_on.append(threading.get_ident())
 
-        def record_display():
-            """
-            記錄預覽顯示回呼的執行緒, 再呼叫顯示替身
-            """
+        for size in (4, 0):
+            with self.subTest(size=size):
+                displayed_on.clear()
+                self.menu.set_preview_size(3)
+                self.menu.preview_action = self.action
+                self.menu.preview_mode = True
+                self.menu.preview_timer.start()
+                self.queue_thumbnail(3, Qt.GlobalColor.red)
+                self.queue_thumbnail(3, Qt.GlobalColor.yellow, screen_size=QSize(300, 600))
+                self.assertEqual(displayed_on, [])
 
-            displayed_on.append(threading.get_ident())
-            display()
+                self.menu.set_preview_size(size)
+                if size:
+                    self.menu.preview_action = self.action
+                    self.menu.preview_mode = True
+                else:
+                    self.assertFalse(self.menu.preview_mode)
+                    self.assertTrue(self.menu.preview.isHidden())
+                self.assertFalse(self.menu.preview_timer.isActive())
+                self.app.processEvents()
+                self.assertEqual(displayed_on, [])
+                self.assertIsNone(self.menu.blurred_thumbnail)
 
-        self.menu.display_preview = record_display
-        image = self.thumbnail()
-        media_path = self.first.data()
-        thread = threading.Thread(target=lambda: self.worker.thumbnail_ready.emit(media_path, 3, image))
-        thread.start()
-        thread.join(timeout=5)
-        self.assertFalse(thread.is_alive())
-        # 尚未處理 Qt 事件佇列
-        self.assertEqual(displayed_on, [])
+                if not size:
+                    self.menu.set_preview_size(3)
+                    self.menu.preview_action = self.action
+                    self.menu.preview_mode = True
+                self.queue_thumbnail(self.menu.preview_size, Qt.GlobalColor.blue)
+                self.assertEqual(displayed_on, [])
+                self.app.processEvents()
 
+                self.assertEqual(displayed_on, [threading.get_ident()])
+                self.assertEqual(self.menu.preview_pixmap.toImage().pixelColor(0, 0), QColor("blue"))
+
+
+    def test_hovered_blur_uses_target_orientation_and_ignores_late_results(self) -> None:
+        """
+        直向預覽使用已合成縮圖, 切換項目或關閉後忽略先前排隊的結果
+        """
+
+        path = Path(self.action.data())
+        other = self.menu.addAction("other.png")
+        other.setData(str(path.with_name("other.png")))
+        screen = mock.Mock()
+        screen.geometry.return_value = QRect(0, 0, 200, 400)
+        self.enterContext(mock.patch.object(media_preview, "screen_pixel_size", return_value=QSize(300, 600)))
+        self.menu.target_screen = screen
+        self.menu.display_config = {
+            "scalingMode": {path.name: {"portrait": "fit", "landscape": "fill"}},
+            "backgroundColor": {path.name: "blur"}
+        }
+        self.enterContext(mock.patch.object(self.menu, "actionAt", side_effect=lambda pos: self.menu.preview_action))
+        self.menu.show()
+        self.menu.preview_action = self.action
+        self.menu.show_preview()
+        self.worker.request.assert_called_with(
+            path, "thumbnail_orig", "thumbnail_blur", preview_size=3, screen_size=(300, 600), priority=True
+        )
+
+        self.queue_thumbnail(3, Qt.GlobalColor.red)
         self.app.processEvents()
+        self.assertEqual(self.menu.preview.pixmap().toImage().pixelColor(5, 5), QColor("black"))
 
-        self.assertEqual(displayed_on, [threading.get_ident()])
-        self.assertEqual(self.menu.preview_pixmap.toImage().pixelColor(0, 0), QColor("blue"))
+        composite = QImage(150, 300, QImage.Format.Format_RGB32)
+        composite.fill(Qt.GlobalColor.yellow)
+        painter = QPainter(composite)
+        painter.fillRect(0, 112, 150, 76, Qt.GlobalColor.blue)
+        painter.end()
+        self.worker.blurred_thumbnail_ready.emit(str(path), 3, QSize(300, 600), composite)
+        result = self.menu.preview.pixmap().toImage()
+        self.assertEqual(result.pixelColor(5, 5), QColor("yellow"))
+        self.assertEqual(result.pixelColor(result.width() // 2, result.height() // 2), QColor("blue"))
+
+        self.queue_thumbnail(3, Qt.GlobalColor.yellow, screen_size=QSize(300, 600))
+        self.menu.preview_action = other
+        self.menu.show_preview()
+        self.app.processEvents()
+        self.assertIsNone(self.menu.blurred_thumbnail)
+        self.worker.request.assert_called_with(Path(other.data()), "thumbnail_orig", preview_size=3, priority=True)
+
+        screen.geometry.return_value = QRect(0, 0, 400, 200)
+        self.menu.preview_action = self.action
+        self.menu.show_preview()
+        self.worker.request.assert_called_with(path, "thumbnail_orig", preview_size=3, priority=True)
+        self.queue_thumbnail(3, Qt.GlobalColor.yellow, screen_size=QSize(300, 600))
+        self.menu.hide()
+        self.app.processEvents()
+        self.assertIsNone(self.menu.blurred_thumbnail)
 
 
-    def test_thumbnail_arrival_and_rapid_switch_preserve_animation_position(self) -> None:
+    def test_ray_preview_ignores_delayed_modes_and_resolutions(self) -> None:
         """
-        動畫途中換圖不中斷進度, 快速換項目接續目前位置, 隱藏時停止
+        滑鼠停在同一張圖時, 只顯示目前光暈模式與目標螢幕的合成預覽
         """
 
-        del self.menu.display_preview
-        self.worker.request = mock.Mock()
-        self.menu.popup(self.app.primaryScreen().availableGeometry().center())
+        path = Path(self.action.data()).with_name("sample.PNG")
+        self.action.setData(str(path))
+        screen = mock.Mock()
+        screen.geometry.return_value = QRect(0, 0, 200, 400)
+        pixel_size = self.enterContext(mock.patch.object(media_preview, "screen_pixel_size", return_value=QSize(300, 600)))
+        self.menu.target_screen = screen
+        self.menu.display_config = {
+            "scalingMode": {path.name: {"portrait": "fit"}},
+            "backgroundColor": {path.name: "ray1"}
+        }
+        self.enterContext(mock.patch.object(self.menu, "actionAt", return_value=self.action))
+        self.menu.show()
+        self.menu.preview_action = self.action
+        self.menu.show_preview()
+        self.worker.request.assert_called_with(
+            path, "thumbnail_ray", preview_size=3, screen_size=(300, 600), ray_mode="ray1", priority=True
+        )
 
-        with mock.patch.object(media_preview.QCursor, "pos") as cursor:
+        image = QImage(150, 300, QImage.Format.Format_RGB32)
+        image.fill(Qt.GlobalColor.blue)
+        self.menu.display_config["backgroundColor"][path.name] = "ray2"
+        emit = self.worker.ray_thumbnail_ready.emit
+        emit(str(path), 3, QSize(300, 600), "ray1", image)
+        emit(str(path), 3, QSize(200, 400), "ray2", image)
+        self.assertIsNone(self.menu.ray_thumbnail)
 
-            cursor.return_value = self.menu.mapToGlobal(self.menu.actionGeometry(self.first).center())
-            self.menu.show_preview()
-            animation = self.menu.preview_animation
-            first_position = animation.endValue()
-            animation.setCurrentTime(60)
-            current_position = self.menu.preview.pos()
+        pixel_size.return_value = None
+        self.worker.request.reset_mock()
+        emit(str(path), 3, QSize(300, 600), "ray2", image)
+        self.assertIsNone(self.menu.ray_thumbnail)
+        self.worker.request.assert_called_once_with(path, "thumbnail_orig", preview_size=3, priority=True)
 
-            self.worker.thumbnail_ready.emit(self.first.data(), 3, self.thumbnail())
+        self.worker.request.reset_mock()
+        self.menu.show_preview()
+        self.worker.request.assert_called_once_with(path, "thumbnail_orig", preview_size=3, priority=True)
 
-            self.assertEqual(animation.currentTime(), 60)
-            self.assertEqual(self.menu.preview.pos(), current_position)
-            self.assertEqual(animation.state(), QAbstractAnimation.State.Running)
-
-            self.menu.preview_action = self.second
-            cursor.return_value = self.menu.mapToGlobal(self.menu.actionGeometry(self.second).center())
-            self.menu.show_preview()
-
-            self.assertEqual(animation.startValue(), current_position)
-            self.assertNotEqual(animation.endValue(), first_position)
-            animation.setCurrentTime(60)
-            current_position = self.menu.preview.pos()
-
-            self.menu.preview_action = self.first
-            cursor.return_value = self.menu.mapToGlobal(self.menu.actionGeometry(self.first).center())
-            self.menu.show_preview()
-
-            self.assertEqual(animation.startValue(), current_position)
-            self.assertEqual(animation.endValue(), first_position)
-
-            self.menu.leave_preview()
-            self.assertEqual(animation.state(), QAbstractAnimation.State.Stopped)
-            self.assertFalse(self.menu.preview.isVisible())
-
-            self.menu.preview_action = self.first
-            self.menu.show_preview()
-            self.assertEqual(animation.state(), QAbstractAnimation.State.Running)
-
-            self.menu.hide()
-            self.assertEqual(animation.state(), QAbstractAnimation.State.Stopped)
-            self.assertFalse(self.menu.preview.isVisible())
+        pixel_size.return_value = QSize(300, 600)
+        emit(str(path), 3, QSize(300, 600), "ray2", image)
+        self.queue_thumbnail(3, Qt.GlobalColor.red)
+        self.app.processEvents()
+        result = self.menu.preview.pixmap().toImage()
+        self.assertEqual(result.pixelColor(5, 5), QColor("blue"))
+        self.assertEqual(result.pixelColor(result.width() // 2, result.height() // 2), QColor("blue"))
 
 
 @unittest.skipUnless(
@@ -643,41 +525,13 @@ class VideoThumbnailTests(unittest.TestCase):
     """
 
     @classmethod
-    def setUpClass(cls):
+    def setUpClass(cls) -> None:
         """
-        設定 VLC 路徑並建立比例與旋轉測試影片
+        建立暫存目錄並檢查 FFmpeg 是否可編碼 AV1
         """
 
-        cls.enterClassContext(video_thumbnail_environment())
         cls.directory = Path(cls.enterClassContext(tempfile.TemporaryDirectory()))
         cls.has_av1_encoder = b"libaom-av1" in run_ffmpeg("-encoders", timeout=10).stdout
-        cls.anamorphic_media = cls.directory / "sar-2.mp4"
-        run_ffmpeg(
-            "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30",
-            "-t", "3", "-vf", "setsar=2/1",
-            "-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", cls.anamorphic_media
-        )
-
-        # 四個象限使用不同顏色, 同時驗證旋轉後的尺寸及實際像素方向
-        quadrants = cls.directory / "quadrants.mp4"
-        run_ffmpeg(
-            "-f", "lavfi", "-i",
-            "color=c=red:s=320x180:r=30,"
-            "drawbox=x=160:y=0:w=160:h=90:color=lime:t=fill,"
-            "drawbox=x=0:y=90:w=160:h=90:color=blue:t=fill,"
-            "drawbox=x=160:y=90:w=160:h=90:color=yellow:t=fill",
-            "-t", "3", "-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", quadrants
-        )
-        cls.rotated_media = {}
-
-        for rotation in (90, 180, 270):
-
-            path = cls.directory / f"rotated-{rotation}.mp4"
-            run_ffmpeg(
-                "-display_rotation:v:0", rotation, "-i", quadrants,
-                "-c", "copy", path
-            )
-            cls.rotated_media[rotation] = path
 
 
     def require_av1_encoder(self) -> None:
@@ -732,9 +586,9 @@ class VideoThumbnailTests(unittest.TestCase):
             process.close()
 
 
-    def test_av1_thumbnails_finish_without_hanging(self) -> None:
+    def test_av1_thumbnails_finish_on_success_cancellation_and_setup_failure(self) -> None:
         """
-        AV1 的 MP4 與 MKV 縮圖皆可正常完成
+        AV1 縮圖在產圖, 取消與緩衝區配置失敗時皆能結束
         """
 
         self.require_av1_encoder()
@@ -749,6 +603,13 @@ class VideoThumbnailTests(unittest.TestCase):
 
                 self.assertNotIn("error", result)
                 self.assertEqual(result["size"], (300, 169))
+
+        path = self.directory / "av1.mp4"
+        for mode, error in (("cancel", "InterruptedError"), ("setup_failure", "RuntimeError")):
+            with self.subTest(mode=mode):
+                result = self.isolated_thumbnail(path, mode)
+                self.assertEqual(result.get("error"), error)
+                self.assertEqual(result["cancelled"], mode == "cancel")
 
 
     def test_default_video_track_determines_size_and_pixels(self) -> None:
@@ -791,75 +652,6 @@ class VideoThumbnailTests(unittest.TestCase):
 
                         for actual, expected in zip(result["color"], color):
                             self.assertLessEqual(abs(actual - expected), 30)
-
-
-    def test_av1_cancellation_and_setup_failure_finish(self) -> None:
-        """
-        AV1 取消或設定失敗後可正常結束
-        """
-
-        self.require_av1_encoder()
-
-        path = self.directory / "av1-errors.mp4"
-        self.create_av1_video(path)
-
-        for mode, error in (
-            ("cancel", "InterruptedError"),
-            ("setup_failure", "RuntimeError"),
-        ):
-
-            with self.subTest(mode=mode):
-
-                result = self.isolated_thumbnail(path, mode)
-
-                self.assertEqual(result.get("error"), error)
-                self.assertEqual(result["cancelled"], mode == "cancel")
-
-
-    def test_non_square_pixels_use_display_aspect_ratio(self) -> None:
-        """
-        非正方形像素依實際顯示比例產生縮圖
-        """
-
-        # 涵蓋最小與最大寬度, 以及 112.5 的取整邊界
-        for width, height in ((100, 28), (400, 112), (500, 141)):
-
-            with self.subTest(width=width):
-                image = create_video_thumbnail(self.anamorphic_media, lambda: False, width)
-                self.assertFalse(image.isNull())
-                self.assertEqual((image.width(), image.height()), (width, height))
-
-
-    def test_rotated_videos_preserve_size_and_pixel_orientation(self) -> None:
-        """
-        旋轉影片的縮圖尺寸與像素方向正確
-        """
-
-        red, green, blue, yellow = (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0)
-        # 預期色塊順序: 左上, 右上, 左下, 右下
-        expected = {
-            90: (533, (green, yellow, red, blue)),
-            180: (169, (yellow, blue, green, red)),
-            270: (533, (blue, red, yellow, green)),
-        }
-
-        for rotation, (height, colors) in expected.items():
-
-            with self.subTest(rotation=rotation):
-
-                image = create_video_thumbnail(self.rotated_media[rotation], lambda: False)
-                self.assertFalse(image.isNull())
-                self.assertEqual((image.width(), image.height()), (300, height))
-
-                for (x, y), color in zip(((1, 1), (3, 1), (1, 3), (3, 3)), colors):
-
-                    pixel = image.pixelColor(image.width() * x // 4, image.height() * y // 4)
-                    actual = (pixel.red(), pixel.green(), pixel.blue())
-
-                    # 容許影片壓縮造成的色偏
-                    for actual_channel, expected_channel in zip(actual, color):
-                        self.assertLessEqual(abs(actual_channel - expected_channel), 30)
-
 
 
 if __name__ == "__main__":

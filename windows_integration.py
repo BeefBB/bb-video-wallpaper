@@ -19,6 +19,8 @@ import winerror
 
 from comtypes import GUID as ComGUID, HRESULT, IUnknown, COMMETHOD
 from comtypes.client import CreateObject
+from PySide6.QtCore import QSize
+from PySide6.QtGui import QScreen
 
 
 logger = logging.getLogger(__name__)
@@ -53,6 +55,25 @@ def get_monitor_id(hwnd: int) -> str:
 
     # 遠端或虛擬顯示器可能沒有裝置介面, 改以 Windows 顯示裝置名稱區分
     return f"display:{display_name.casefold()}"
+
+
+def screen_pixel_size(screen: QScreen) -> QSize | None:
+    """
+    讀取螢幕像素尺寸, 找不到原生螢幕時回傳 None
+    """
+
+    origin = screen.geometry().topLeft().toTuple()
+    try:
+        monitor = win32api.MonitorFromPoint(origin, win32con.MONITOR_DEFAULTTONULL)
+        if monitor is None:
+            return None
+        left, top, right, bottom = win32api.GetMonitorInfo(monitor)["Monitor"]
+
+    except win32api.error:
+        # 螢幕可能在取得控制代碼後被移除
+        return None
+
+    return QSize(right - left, bottom - top)
 
 
 # 單一實例
@@ -616,11 +637,14 @@ def is_any_fullscreen(wallpaper_hwnd: int) -> bool:
     try:
         wallpaper_monitor = win32api.MonitorFromWindow(wallpaper_hwnd, win32con.MONITOR_DEFAULTTONULL)
 
-    except Exception:
-        return False
+        # 桌布視窗不在任何螢幕時, 略過這次偵測
+        if not wallpaper_monitor:
+            return False
 
-    # 桌布視窗不在任何螢幕時, 略過這次偵測
-    if not wallpaper_monitor:
+        # info["Monitor"]: 整個螢幕, info["Work"]: 不包含工作列
+        monitor_left, monitor_top, monitor_right, monitor_bottom = win32api.GetMonitorInfo(wallpaper_monitor)["Work"]
+
+    except Exception:
         return False
 
     shell_hwnd = ctypes.windll.user32.GetShellWindow()
@@ -667,21 +691,6 @@ def is_any_fullscreen(wallpaper_hwnd: int) -> bool:
             return True
 
         if window_title in WINDOW_TITLE_BLACKLIST:
-            return True
-
-        try:
-            monitor = win32api.MonitorFromWindow(hwnd, win32con.MONITOR_DEFAULTTONEAREST)
-
-            # 其他螢幕的視窗不影響此桌布
-            if monitor != wallpaper_monitor:
-                return True
-
-            info = win32api.GetMonitorInfo(monitor)
-
-            # info["Monitor"]: 整個螢幕, info["Work"]: 不包含工作列
-            monitor_left, monitor_top, monitor_right, monitor_bottom = info["Work"]
-
-        except Exception:
             return True
 
         try:

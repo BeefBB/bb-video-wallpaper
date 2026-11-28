@@ -9,13 +9,13 @@ import time
 import subprocess
 import logging
 from logging.handlers import RotatingFileHandler
-from typing import cast
+from typing import Literal, cast
 
 from win32con import WM_DESTROY
 
-from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog, QMessageBox
-from PySide6.QtCore import QByteArray, Qt, QTimer, QThread, Signal
-from PySide6.QtGui import QAction, QActionGroup, QIcon, QFont, QImage, QScreen, QCursor
+from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog, QMessageBox, QProxyStyle
+from PySide6.QtCore import QByteArray, QSize, Qt, QTimer, QThread, Signal
+from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon, QFont, QImage, QImageReader, QPainter, QPixmap, QScreen, QCursor
 
 import bb_image_display
 import bb_video_display
@@ -28,8 +28,11 @@ from thumbnails import (
     SUPPORTED_VIDEO_EXTENSIONS,
     SUPPORTED_IMAGE_EXTENSIONS,
     SUPPORTED_MEDIA_EXTENSIONS,
+    ImageCacheClearThread,
+    RayMode,
     ThumbnailThread,
     cleanup_orphaned_thumbnails,
+    get_ray_mode,
 )
 from windows_integration import (
     check_desktop_ready,
@@ -43,6 +46,7 @@ from windows_integration import (
     register_power_notification,
     register_taskbar_created_notification,
     run_as_admin,
+    screen_pixel_size,
     set_windows_as_wallpaper,
     task_exists,
     unregister_power_notification,
@@ -50,6 +54,12 @@ from windows_integration import (
 
 
 logger = logging.getLogger(__name__)
+
+# 啟動時等待桌面逾時
+DESKTOP_READY_TIMEOUT_SECONDS = 120
+
+
+BackgroundImageKey = tuple[Literal["blur"], None] | tuple[RayMode, QSize]
 
 
 # 由啟動流程設定的路徑
@@ -278,8 +288,9 @@ class MediaImportThread(QThread):
                 self.progress.emit(self, min(99, completed_size * 100 // max(1, total_size)), index, True)
 
                 copying = False
+                source_size = size
 
-                def report_progress(percent: int, source_size: int = size) -> None:
+                def report_progress(percent: int) -> None:
                     """
                     將單檔複製百分比換算為整批進度
                     """
@@ -397,6 +408,8 @@ class Wallpaper(QWidget):
 
         # 正在退出
         self.is_exiting = False
+        # 目前套用的背景圖片識別鍵
+        self.background_image_key: BackgroundImageKey | None = None
         # 監聽螢幕亮滅的事件
         self.power_notify = None
         # 不掛在桌布視窗或 Explorer 之下的獨立頂層 HWND
@@ -840,6 +853,8 @@ class Wallpaper(QWidget):
             self.instance_image.close()
 
         self.current_media = path
+        if self.background_image_key is not None:
+            self.set_background_image(None)
         self.apply_scaling()
         logger.info("設定播放的媒體檔案 - %s", path)
 
@@ -869,9 +884,42 @@ class Wallpaper(QWidget):
 
         media_path = self.current_media.relative_to(MEDIA_DIR).as_posix()
         self.scaling_mode = get_scaling_mode(config, media_path, self.get_orientation())
-        color = config.get("backgroundColor", {}).get(media_path, "#000000")
+        background = config.get("backgroundColor", {}).get(media_path, "#000000")
+        if (
+            self.background_image_key is not None and
+            self.background_image_key != self.get_background_image_key(background)
+        ):
+            self.set_background_image(None)
+        color = "#000000" if background in ("blur", "ray1", "ray2") else background
         self.instance_image.set_scaling(self.scaling_mode, color)
         self.instance_video.set_scaling(self.scaling_mode, color)
+
+
+    def get_background_image_key(self, background: str | None) -> BackgroundImageKey | None:
+        """
+        取得桌布應套用的背景圖片識別鍵, 無須背景圖片或無法取得光暈尺寸時回傳 None
+        """
+
+        if self.scaling_mode != "fit" or self.current_media is None:
+            return None
+
+        if background == "blur":
+            return "blur", None
+
+        ray_mode = get_ray_mode(self.current_media, background)
+        if ray_mode is not None:
+            screen_size = screen_pixel_size(self.target_screen)
+            if screen_size is not None:
+                return ray_mode, screen_size
+
+        return None
+
+
+    def set_background_image(self, image: QImage | None, key: BackgroundImageKey | None = None) -> None:
+
+        self.instance_image.set_background_image(image, includes_foreground=key is not None and key[0] != "blur")
+        self.instance_video.set_background_image(image if key == ("blur", None) else None)
+        self.background_image_key = key
 
 
     def select_media(self, path: Path) -> None:
@@ -990,6 +1038,8 @@ class Wallpaper(QWidget):
             ("解除影片訊號", "instance_video", lambda: self.instance_video.playback_started.disconnect(self.playback_started)),
         ]
 
+        if self.background_image_key is not None:
+            steps.append(("清除背景圖片", None, lambda: self.set_background_image(None)))
         if desktop_events is not None:
             steps.extend([
                 ("解除桌面通知訊號", None, lambda: desktop_events.taskbar_created.disconnect(self.on_taskbar_created)),
@@ -1018,6 +1068,23 @@ class Wallpaper(QWidget):
 
             except Exception:
                 logger.exception("釋放桌布資源失敗 - %s", description)
+
+
+class BackgroundColorMenuStyle(QProxyStyle):
+
+    def __init__(self, menu: QMenu) -> None:
+
+        super().__init__(menu.style().name())
+        self.swatch_size = round(menu.font().pointSizeF() * 16 / 11)
+        self.setParent(menu)
+
+
+    def pixelMetric(self, metric, option=None, widget=None) -> int:
+
+        if metric == self.PixelMetric.PM_SmallIconSize:
+            return self.swatch_size
+
+        return super().pixelMetric(metric, option, widget)
 
 
 class Tray:
@@ -1053,6 +1120,11 @@ class Tray:
         # 處理縮圖生成的背景執行緒
         self.thumbnail_thread = ThumbnailThread(MEDIA_DIR, THUMBNAIL_DIR)
         self.thumbnail_thread.thumbnail_ready.connect(self.apply_background_color, Qt.ConnectionType.QueuedConnection)
+        self.thumbnail_thread.background_ready.connect(self.apply_background_image, Qt.ConnectionType.QueuedConnection)
+        self.thumbnail_thread.ray_background_ready.connect(self.apply_ray_background, Qt.ConnectionType.QueuedConnection)
+
+        # 清除圖片快取的背景執行緒
+        self.image_cache_clear_thread = ImageCacheClearThread(THUMBNAIL_DIR)
 
         # 設定檔
         config = config_store.load()
@@ -1144,26 +1216,6 @@ class Tray:
 
         # "選項"選單
         # ################
-        for text_key, config_key, attribute in (
-            ("auto_pause_fullscreen", "autoPauseIfFullscreen", "auto_pause_if_fullscreen"),
-            ("auto_pause_screen_off", "autoPauseIfScreenOff", "auto_pause_if_screen_off"),
-            ("auto_pause_battery", "autoPauseIfOnBattery", "auto_pause_if_on_battery"),
-        ):
-            action = QAction(tr(text_key), self.options_menu)
-            action.setCheckable(True)
-            action.setChecked(config.get(config_key, CONFIG_DEFAULTS[config_key]))
-
-            # triggered 前已切換勾選, 保存失敗時還原
-            action.triggered.connect(
-                lambda checked, key=config_key, attr=attribute, item=action: item.setChecked(
-                    checked if self.set_auto_pause_option(key, attr, checked) else not checked
-                )
-            )
-
-            self.options_menu.addAction(action)
-
-        self.options_menu.addSeparator()
-
         font_size_menu = self.options_menu.addMenu(tr("font_size"))
         font_size_group = QActionGroup(font_size_menu)
         self.font_size_actions: dict[int, QAction] = {}
@@ -1203,6 +1255,27 @@ class Tray:
 
         self.options_menu.addSeparator()
 
+        auto_pause_menu = self.options_menu.addMenu(tr("auto_pause"))
+        for text_key, config_key, attribute in (
+            ("auto_pause_fullscreen", "autoPauseIfFullscreen", "auto_pause_if_fullscreen"),
+            ("auto_pause_screen_off", "autoPauseIfScreenOff", "auto_pause_if_screen_off"),
+            ("auto_pause_battery", "autoPauseIfOnBattery", "auto_pause_if_on_battery"),
+        ):
+            action = QAction(tr(text_key), auto_pause_menu)
+            action.setCheckable(True)
+            action.setChecked(config.get(config_key, CONFIG_DEFAULTS[config_key]))
+
+            # triggered 前已切換勾選, 保存失敗時還原
+            action.triggered.connect(
+                lambda checked, key=config_key, attr=attribute, item=action: item.setChecked(
+                    checked if self.set_auto_pause_option(key, attr, checked) else not checked
+                )
+            )
+
+            auto_pause_menu.addAction(action)
+
+        self.options_menu.addSeparator()
+
         self.options_language_menu = self.options_menu.addMenu(tr("language"))
         self.options_language_menu.aboutToShow.connect(self.refresh_language_menu)
 
@@ -1220,6 +1293,12 @@ class Tray:
         open_log_action = QAction(tr("open_log_folder"), self.advanced_menu)
         open_log_action.triggered.connect(self.open_log_folder)
         self.advanced_menu.addAction(open_log_action)
+
+        self.clear_image_cache_action = QAction(tr("clear_image_cache"), self.advanced_menu)
+        self.clear_image_cache_action.setEnabled(False)
+        self.clear_image_cache_action.triggered.connect(self.clear_image_cache)
+        self.advanced_menu.addAction(self.clear_image_cache_action)
+        self.advanced_menu.aboutToShow.connect(self.refresh_clear_image_cache_action)
 
         hardware_decoding_menu = self.advanced_menu.addMenu(tr("hardware_decoding"))
         hardware_decoding_group = QActionGroup(hardware_decoding_menu)
@@ -1267,10 +1346,11 @@ class Tray:
         if self.waiting_for_screens:
             # 等待螢幕列舉穩定後再建立桌布(單純等一小段時間)
             self.follow_restore_timer.start(config.get("followRestoreDelayMs", 3000))
+
+            self.rebuild_screen_menus()
         else:
             self.initialize_screens()
 
-        self.rebuild_screen_menus()
         self.tray.show()
 
 
@@ -1315,16 +1395,16 @@ class Tray:
         self.wallpapers[wallpaper.screen_id] = wallpaper
         wallpaper.auto_pause_handler = self.follow_controller.check_auto_pause
         wallpaper.media_changed.connect(self.refresh_tooltip, Qt.ConnectionType.QueuedConnection)
-        wallpaper.media_changed.connect(self.request_background_colors, Qt.ConnectionType.QueuedConnection)
-        wallpaper.reattach_finished.connect(self.request_background_colors, Qt.ConnectionType.QueuedConnection)
+        wallpaper.media_changed.connect(self.request_backgrounds, Qt.ConnectionType.QueuedConnection)
+        wallpaper.reattach_finished.connect(self.request_backgrounds, Qt.ConnectionType.QueuedConnection)
 
         for signal in (wallpaper.playback_started, wallpaper.reattach_finished):
             signal.connect(
-                lambda s=wallpaper.screen_id, w=wallpaper: self.follow_controller.on_ready(s, w),
+                lambda w=wallpaper: self.follow_controller.on_ready(w),
                 Qt.ConnectionType.QueuedConnection
             )
         wallpaper.show()
-        self.request_background_colors()
+        self.request_backgrounds()
 
         if refresh:
             self.follow_controller.restore(self.follow_controller.graph.sources)
@@ -1594,13 +1674,18 @@ class Tray:
         if wallpaper is None or wallpaper.current_media is None or wallpaper.scaling_mode != "fit":
             return
 
-        scaling_menu.addSeparator()
-
-        color_menu = scaling_menu.addMenu(tr("background_color"))
+        color_menu = menu.addMenu(tr("background_color"))
+        color_style = BackgroundColorMenuStyle(color_menu)
+        color_menu.setStyle(color_style)
+        swatch_size = color_style.swatch_size
         color_group = QActionGroup(color_menu)
+        is_image = wallpaper.is_image()
+        ray_options = {"ray1": "background_ray1", "ray2": "background_ray2"} if is_image else {}
 
-        colors = {
+        background_options = {
             None: "background_color_auto",
+            "blur": "background_blur",
+            **ray_options,
             "#000000": "color_black",
             "#212322": "color_PMS419_moonless_night",
             "#54575a": "color_PMS425_sesame",
@@ -1626,18 +1711,34 @@ class Tray:
         }
 
         media_path = wallpaper.current_media.relative_to(MEDIA_DIR).as_posix()
-        color = config_store.load().get("backgroundColor", {}).get(media_path)
-        selected_color = color if color in colors else None
+        background = config_store.load().get("backgroundColor", {}).get(media_path)
+        selected_background = background if background in background_options else None
+        separator_after = "ray2" if is_image else "blur"
 
-        for color, label in colors.items():
+        for background, label in background_options.items():
+
             action = color_menu.addAction(tr(label))
+
+            if background is not None and background.startswith("#"):
+
+                swatch = QPixmap(swatch_size, swatch_size)
+                swatch.fill(QColor("#808080"))
+                painter = QPainter(swatch)
+                painter.fillRect(1, 1, swatch_size - 2, swatch_size - 2, QColor(background))
+                painter.end()
+
+                action.setIcon(QIcon(swatch))
+
             action.setCheckable(True)
-            action.setChecked(color == selected_color)
+            action.setChecked(background == selected_background)
             color_group.addAction(action)
 
             action.triggered.connect(
-                lambda checked=False, value=color: self.set_background_color(screen_id, value)
+                lambda checked=False, value=background: self.set_background_color(screen_id, value)
             )
+
+            if background == separator_after:
+                color_menu.addSeparator()
 
 
     def set_scaling(self, screen_id: str | None, mode: str) -> None:
@@ -1665,12 +1766,12 @@ class Tray:
             if target.current_media == path:
                 target.apply_scaling(config)
 
-        self.request_background_colors()
+        self.request_backgrounds()
 
 
     def set_background_color(self, screen_id: str | None, color: str | None) -> None:
         """
-        保存素材共用的背景色, None 表示重新自動取色
+        保存素材共用的留白設定, None 表示重新自動取色
         """
 
         wallpaper = self.wallpapers.get(screen_id) if screen_id is not None else None
@@ -1701,18 +1802,17 @@ class Tray:
             menu.display_config = config
 
 
-        if color is None:
-            self.request_background_colors()
+        for target in self.wallpapers.values():
+            if target.current_media == path and (color is not None or target.background_image_key is not None):
+                target.apply_scaling(config)
 
-        else:
-            for target in self.wallpapers.values():
-                if target.current_media == path:
-                    target.apply_scaling(config)
+        if color in (None, "blur", "ray1", "ray2"):
+            self.request_backgrounds()
 
 
-    def request_background_colors(self) -> None:
+    def request_backgrounds(self) -> None:
         """
-        為尚無背景色的完整顯示桌布請求縮圖
+        依完整顯示桌布的設定請求自動取色縮圖或背景圖片
         """
 
         if self.is_exiting:
@@ -1727,11 +1827,54 @@ class Tray:
             if wallpaper.is_exiting or wallpaper.scaling_mode != "fit" or path is None:
                 continue
 
-            if path.relative_to(MEDIA_DIR).as_posix() not in colors:
-                self.thumbnail_thread.request(path)
+            background = colors.get(path.relative_to(MEDIA_DIR).as_posix())
+            if background is None:
+                self.thumbnail_thread.request(path, "thumbnail_orig", preview_size=3)
+                continue
+
+            key = wallpaper.get_background_image_key(background)
+            if key is None or key == wallpaper.background_image_key:
+                continue
+            if key[0] == "blur":
+                self.thumbnail_thread.request(path, "background_blur")
+            else:
+                ray_mode, screen_size = key
+                self.thumbnail_thread.request(
+                    path, "background_ray", screen_size=screen_size.toTuple(), ray_mode=ray_mode
+                )
 
 
-    def apply_background_color(self, media_path: str, preview_size: int, image: QImage) -> None:
+    def apply_ray_background(
+        self, media_path: str, screen_size: QSize, ray_mode: RayMode, image: QImage
+    ) -> None:
+
+        if image.size() == screen_size:
+            self.apply_background_image(media_path, image, (ray_mode, screen_size))
+
+
+    def apply_background_image(self, media_path: str, image: QImage, key: BackgroundImageKey = ("blur", None)) -> None:
+        """
+        只更新素材, 背景模式與尺寸仍相符的螢幕
+        """
+
+        if self.is_exiting or image.isNull():
+            return
+
+        path = Path(media_path)
+        media_key = path.relative_to(MEDIA_DIR).as_posix()
+        background = config_store.load().get("backgroundColor", {}).get(media_key)
+        if background != key[0]:
+            return
+
+        for wallpaper in self.wallpapers.values():
+            if (
+                not wallpaper.is_exiting and wallpaper.current_media == path and
+                wallpaper.get_background_image_key(background) == key
+            ):
+                wallpaper.set_background_image(image, key)
+
+
+    def apply_background_color(self, media_path: str, image: QImage) -> None:
         """
         從縮圖取得平均色, 保存並套用為背景色
         """
@@ -1874,14 +2017,13 @@ class Tray:
     def add_media_menu_action(
         self,
         media_path: Path,
-        screen_id: str | None = None,
-        menu: MediaPreviewMenu | None = None
+        screen_id: str | None,
+        menu: MediaPreviewMenu
     ) -> None:
         """
         新增媒體選單項目
         """
 
-        menu = self.media_menu if menu is None else menu
         menu.setToolTipsVisible(True)
 
         wallpaper = self.wallpapers.get(screen_id) if screen_id is not None else None
@@ -1923,7 +2065,7 @@ class Tray:
         self.restart()
 
 
-    def play_from_menu(self, path: Path, screen_id: str | None = None) -> None:
+    def play_from_menu(self, path: Path, screen_id: str | None) -> None:
 
         if screen_id is None and len(self.wallpapers) == 1:
             screen_id = next(iter(self.wallpapers))
@@ -2011,11 +2153,9 @@ class Tray:
             self.cancel_import_action.setEnabled(False)
 
 
-    def finish_import(self, expected_worker: MediaImportThread | None = None) -> None:
+    def finish_import(self, worker: MediaImportThread) -> None:
 
-        worker = self.import_thread
-
-        if worker is None or (expected_worker is not None and worker is not expected_worker):
+        if self.import_thread is not worker:
             return
 
         screen_ids: tuple[str, ...] = ()
@@ -2059,7 +2199,7 @@ class Tray:
 
             if self.preview_size > 0:
                 for destination in dict.fromkeys(worker.destinations):
-                    self.thumbnail_thread.request(destination, preview_size=self.preview_size)
+                    self.thumbnail_thread.request(destination, "thumbnail_orig", preview_size=self.preview_size)
 
             if not worker.cancelled and worker.destination is not None:
                 config_store.remember_recent(worker.destination)
@@ -2112,6 +2252,28 @@ class Tray:
 
         os.startfile(str(LOG_DIR))
 
+
+    def refresh_clear_image_cache_action(self) -> None:
+        """
+        更新清除圖片快取按鈕的可用狀態(有檔案且沒有清除正在進行中)
+        """
+
+        worker = self.image_cache_clear_thread
+        self.clear_image_cache_action.setEnabled(
+            not self.is_exiting and not worker.isRunning() and
+            next(worker.iter_png_files(), None) is not None
+        )
+
+    def clear_image_cache(self) -> None:
+        """
+        清除圖片快取
+        """
+
+        if self.is_exiting or self.image_cache_clear_thread.isRunning():
+            return
+
+        self.clear_image_cache_action.setEnabled(False)
+        self.image_cache_clear_thread.start()
 
     def reset_defaults(self) -> None:
         """
@@ -2224,6 +2386,7 @@ class Tray:
             return
 
         self.is_exiting = True
+        self.image_cache_clear_thread.requestInterruption()
         self.follow_sync_timer.stop()
         self.follow_restore_timer.stop()
         self.follow_controller.shutdown()
@@ -2238,6 +2401,8 @@ class Tray:
 
         except Exception:
             logger.exception("退出時停止縮圖工作失敗")
+
+        self.image_cache_clear_thread.wait()
 
         for menu in self.screen_menus.values():
             menu.reset_preview()
@@ -2309,15 +2474,24 @@ def main() -> int:
         return 1
 
     cleanup_orphaned_thumbnails(MEDIA_DIR, THUMBNAIL_DIR)
+    cleanup_orphaned_thumbnails(MEDIA_DIR, THUMBNAIL_DIR.parent / "backgrounds")
 
-    while True:
+    desktop_ready_deadline = time.monotonic() + DESKTOP_READY_TIMEOUT_SECONDS
+    while not check_desktop_ready():
+
+        remaining = desktop_ready_deadline - time.monotonic()
+        if remaining <= 0:
+            logger.error("啟動時等待 Windows 桌面就緒逾時 (%s 秒)", DESKTOP_READY_TIMEOUT_SECONDS)
+            mutex.Close()  # type: ignore
+            return 1
+
         time.sleep(1)
-
-        if check_desktop_ready():
-            break
 
     if "--task" not in sys.argv:
         run_as_admin()
+
+    # 靜態圖讀取與影片取圖共用 Qt 單張圖片配置的上限
+    QImageReader.setAllocationLimit(512)
 
     # 建立 Qt 應用程式
     app = QApplication(sys.argv)

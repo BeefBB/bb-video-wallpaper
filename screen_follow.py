@@ -256,11 +256,12 @@ class FollowController:
         self._pending_selection.intersection_update(self.graph.sources)
 
 
-    def on_ready(self, screen_id: str, wallpaper: FollowWallpaper) -> None:
+    def on_ready(self, wallpaper: FollowWallpaper) -> None:
         """
         只處理登錄表中仍指向同一桌布物件的通知
         """
 
+        screen_id = wallpaper.screen_id
         if not self.is_exiting and self.wallpapers.get(screen_id) is wallpaper:
             self.synchronize(screen_id)
 
@@ -344,12 +345,11 @@ class FollowController:
             return False
 
         root = self.graph.root(wallpaper.screen_id)
-        members = [self.wallpapers[screen_id] for screen_id in self.graph.subtree(root) if screen_id in self.wallpapers]
-
         # 跟隨者的計時通知不重複掃描同一群組
         if from_timer and wallpaper.screen_id != root:
             return True
 
+        members = [self.wallpapers[screen_id] for screen_id in self.graph.subtree(root) if screen_id in self.wallpapers]
         if update_auto_pause(members):
             logger.info("auto_pause - %s", members[0].play_state)
             self.synchronize(root)

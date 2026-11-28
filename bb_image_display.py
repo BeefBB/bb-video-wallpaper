@@ -1,7 +1,8 @@
 """
 Qt 圖片顯示模組, 接收主程式提供的 HWND 並共用既有 QApplication
 
-在 Qt 主執行緒先建立 QApplication 與目標視窗, 再使用:
+在 Qt 主執行緒先建立 QApplication 與目標視窗
+
     import bb_image_display
 
     display = bb_image_display.Instance()
@@ -10,8 +11,6 @@ Qt 圖片顯示模組, 接收主程式提供的 HWND 並共用既有 QApplicatio
     display.set_media("image.png")
     display.show()
 
-主程式負責目標視窗的建立, 顯示, 桌面掛載與 Qt 事件迴圈
-模組只管理圖片及其內部子視窗
 預設為 fill 與黑色背景
 """
 
@@ -24,8 +23,10 @@ import win32con
 import win32gui
 
 from PySide6.QtCore import QAbstractNativeEventFilter, QObject, QRectF, Qt, Slot
-from PySide6.QtGui import QColor, QImageReader, QPainter, QPaintEvent, QRasterWindow, QWindow
+from PySide6.QtGui import QColor, QImage, QImageReader, QPainter, QPaintEvent, QRasterWindow, QWindow
 from PySide6.QtWidgets import QApplication
+
+from display_painting import draw_cover_image, fit_image_rect
 
 
 __all__ = ["Instance"]
@@ -36,7 +37,7 @@ class _TargetEvents(QAbstractNativeEventFilter):
     接收目標視窗的尺寸與銷毀事件
     """
 
-    def __init__(self, window: "ImageWallpaper") -> None:
+    def __init__(self, window: "_ImageWindow") -> None:
 
         super().__init__()
         self._window = weakref.ref(window)
@@ -63,9 +64,9 @@ class _TargetEvents(QAbstractNativeEventFilter):
         return False, 0
 
 
-class ImageWallpaper(QRasterWindow):
+class _ImageWindow(QRasterWindow):
     """
-    繪圖所需的內部容器, 在指定視窗內繪製圖片與背景
+    繪製圖片與背景
     """
 
     def __init__(self, image_path: Path, target_hwnd: int) -> None:
@@ -79,6 +80,8 @@ class ImageWallpaper(QRasterWindow):
         self._target_events: _TargetEvents | None = None
         self.scaling_mode = "fill"
         self.background_color = QColor(Qt.GlobalColor.black)
+        self.background_image: QImage | None = None
+        self.background_includes_foreground = False
 
         reader = QImageReader(str(image_path))
         reader.setAutoTransform(True)
@@ -89,7 +92,6 @@ class ImageWallpaper(QRasterWindow):
 
         self.setTitle("Qt image display")
 
-        # 以 QWindow 管理外部父視窗, 直接接收繪圖事件
         self.setFlags(
             Qt.WindowType.SubWindow |
             Qt.WindowType.FramelessWindowHint |
@@ -98,108 +100,22 @@ class ImageWallpaper(QRasterWindow):
         )
 
 
-    def _create_host(self) -> None:
-        """
-        在目標視窗內建立圖片容器, 處理父子視窗裁切與合成
-        """
-
-        app = QApplication.instance()
-
-        if app is None:
-            raise RuntimeError("必須先建立 QApplication")
-
-        if not self._target_hwnd or not win32gui.IsWindow(self._target_hwnd):
-            raise RuntimeError("必須先設定有效的目標視窗")
-
-        self.create()
-        left, top, right, bottom = win32gui.GetClientRect(self._target_hwnd)
-
-        try:
-
-            self._host_hwnd = win32gui.CreateWindowEx(
-                win32con.WS_EX_LAYERED |
-                win32con.WS_EX_TRANSPARENT |
-                win32con.WS_EX_NOACTIVATE |
-                win32con.WS_EX_TOOLWINDOW,
-                "Static",
-                "",
-                win32con.WS_CHILD | win32con.WS_CLIPCHILDREN | win32con.WS_CLIPSIBLINGS,
-                0, 0, right - left, bottom - top,
-                self._target_hwnd,
-                None,
-                win32api.GetModuleHandle(None),
-                None
-            )
-
-            parent = win32gui.GetAncestor(self._host_hwnd, win32con.GA_PARENT)
-
-            if parent != self._target_hwnd:
-                raise RuntimeError("圖片容器未掛載到指定視窗")
-
-            # 保持完全不透明, 由 Windows 重導向並合成容器內的繪圖
-            win32gui.SetLayeredWindowAttributes(self._host_hwnd, 0, 255, win32con.LWA_ALPHA)
-
-            self._host_window = QWindow.fromWinId(self._host_hwnd)
-
-            if self._host_window is None:
-                raise RuntimeError("Qt 無法連接圖片容器")
-
-            self.setParent(self._host_window)
-            self.setPosition(0, 0)
-            self._sync_geometry()
-
-            self._target_events = _TargetEvents(self)
-            app.installNativeEventFilter(self._target_events)
-
-        except Exception:
-            self._release_host()
-            raise
-
-
-    def _sync_geometry(self) -> None:
-        """
-        依目標視窗的客戶區與縮放比例更新圖片尺寸
-        """
-
-        if (
-            not self._host_hwnd or not win32gui.IsWindow(self._host_hwnd) or
-            not self._target_hwnd or not win32gui.IsWindow(self._target_hwnd)
-        ):
-            return
-
-        left, top, right, bottom = win32gui.GetClientRect(self._target_hwnd)
-        width, height = right - left, bottom - top
-
-        win32gui.SetWindowPos(
-            self._host_hwnd, 0, 0, 0, width, height,
-            win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE
-        )
-
-        ratio = self.devicePixelRatio()
-        self.resize(round(width / ratio), round(height / ratio))
-        self.update()
-
-
     def set_hwnd(self, hwnd: int) -> None:
         """
-        改用新的目標視窗
+        設定目標 HWND
         """
 
         if hwnd == self._target_hwnd:
             self._sync_geometry()
             return
 
-        visible = self.isVisible()
         self._release_host()
         self._target_hwnd = hwnd
-
-        if visible and hwnd:
-            self.show()
 
 
     def show(self) -> None:
         """
-        顯示圖片, 第一次顯示時才建立內部容器
+        顯示圖片視窗, 需要時建立原生容器
         """
 
         if not self._target_hwnd or not win32gui.IsWindow(self._target_hwnd):
@@ -244,7 +160,7 @@ class ImageWallpaper(QRasterWindow):
 
     def hide(self) -> None:
         """
-        隱藏圖片與內部容器
+        隱藏圖片視窗與原生容器
         """
 
         if self._host_hwnd and win32gui.IsWindow(self._host_hwnd):
@@ -253,9 +169,129 @@ class ImageWallpaper(QRasterWindow):
         super().hide()
 
 
+    def close(self) -> bool:
+        """
+        關閉圖片視窗並釋放原生容器
+        """
+
+        try:
+            return super().close()
+
+        finally:
+            self._release_host()
+
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+
+        if self.width() <= 0 or self.height() <= 0:
+            return
+
+        bounds = QRectF(0, 0, self.width(), self.height())
+        painter = QPainter(self)
+        painter.fillRect(bounds, self.background_color)
+        if self.scaling_mode == "fill":
+            draw_cover_image(painter, bounds, self.image)
+            return
+
+        source = QRectF(self.image.rect())
+        target = QRectF(bounds)
+        if self.scaling_mode == "fit":
+            if self.background_image is not None and not self.background_image.isNull():
+                draw_cover_image(painter, bounds, self.background_image)
+                if self.background_includes_foreground:
+                    return
+            target = fit_image_rect(source.size(), bounds)
+
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.drawImage(target, self.image, source)
+
+
+    def _create_host(self) -> None:
+        """
+        在目標視窗內建立原生容器, 處理父子視窗裁切與合成
+        """
+
+        app = QApplication.instance()
+
+        if app is None:
+            raise RuntimeError("必須先建立 QApplication")
+
+        if not self._target_hwnd or not win32gui.IsWindow(self._target_hwnd):
+            raise RuntimeError("必須先設定有效的目標視窗")
+
+        self.create()
+        left, top, right, bottom = win32gui.GetClientRect(self._target_hwnd)
+
+        try:
+
+            self._host_hwnd = win32gui.CreateWindowEx(
+                win32con.WS_EX_LAYERED |
+                win32con.WS_EX_TRANSPARENT |
+                win32con.WS_EX_NOACTIVATE |
+                win32con.WS_EX_TOOLWINDOW,
+                "Static",
+                "",
+                win32con.WS_CHILD | win32con.WS_CLIPCHILDREN | win32con.WS_CLIPSIBLINGS,
+                0, 0, right - left, bottom - top,
+                self._target_hwnd,
+                None,
+                win32api.GetModuleHandle(None),
+                None
+            )
+
+            parent = win32gui.GetAncestor(self._host_hwnd, win32con.GA_PARENT)
+
+            if parent != self._target_hwnd:
+                raise RuntimeError("圖片容器未掛載到指定視窗")
+
+            # 保持完全不透明, 由 Windows 重導向並合成容器內的繪圖
+            win32gui.SetLayeredWindowAttributes(self._host_hwnd, 0, 255, win32con.LWA_ALPHA)
+
+            # 以原生容器作為 Qt 視窗的父視窗
+            self._host_window = QWindow.fromWinId(self._host_hwnd)
+
+            if self._host_window is None:
+                raise RuntimeError("Qt 無法連接圖片容器")
+
+            self.setParent(self._host_window)
+            self.setPosition(0, 0)
+            self._sync_geometry()
+
+            self._target_events = _TargetEvents(self)
+            app.installNativeEventFilter(self._target_events)
+
+        except Exception:
+            self._release_host()
+            raise
+
+
+    def _sync_geometry(self) -> None:
+        """
+        依目標視窗的客戶區同步原生容器與 Qt 視窗尺寸
+        """
+
+        if (
+            not self._host_hwnd or not win32gui.IsWindow(self._host_hwnd) or
+            not self._target_hwnd or not win32gui.IsWindow(self._target_hwnd)
+        ):
+            return
+
+        left, top, right, bottom = win32gui.GetClientRect(self._target_hwnd)
+        width, height = right - left, bottom - top
+
+        win32gui.SetWindowPos(
+            self._host_hwnd, 0, 0, 0, width, height,
+            win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE
+        )
+
+        ratio = self.devicePixelRatio()
+        self.resize(round(width / ratio), round(height / ratio))
+        self.update()
+
+
     def _release_host(self) -> None:
         """
-        釋放內部原生容器
+        釋放原生容器
         """
 
         if self._target_events is not None:
@@ -284,42 +320,6 @@ class ImageWallpaper(QRasterWindow):
                 win32gui.DestroyWindow(hwnd)
 
 
-    def close(self) -> bool:
-        """
-        關閉圖片視窗並釋放內部容器
-        """
-
-        try:
-            return super().close()
-
-        finally:
-            self._release_host()
-
-
-    def paintEvent(self, event: QPaintEvent) -> None:
-
-        if self.width() <= 0 or self.height() <= 0:
-            return
-
-        bounds = QRectF(0, 0, self.width(), self.height())
-        source = QRectF(self.image.rect())
-        target = QRectF(bounds)
-
-        # 只調整繪製範圍, 避免先建立放大後的圖片
-        if self.scaling_mode == "fill":
-            source.setSize(bounds.size().scaled(source.size(), Qt.AspectRatioMode.KeepAspectRatio))
-            source.moveCenter(QRectF(self.image.rect()).center())
-
-        elif self.scaling_mode == "fit":
-            target.setSize(source.size().scaled(bounds.size(), Qt.AspectRatioMode.KeepAspectRatio))
-            target.moveCenter(bounds.center())
-
-        painter = QPainter(self)
-        painter.fillRect(bounds, self.background_color)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        painter.drawImage(target, self.image, source)
-
-
 class Instance(QObject):
     """
     在 Qt 主執行緒使用, 將圖片輸出到主程式指定的 HWND
@@ -335,18 +335,21 @@ class Instance(QObject):
 
         super().__init__(app)
 
-        self.window: ImageWallpaper | None = None
+        self.window: _ImageWindow | None = None
         self._hwnd = 0
+        self._visible = False
         self.current_image: Path | None = None
         self._scaling_mode = "fill"
         self._background_color = QColor(Qt.GlobalColor.black)
+        self._background_image: QImage | None = None
+        self._background_includes_foreground = False
 
         app.aboutToQuit.connect(self.close)
 
 
     def set_hwnd(self, hwnd: int) -> None:
         """
-        設定目標視窗控制代碼, 0 表示解除掛載
+        設定目標 HWND, 0 表示解除掛載
         """
 
         hwnd = int(hwnd)
@@ -357,11 +360,13 @@ class Instance(QObject):
 
         if self.window is not None:
             self.window.set_hwnd(hwnd)
+            if hwnd and self._visible and not self.window.isVisible():
+                self.window.show()
 
 
     def get_hwnd(self) -> int:
         """
-        取得視窗控制代碼
+        取得目標 HWND
         """
 
         return self._hwnd
@@ -375,7 +380,9 @@ class Instance(QObject):
         source = Path(path).resolve()
 
         if self.window is None:
-            self.window = ImageWallpaper(source, self._hwnd)
+            self.window = _ImageWindow(source, self._hwnd)
+            self.window.background_image = self._background_image
+            self.window.background_includes_foreground = self._background_includes_foreground
 
         else:
 
@@ -392,9 +399,9 @@ class Instance(QObject):
         self.set_scaling(self._scaling_mode, self._background_color)
 
 
-    def set_scaling(self, mode: str, background_color: QColor | str = "#000000") -> None:
+    def set_scaling(self, mode: str, background_color: QColor | str) -> None:
         """
-        設定 fill, fit 或 stretch 與不透明背景色
+        設定縮放模式(fill/fit/stretch)及不透明背景色
         """
 
         if mode not in ("fill", "fit", "stretch"):
@@ -413,24 +420,44 @@ class Instance(QObject):
             self.window.update()
 
 
+    def set_background_image(self, image: QImage | None, *, includes_foreground: bool = False) -> None:
+
+        self._background_image = image
+        self._background_includes_foreground = includes_foreground
+        if self.window is not None:
+            self.window.background_image = image
+            self.window.background_includes_foreground = includes_foreground
+            self.window.update()
+
+
     @Slot()
     def show(self) -> None:
         """
-        顯示圖片
+        顯示輸出
         """
 
         if self.window is None:
             raise RuntimeError("尚未設定圖片")
 
-        self.window.show()
+        try:
+            if self._hwnd and win32gui.IsWindow(self._hwnd):
+                self.window.show()
+
+        except (RuntimeError, win32gui.error):
+            # 目標視窗可能在檢查後被銷毀
+            if win32gui.IsWindow(self._hwnd):
+                raise
+
+        self._visible = True
 
 
     @Slot()
     def hide(self) -> None:
         """
-        隱藏圖片
+        隱藏輸出
         """
 
+        self._visible = False
         if self.window is not None:
             self.window.hide()
 
@@ -438,7 +465,7 @@ class Instance(QObject):
     @Slot()
     def close(self) -> None:
         """
-        釋放圖片及內部容器, 保留目標 HWND
+        釋放資源, 保留目標 HWND 與顯示選項
         """
 
         try:
@@ -448,3 +475,4 @@ class Instance(QObject):
         finally:
             self.window = None
             self.current_image = None
+            self._visible = False

@@ -1,11 +1,13 @@
 """
-媒體縮圖產生, 快取與背景工作
+媒體縮圖, 桌布背景與快取工作
 匯入時不載入 VLC 或建立資料夾
 """
 
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
 import ctypes
+import errno
 import hashlib
 import logging
 import os
@@ -14,9 +16,13 @@ import re
 import tempfile
 import threading
 import time
+from typing import Literal
+from uuid import UUID
 
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QImage, QImageReader, QImageWriter
+from PySide6.QtCore import QRect, QRectF, QSize, Qt, QThread, Signal
+from PySide6.QtGui import QColor, QImage, QImageReader, QImageWriter, QPainter
+
+from display_painting import draw_cover_image, fit_image_rect
 
 
 logger = logging.getLogger(__name__)
@@ -25,12 +31,31 @@ logger = logging.getLogger(__name__)
 SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".mov", ".avi",}
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp",}
 SUPPORTED_MEDIA_EXTENSIONS = (SUPPORTED_VIDEO_EXTENSIONS | SUPPORTED_IMAGE_EXTENSIONS)
+ImageKind = Literal["thumbnail_orig", "thumbnail_blur", "background_blur", "thumbnail_ray", "background_ray"]
+RayMode = Literal["ray1", "ray2"]
+ThumbnailRequest = tuple[Path, ImageKind, int | None, tuple[int, int] | None, RayMode]
+DEFAULT_RAY_MODE: RayMode = "ray2"
+CACHE_NAME = re.compile(
+    r"(?P<source>[0-9a-f]{16})-(?P<digest>[0-9a-f]{8})-"
+    r"(?:[1-5](?:-blur-[1-9][0-9]*-[1-9][0-9]*)?|blur|"
+    r"(?:[1-5]-)?ray[12]-[1-9][0-9]*-[1-9][0-9]*)\.png"
+)
+
+
+def get_ray_mode(path: Path, background: str | None) -> RayMode | None:
+
+    if path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS and (background == "ray1" or background == "ray2"):
+        return background
+
+    return None
 
 
 def cleanup_orphaned_thumbnails(media_dir: Path, thumbnail_dir: Path) -> None:
     """
-    依媒體檔名清除失去來源的縮圖
+    清除失去媒體來源的縮圖與空的快取子目錄
     """
+
+    cache_subdirectories = []
 
     for root, subdirectories, filenames in os.walk(thumbnail_dir):
 
@@ -43,6 +68,9 @@ def cleanup_orphaned_thumbnails(media_dir: Path, thumbnail_dir: Path) -> None:
             if directory.resolve() != directory.absolute():
                 subdirectories.clear()
                 continue
+
+            if directory != thumbnail_dir:
+                cache_subdirectories.append(directory)
 
             with os.scandir(source_directory) as entries:
                 source_ids = {
@@ -60,10 +88,8 @@ def cleanup_orphaned_thumbnails(media_dir: Path, thumbnail_dir: Path) -> None:
 
         for name in filenames:
 
-            if (
-                re.fullmatch(r"[0-9a-f]{16}-[0-9a-f]{8}(?:-[1-5])?\.(?:jpg|png)", name) is None or
-                name[:16] in source_ids
-            ):
+            match = CACHE_NAME.fullmatch(name)
+            if match is None or match["source"] in source_ids:
                 continue
 
             path = directory / name
@@ -74,6 +100,14 @@ def cleanup_orphaned_thumbnails(media_dir: Path, thumbnail_dir: Path) -> None:
             except OSError:
                 logger.warning("清除失效縮圖失敗 - %s", path, exc_info=True)
 
+    # 先刪除子目錄, 父目錄變空時才能一併清理
+    for directory in reversed(cache_subdirectories):
+        try:
+            directory.rmdir()
+        except OSError as error:
+            if error.errno not in (errno.ENOENT, errno.ENOTEMPTY):
+                logger.warning("清除空快取目錄失敗 - %s", directory, exc_info=True)
+
 
 def fast_hash(path: Path) -> str:
     """
@@ -82,7 +116,7 @@ def fast_hash(path: Path) -> str:
 
     digest = hashlib.sha256()
     # 將縮圖演算法版本納入識別碼計算
-    digest.update(b"thumbnail-v5\0")
+    digest.update(b"thumbnail-v7\0")
 
     with path.open("rb") as file:
 
@@ -103,11 +137,9 @@ def fast_hash(path: Path) -> str:
     return digest.hexdigest()[:8]
 
 
-def get_video_thumbnail_sizes(
-    media, cancelled: Callable[[], bool], thumbnail_width: int = 300
-) -> dict[int, tuple[int, int]]:
+def _get_video_frame_sizes(media, cancelled: Callable[[], bool]) -> dict[int, tuple[int, int]]:
     """
-    依影像軌 ID 記錄縮圖大小, 使用可見尺寸, 像素比例與方向
+    依影像軌 ID 記錄原尺寸畫面大小, 使用可見尺寸, 像素比例與方向
     """
 
     if cancelled():
@@ -169,8 +201,7 @@ def get_video_thumbnail_sizes(
             width, height = video.width, video.height
 
             if video.sar_num and video.sar_den:
-                width *= video.sar_num
-                height *= video.sar_den
+                width = width * video.sar_num / video.sar_den
 
             if video.orientation in (
                 getattr(vlc.VideoOrient, "left_top"),
@@ -180,7 +211,7 @@ def get_video_thumbnail_sizes(
             ):
                 width, height = height, width
 
-            sizes[track.id] = (thumbnail_width, max(1, round(thumbnail_width * height / width)))
+            sizes[track.id] = (max(1, round(width)), max(1, round(height)))
 
     finally:
         vlc.libvlc_media_tracks_release(track_array, count)
@@ -191,9 +222,7 @@ def get_video_thumbnail_sizes(
     return sizes
 
 
-def create_video_thumbnail(
-    path: Path, cancelled: Callable[[], bool], thumbnail_width: int = 300
-) -> QImage:
+def _read_video_frame(path: Path, cancelled: Callable[[], bool]) -> QImage:
     """
     使用獨立的靜音 VLC 播放器, 將第一個解碼畫面複製到記憶體, 不建立視窗
     """
@@ -203,7 +232,7 @@ def create_video_thumbnail(
 
     ready = threading.Event()
     frame = {}
-    thumbnail_size = None
+    frame_size = None
     uint_pointer = ctypes.POINTER(ctypes.c_uint)
 
 
@@ -223,26 +252,32 @@ def create_video_thumbnail(
 
             # AV1 可能在選定影像軌前就要求緩衝區
             # 回呼內不呼叫 VLC 播放器 API, 避免停止播放時卡住
-            if thumbnail_size is not None:
-                _, scaled_height = thumbnail_size
+            if frame_size is not None:
+                frame_width, frame_height = frame_size
 
             else:
 
                 if not width[0] or not height[0]:
                     raise RuntimeError("影片沒有可用的緩衝區尺寸")
 
-                scaled_height = max(1, round(thumbnail_width * height[0] / width[0]))
+                frame_width, frame_height = width[0], height[0]
 
-            width[0], height[0] = thumbnail_width, scaled_height
-            pitches[0] = (thumbnail_width * 4 + 31) & ~31
-            lines[0] = (scaled_height + 31) & ~31
+            pitch = (frame_width * 4 + 31) & ~31
+            padded_height = (frame_height + 31) & ~31
+            allocation_limit = QImageReader.allocationLimit()
+            if allocation_limit > 0 and pitch * padded_height > allocation_limit * 1024 * 1024:
+                raise MemoryError("影片畫面超出 Qt 圖片記憶體上限")
+
+            width[0], height[0] = frame_width, frame_height
+            pitches[0], lines[0] = pitch, padded_height
             ctypes.memmove(chroma, b"RV32", 4)
 
 
             # VLC 要求像素平面對齊 32 bytes, 並保留 buffer 至播放器釋放後
             frame["buffer"] = ctypes.create_string_buffer(pitches[0] * lines[0] + 31)
             frame["address"] = (ctypes.addressof(frame["buffer"]) + 31) & ~31
-            frame["height"] = scaled_height
+            frame["width"] = frame_width
+            frame["height"] = frame_height
             frame["pitch"] = pitches[0]
 
             return 1
@@ -270,7 +305,7 @@ def create_video_thumbnail(
                 pixels = ctypes.string_at(frame["address"], frame["pitch"] * frame["height"])
                 frame["image"] = QImage(
                     pixels,
-                    thumbnail_width,
+                    frame["width"],
                     frame["height"],
                     frame["pitch"],
                     QImage.Format.Format_RGB32
@@ -306,10 +341,10 @@ def create_video_thumbnail(
             raise RuntimeError("無法建立縮圖播放器")
 
         media = instance.media_new(str(path))
-        thumbnail_sizes = get_video_thumbnail_sizes(media, cancelled, thumbnail_width)
+        frame_sizes = _get_video_frame_sizes(media, cancelled)
 
-        if len(thumbnail_sizes) == 1:
-            thumbnail_size = next(iter(thumbnail_sizes.values()))
+        if len(frame_sizes) == 1:
+            frame_size = next(iter(frame_sizes.values()))
 
         player.set_media(media)
         player.video_set_callbacks(lock, unlock, None, None)
@@ -328,8 +363,8 @@ def create_video_thumbnail(
             # 在縮圖工作執行緒查詢選軌, 不從 VLC 的原生回呼呼叫播放器 API
             track_id = player.video_get_track()
 
-            if track_id in thumbnail_sizes:
-                thumbnail_size = thumbnail_sizes[track_id]
+            if track_id in frame_sizes:
+                frame_size = frame_sizes[track_id]
 
             if ready.is_set():
 
@@ -338,7 +373,7 @@ def create_video_thumbnail(
                 if image is None or image.isNull():
                     raise RuntimeError("無法取得影片畫面")
 
-                if thumbnail_size is not None:
+                if frame_size is not None:
                     break
 
             if time.monotonic() >= deadline:
@@ -351,7 +386,7 @@ def create_video_thumbnail(
             ):
                 raise RuntimeError("影片沒有可用的畫面")
 
-            if thumbnail_size is None:
+            if frame_size is None:
                 time.sleep(0.05)
 
             else:
@@ -363,7 +398,7 @@ def create_video_thumbnail(
 
         # 選軌前的緩衝區可能使用暫定比例; 最後以實際影像軌的可見尺寸校正
         return image.scaled(
-            *thumbnail_size,
+            *frame_size,
             Qt.AspectRatioMode.IgnoreAspectRatio,
             Qt.TransformationMode.SmoothTransformation
         )
@@ -382,24 +417,292 @@ def create_video_thumbnail(
         instance.release()
 
 
+class _GdiplusStartupInput(ctypes.Structure):
+    _fields_ = [
+        ("version", ctypes.c_uint32), ("debug_callback", ctypes.c_void_p),
+        ("suppress_background_thread", ctypes.c_int), ("suppress_external_codecs", ctypes.c_int)
+    ]
+
+
+class _EffectGuid(ctypes.Structure):
+    _fields_ = [("data", ctypes.c_uint32 * 4)]
+
+
+class _BlurParams(ctypes.Structure):
+    _fields_ = [("radius", ctypes.c_float), ("expand_edge", ctypes.c_int)]
+
+
+@contextmanager
+def _gdiplus_blur(radius: float) -> Iterator[Callable[[QImage], QImage]]:
+    """
+    建立指定半徑的 GDI+ 模糊效果
+    """
+
+    gdip = ctypes.WinDLL("gdiplus")
+    gdip.GdiplusShutdown.restype = None
+    # GdipCreateEffect 的 GUID 以值傳入, 其餘指標使用 ctypes 的指標物件
+    gdip.GdipCreateEffect.argtypes = [_EffectGuid, ctypes.POINTER(ctypes.c_void_p)]
+    blur_guid = _EffectGuid.from_buffer_copy(UUID("633c80a4-1843-482b-9ef2-be2834c5fdd4").bytes_le)
+    token = ctypes.c_size_t()
+    effect = ctypes.c_void_p()
+
+    def check(status: int) -> None:
+        if status != 0:
+            raise RuntimeError(f"GDI+ 高斯模糊失敗 (status={status})")
+
+    def apply_blur(image: QImage) -> QImage:
+
+        result = image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+        if result.isNull():
+            raise ValueError("無法取得模糊來源的像素")
+
+        # PixelFormat32bppPARGB 與 Qt 的預乘 BGRA 共用同一塊記憶體
+        bitmap = ctypes.c_void_p()
+        pixels = ctypes.c_ubyte.from_buffer(memoryview(result.bits()))
+        check(gdip.GdipCreateBitmapFromScan0(
+            result.width(), result.height(), result.bytesPerLine(), 0x000E200B,
+            ctypes.byref(pixels), ctypes.byref(bitmap)
+        ))
+        try:
+            check(gdip.GdipBitmapApplyEffect(bitmap, effect, None, False, None, None))
+        finally:
+            gdip.GdipDisposeImage(bitmap)
+
+        return result
+
+    with ExitStack() as resources:
+        check(gdip.GdiplusStartup(ctypes.byref(token), ctypes.byref(_GdiplusStartupInput(1)), None))
+        resources.callback(gdip.GdiplusShutdown, token)
+        check(gdip.GdipCreateEffect(blur_guid, ctypes.byref(effect)))
+        resources.callback(gdip.GdipDeleteEffect, effect)
+
+        params = _BlurParams(min(255.0, radius), False)
+        check(gdip.GdipSetEffectParameters(effect, ctypes.byref(params), ctypes.sizeof(params)))
+        yield apply_blur
+
+
+def _gaussian_blur(image: QImage) -> QImage:
+
+    radius = max(image.width(), image.height()) * 0.03
+    with _gdiplus_blur(radius) as blur:
+        return blur(image)
+
+
+def _opaque_on_black(image: QImage) -> QImage:
+    """
+    將含透明度的圖片合成到不透明黑底
+    """
+
+    if not image.hasAlphaChannel():
+        return image
+
+    opaque = QImage(image.size(), QImage.Format.Format_RGB32)
+    if opaque.isNull():
+        raise RuntimeError("無法配置黑底合成圖")
+    opaque.fill(Qt.GlobalColor.black)
+    with QPainter(opaque) as painter:
+        painter.drawImage(0, 0, image)
+
+    return opaque
+
+
+def _draw_ray_strip(
+    painter: QPainter, target: QRect, strip: QImage, *,
+    sideways: bool, leading: bool, inner_distance: float,
+    ray_mode: RayMode, ray_decay: float, blur: Callable[[QImage], QImage], cancelled: Callable[[], bool]
+) -> None:
+    """
+    依指定的方向將原圖邊緣延伸到留白, 並往外柔化與衰減
+    (逐次高斯模糊)
+    """
+
+    depth = target.width() if sideways else target.height()
+    for index in range(depth):
+
+        if cancelled():
+            raise InterruptedError("縮圖工作已取消")
+
+        progress = index / max(1, depth - 1)
+
+        sample_ratio = 1.0
+        if ray_mode == "ray2":
+            sample_ratio = inner_distance / max(1e-6, inner_distance + index)
+
+        position = depth - index - 1 if leading else index
+
+        if sideways:
+            height = strip.height() * sample_ratio
+            sample = QRectF(0, (strip.height() - height) / 2, 1, height)
+            destination = QRectF(target.x() + position, target.y(), 1, target.height())
+
+        else:
+            width = strip.width() * sample_ratio
+            sample = QRectF((strip.width() - width) / 2, 0, width, 1)
+            destination = QRectF(target.x(), target.y() + position, target.width(), 1)
+
+        # 繪製目前的像素列
+        painter.drawImage(destination, strip, sample)
+
+        # 光暈亮度衰減
+        darken = ray_decay * progress ** 2
+        painter.fillRect(destination, QColor.fromRgbF(0.0, 0.0, 0.0, darken))
+
+        # 將目前的像素列模糊後作為下一列
+        if index < depth - 1:
+            strip = blur(strip)
+
+
+def _render_ray(image: QImage, size: QSize, ray_mode: RayMode, cancelled: Callable[[], bool]) -> QImage:
+    """
+    依指定尺寸合成原圖與光暈背景
+    """
+
+    # 高斯模糊半徑
+    GAUSSIAN_BLUR_RADIUS = 5.0
+    # 光暈亮度衰減
+    RAY_DECAY = 0.55
+
+    result = QImage(size, QImage.Format.Format_RGB32)
+    if result.isNull():
+        raise RuntimeError("無法配置光暈背景")
+    result.fill(Qt.GlobalColor.black)
+
+    source = QRectF(image.rect())
+    fitted = fit_image_rect(source.size(), QRectF(result.rect()))
+
+    # 分別對齊繪製矩形的兩端, 避免起點和寬度取整後推算出錯誤終點
+    start_pixel = fitted.topLeft().toPoint()
+    end_pixel = fitted.bottomRight().toPoint()
+    sideways = start_pixel.x() > 0 or end_pixel.x() < size.width()
+    extent = size.width() if sideways else size.height()
+    leading_gap = start_pixel.x() if sideways else start_pixel.y()
+    trailing_gap = extent - (end_pixel.x() if sideways else end_pixel.y())
+
+    image = _opaque_on_black(image)
+    inner_distance = (fitted.width() if sideways else fitted.height()) / 2
+
+    with QPainter(result) as painter, ExitStack() as resources:
+
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        blur = None
+
+        for leading, gutter in ((True, leading_gap), (False, trailing_gap)):
+
+            if not gutter:
+                continue
+
+            if blur is None:
+                source_length = image.height() if sideways else image.width()
+                output_length = size.height() if sideways else size.width()
+                radius = GAUSSIAN_BLUR_RADIUS * source_length / output_length
+                blur = resources.enter_context(_gdiplus_blur(radius))
+
+            # 繪製矩形朝原圖延伸一個像素, 避免取整時露出黑線
+            start = 0 if leading else extent - gutter - 1
+
+            if sideways:
+                edge = image.copy(0 if leading else image.width() - 1, 0, 1, image.height())
+                target = QRect(start, 0, gutter + 1, size.height())
+
+            else:
+                edge = image.copy(0, 0 if leading else image.height() - 1, image.width(), 1)
+                target = QRect(0, start, size.width(), gutter + 1)
+
+            _draw_ray_strip(
+                painter, target, edge, sideways=sideways, leading=leading,
+                inner_distance=inner_distance, ray_mode=ray_mode, ray_decay=RAY_DECAY, blur=blur, cancelled=cancelled
+            )
+
+        painter.drawImage(fitted, image, source)
+
+    return result
+
+
+def _render_blurred_preview(image: QImage, background: QImage, size: QSize) -> QImage:
+    """
+    依桌布的繪製順序, 在螢幕大小的畫布上合成背景與原圖
+    """
+
+    result = QImage(size, QImage.Format.Format_RGB32)
+    if result.isNull():
+        raise RuntimeError("無法配置模糊預覽")
+    result.fill(Qt.GlobalColor.black)
+
+    bounds = QRectF(result.rect())
+    source = QRectF(image.rect())
+    with QPainter(result) as painter:
+        draw_cover_image(painter, bounds, background)
+        painter.drawImage(fit_image_rect(source.size(), bounds), image, source)
+
+    return result
+
+
 def ensure_thumbnail(
     path: Path,
     cancelled: Callable[[], bool],
     *,
+    kind: ImageKind,
     media_dir: Path,
     thumbnail_dir: Path,
-    preview_size: int = 3
+    background_dir: Path,
+    preview_size: int | None = None,
+    screen_size: tuple[int, int] | None = None,
+    ray_mode: RayMode = DEFAULT_RAY_MODE
 ) -> Path:
     """
-    驗證指定尺寸的縮圖或產生 PNG; 成功後才清除同來源舊版本的各尺寸縮圖
+    驗證指定成品的快取, 缺少時產生並回傳路徑
     """
+
+    canvas_size = None
+    preview_canvas_size = None
+    valid_preview_size = type(preview_size) is int and 1 <= preview_size <= 5
+    is_ray = kind in ("background_ray", "thumbnail_ray")
+
+    if is_ray or kind == "thumbnail_blur":
+
+        if screen_size is None or len(screen_size) != 2 or any(type(n) is not int or n <= 0 for n in screen_size):
+            raise ValueError("合成圖片需要有效的螢幕尺寸")
+
+        width, height = screen_size
+        canvas_size = QSize(width, height)
+        if is_ray:
+            if ray_mode not in ("ray1", "ray2"):
+                raise ValueError("光暈模式需為 ray1 或 ray2")
+            variant = f"{ray_mode}-{width}-{height}"
+        else:
+            variant = f"blur-{width}-{height}"
+
+        if kind != "background_ray":
+            if not valid_preview_size or preview_size is None:
+                raise ValueError("合成縮圖需要有效的預覽尺寸")
+            limit = preview_size * 100
+            preview_canvas_size = canvas_size.scaled(limit, limit, Qt.AspectRatioMode.KeepAspectRatio)
+            preview_canvas_size = preview_canvas_size.expandedTo(QSize(1, 1))
+            cache_dir, variant = thumbnail_dir, f"{preview_size}-{variant}"
+
+        else:
+            if preview_size is not None:
+                raise ValueError("桌布光暈背景使用螢幕尺寸")
+            cache_dir = background_dir
+
+    elif kind == "background_blur":
+        if preview_size is not None:
+            raise ValueError("桌布模糊背景使用原尺寸")
+        cache_dir, variant = background_dir, "blur"
+
+    elif kind == "thumbnail_orig" and valid_preview_size:
+        cache_dir, variant = thumbnail_dir, str(preview_size)
+
+    else:
+        raise ValueError("縮圖種類或尺寸無效")
 
     path = path.resolve(strict=True)
     relative_path = path.relative_to(media_dir.resolve())
+    extension = path.suffix.lower()
 
     if (
         not path.is_file() or
-        path.suffix.lower() not in SUPPORTED_MEDIA_EXTENSIONS
+        extension not in (SUPPORTED_IMAGE_EXTENSIONS if is_ray else SUPPORTED_MEDIA_EXTENSIONS)
     ):
         raise ValueError("不支援的縮圖來源")
 
@@ -407,55 +710,97 @@ def ensure_thumbnail(
     original_stat = path.stat()
     digest = fast_hash(path)
     source_id = hashlib.sha256(path.name.encode("utf-8")).hexdigest()[:16]
-    prefix = f"{source_id}-"
-    directory = thumbnail_dir / relative_path.parent
-    destination = directory / f"{prefix}{digest}-{preview_size}.png"
-    thumbnail_width = preview_size * 100
+    cache_stem = f"{source_id}-{digest}"
+    directory = cache_dir / relative_path.parent
+    destination = directory / f"{cache_stem}-{variant}.png"
 
     if cancelled():
         raise InterruptedError("縮圖工作已取消")
 
-    if destination.is_file() and not QImage(str(destination)).isNull():
-        return destination
+    if destination.is_file():
+        cached = QImage(str(destination))
+        expected_size = preview_canvas_size or canvas_size
+        if not cached.isNull() and (expected_size is None or cached.size() == expected_size):
+            return destination
 
+    # 只清理取圖前已存在的快取, 避免刪除其他工作剛產生的新版本
+    old_paths = list(directory.glob(f"{source_id}-*"))
+    blur_path = None
+    if kind == "thumbnail_blur":
+        blur_path = background_dir / relative_path.parent / f"{cache_stem}-blur.png"
+        old_paths.extend(blur_path.parent.glob(f"{source_id}-*"))
 
-    if path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
+    if kind == "thumbnail_ray":
+
+        background_path = ensure_thumbnail(
+            path, cancelled, kind="background_ray", media_dir=media_dir, thumbnail_dir=thumbnail_dir,
+            background_dir=background_dir, screen_size=screen_size, ray_mode=ray_mode
+        )
+        image = QImage(str(background_path))
+
+    elif extension in SUPPORTED_IMAGE_EXTENSIONS:
 
         reader = QImageReader(str(path))
         reader.setAutoTransform(True)
-        size = reader.size()
-
-        if size.isValid() and size.width() > 0:
-
-            size.setHeight(max(1, round(thumbnail_width * size.height() / size.width())))
-            size.setWidth(thumbnail_width)
-            reader.setScaledSize(size)
-
         image = reader.read()
 
     else:
-        image = create_video_thumbnail(path, cancelled, thumbnail_width)
+        image = _read_video_frame(path, cancelled)
 
     if image.isNull():
         raise RuntimeError("無法讀取縮圖來源")
+    if cancelled():
+        raise InterruptedError("縮圖工作已取消")
 
-    image = image.scaledToWidth(thumbnail_width, Qt.TransformationMode.SmoothTransformation)
-    current_stat = path.stat()
+    if kind == "background_ray" and canvas_size is not None:
+        image = _render_ray(image, canvas_size, ray_mode, cancelled)
+    elif blur_path is not None and canvas_size is not None:
+        background = QImage(str(blur_path))
+        if background.isNull() or background.size() != image.size():
+            background = _gaussian_blur(image)
+            _save_cache_png(background, blur_path, path, original_stat, cancelled)
+        image = _render_blurred_preview(image, background, canvas_size)
+    elif kind == "background_blur":
+        image = _gaussian_blur(image)
+    elif kind == "thumbnail_orig" and preview_size is not None:
+        width = preview_size * 100
+        height = max(1, round(width * image.height() / image.width()))
+        preview_canvas_size = QSize(width, height)
 
-    if (
-        (original_stat.st_size, original_stat.st_mtime_ns) !=
-        (current_stat.st_size, current_stat.st_mtime_ns)
-    ):
-        raise OSError("產生縮圖期間來源檔案已變更")
+    if preview_canvas_size is not None:
+        image = image.scaled(
+            preview_canvas_size, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation
+        )
+
+    _save_cache_png(image, destination, path, original_stat, cancelled)
+
+    # 保留相同素材版本的其他尺寸與背景
+    try:
+        for old_path in old_paths:
+            match = CACHE_NAME.fullmatch(old_path.name)
+            if match is None or not old_path.is_file():
+                continue
+            if match["digest"] != digest:
+                old_path.unlink(missing_ok=True)
+
+    except OSError:
+        logger.warning("清除舊快取圖片失敗 - %s", path, exc_info=True)
+
+    return destination
+
+
+def _save_cache_png(
+    image: QImage, destination: Path, source: Path, original_stat: os.stat_result, cancelled: Callable[[], bool]
+) -> None:
 
     if cancelled():
         raise InterruptedError("縮圖工作已取消")
 
 
-    directory.mkdir(parents=True, exist_ok=True)
+    destination.parent.mkdir(parents=True, exist_ok=True)
 
     with tempfile.NamedTemporaryFile(
-        dir=directory,
+        dir=destination.parent,
         prefix=".thumbnail-",
         suffix=".tmp",
         delete=False
@@ -474,41 +819,85 @@ def ensure_thumbnail(
         finally:
             writer.device().close()
 
+        current_stat = source.stat()
+        if (
+            (original_stat.st_size, original_stat.st_mtime_ns) !=
+            (current_stat.st_size, current_stat.st_mtime_ns)
+        ):
+            raise OSError("產生快取圖片期間來源檔案已變更")
+        if cancelled():
+            raise InterruptedError("縮圖工作已取消")
         os.replace(temp_path, destination)
 
     finally:
         temp_path.unlink(missing_ok=True)
 
 
-    # 同一版本來源的其他尺寸保留, 只清除同一來源識別碼的舊快取
-    try:
-
-        for old_path in directory.iterdir():
-
-            suffix = old_path.name.removeprefix(prefix)
-
-            if (
-                old_path.name.startswith(prefix) and
-                re.fullmatch(r"[0-9a-f]{8}(?:-[1-5])?\.(?:jpg|png)", suffix) is not None and
-                (old_path.suffix == ".jpg" or len(suffix) == 12 or suffix[:8] != digest) and
-                old_path.is_file()
-            ):
-                old_path.unlink()
-
-    except OSError:
-        logger.warning("清除舊縮圖失敗 - %s", path, exc_info=True)
+    logger.info("已產生快取圖片 - %s", destination)
 
 
-    logger.info("已產生縮圖 - %s", destination)
-    return destination
+class ImageCacheClearThread(QThread):
+    """
+    逐一刪除縮圖與桌布背景圖
+    """
+
+    def __init__(self, thumbnail_dir: Path) -> None:
+
+        super().__init__()
+
+        self.cache_dirs = (thumbnail_dir, thumbnail_dir.parent / "backgrounds")
+
+    def iter_png_files(self) -> Iterator[Path]:
+        """
+        遍歷快取目錄下的 PNG
+        """
+
+        for cache_dir in self.cache_dirs:
+            for root, subdirectories, filenames in os.walk(cache_dir):
+
+                directory = Path(root)
+
+                try:
+                    # 略過連結目錄, 避免清理其指向的其他位置
+                    if directory.resolve() != directory.absolute():
+                        subdirectories.clear()
+                        continue
+
+                except OSError:
+                    subdirectories.clear()
+                    continue
+
+                for name in filenames:
+                    if name.lower().endswith(".png"):
+                        yield directory / name
+
+    def run(self) -> None:
+        """
+        逐一刪除快取目錄下的 PNG
+        """
+
+        for path in self.iter_png_files():
+
+            if self.isInterruptionRequested():
+                return
+
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                logger.debug("清除快取圖片失敗 - %s", path, exc_info=True)
 
 
 class ThumbnailThread(QThread):
     """
-    依序處理縮圖要求, 預覽項目可插隊, 同一路徑與尺寸不重複加入
+    依序處理縮圖要求, 預覽項目可插隊, 同一路徑, 種類與尺寸不重複加入
     """
 
-    thumbnail_ready = Signal(str, int, QImage)
+    # 自動取色只接收路徑與圖片
+    thumbnail_ready = Signal(str, QImage, int)
+    blurred_thumbnail_ready = Signal(str, int, QSize, QImage)
+    background_ready = Signal(str, QImage)
+    ray_thumbnail_ready = Signal(str, int, QSize, str, QImage)
+    ray_background_ready = Signal(str, QSize, str, QImage)
 
 
     def __init__(self, media_dir: Path, thumbnail_dir: Path, parent=None) -> None:
@@ -518,42 +907,58 @@ class ThumbnailThread(QThread):
 
         self.media_dir = media_dir
         self.thumbnail_dir = thumbnail_dir
+        self.background_dir = thumbnail_dir.parent / "backgrounds"
 
-        self.queue: deque[tuple[Path, int]] = deque()
-        self.pending: set[tuple[Path, int]] = set()
+        self.queue: deque[ThumbnailRequest] = deque()
+        self.pending: set[ThumbnailRequest] = set()
         self.pending_lock = threading.Condition()
         self.stopping = False
 
 
-    def request(self, path: Path, *, preview_size: int = 3, priority: bool = False) -> None:
+    def request(
+        self, path: Path, kind: ImageKind, *other_kinds: ImageKind, preview_size: int | None = None,
+        screen_size: tuple[int, int] | None = None, ray_mode: RayMode = DEFAULT_RAY_MODE,
+        priority: bool = False
+    ) -> None:
+        """
+        按傳入順序排程, 每個種類各自產生和回傳
+        """
 
-        request = (path, preview_size)
+        kinds = (kind, *other_kinds)
+
         with self.pending_lock:
 
             if self.stopping:
                 return
 
-            if request in self.pending:
+            for image_kind in reversed(kinds) if priority else kinds:
 
-                if not priority:
-                    return
+                is_ray = image_kind in ("background_ray", "thumbnail_ray")
+                size = screen_size if is_ray or image_kind == "thumbnail_blur" else None
+                mode = ray_mode if is_ray else DEFAULT_RAY_MODE
+                request = (path, image_kind, preview_size, size, mode)
+                if request in self.pending:
 
-                try:
-                    self.queue.remove(request)
+                    if not priority:
+                        continue
 
-                except ValueError:
-                    # 已取出的工作正在處理, 不重複排入
-                    return
+                    try:
+                        self.queue.remove(request)
 
-            else:
-                self.pending.add(request)
+                    except ValueError:
+                        # 已取出的工作正在處理, 不重複排入
+                        continue
 
-            if priority:
-                self.queue.appendleft(request)
+                else:
+                    self.pending.add(request)
 
-            else:
-                self.queue.append(request)
+                if priority:
+                    self.queue.appendleft(request)
+                else:
+                    self.queue.append(request)
 
+            if not self.queue:
+                return
             self.pending_lock.notify()
 
             if not self.isRunning():
@@ -561,6 +966,9 @@ class ThumbnailThread(QThread):
 
 
     def run(self) -> None:
+        """
+        逐一產生佇列中的成品, 依種類送出對應訊號
+        """
 
         while not self.isInterruptionRequested():
 
@@ -571,36 +979,46 @@ class ThumbnailThread(QThread):
                 if self.stopping or self.isInterruptionRequested():
                     break
 
-                path, preview_size = self.queue.popleft()
+                request = self.queue.popleft()
 
-            image = QImage()
+            path, kind, preview_size, screen_size, ray_mode = request
 
             try:
 
-                thumbnail_path = ensure_thumbnail(
-                    path,
-                    self.isInterruptionRequested,
-                    media_dir=self.media_dir,
-                    thumbnail_dir=self.thumbnail_dir,
-                    preview_size=preview_size
+                image_path = ensure_thumbnail(
+                    path, self.isInterruptionRequested, kind=kind, media_dir=self.media_dir,
+                    thumbnail_dir=self.thumbnail_dir, background_dir=self.background_dir, preview_size=preview_size,
+                    screen_size=screen_size, ray_mode=ray_mode
                 )
-                image = QImage(str(thumbnail_path))
-
+                image = QImage(str(image_path))
                 if image.isNull():
-                    raise RuntimeError("無法讀取縮圖")
+                    raise RuntimeError("無法讀取快取圖片")
 
             except InterruptedError:
                 break
 
             except Exception:
-                logger.exception("產生縮圖失敗 - %s", path)
+                logger.exception("產生快取圖片失敗 (%s) - %s", kind, path)
+                continue
 
             finally:
                 with self.pending_lock:
-                    self.pending.discard((path, preview_size))
+                    self.pending.discard(request)
 
-            if not image.isNull() and not self.isInterruptionRequested():
-                self.thumbnail_ready.emit(str(path), preview_size, image)
+            if not self.isInterruptionRequested():
+
+                if kind == "background_ray" and screen_size is not None:
+                    self.ray_background_ready.emit(str(path), QSize(*screen_size), ray_mode, image)
+                elif kind == "thumbnail_ray" and preview_size is not None and screen_size is not None:
+                    self.ray_thumbnail_ready.emit(
+                        str(path), preview_size, QSize(*screen_size), ray_mode, image
+                    )
+                elif kind == "background_blur":
+                    self.background_ready.emit(str(path), image)
+                elif kind == "thumbnail_blur" and preview_size is not None and screen_size is not None:
+                    self.blurred_thumbnail_ready.emit(str(path), preview_size, QSize(*screen_size), image)
+                elif kind == "thumbnail_orig" and preview_size is not None:
+                    self.thumbnail_ready.emit(str(path), image, preview_size)
 
 
     def stop(self) -> None:

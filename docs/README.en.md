@@ -137,9 +137,10 @@ Name | Item | Default
 Media folder | MEDIA_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\video\`
 Media import folder | SINGLE_IMPORT_DIR | `_imports/` inside the media folder
 Thumbnail folder | THUMBNAIL_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\thumbnails\`
+Blurred wallpaper background folder |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\backgrounds\`
 Log file |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\log\log.log`
 VLC wallpaper playback options |  | Audio disabled, video title hidden, repeat option `--input-repeat=65535`
-Wallpaper scaling mode |  | Images and videos preserve their aspect ratio and fill the screen with centered cropping
+Default wallpaper scaling mode |  | Images and videos preserve their aspect ratio and fill the screen with centered cropping
 Wallpaper selection order on startup |  | Saved wallpaper for the monitor > first recent entry > first media list entry; the file must exist for either of the first two choices
 Default wallpaper reattachment delay |  | 0.2 s
 Reattachment wait when the desktop is not ready |  | 2 s
@@ -147,6 +148,7 @@ Retry interval after wallpaper reattachment fails |  | 2 s
 Wallpaper reattachment retry limit |  | 2 retries, 3 attempts in total including the initial attempt
 Wake interval when stopping VLC |  | 0.05 s
 Desktop readiness check interval on startup |  | 1 s
+Desktop readiness timeout on startup |  | 120 s
 Notification display duration |  | 3 s
 Log level |  | INFO
 Maximum size per log file |  | 2 MiB

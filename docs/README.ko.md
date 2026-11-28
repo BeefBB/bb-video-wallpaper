@@ -137,9 +137,10 @@ Folder/
 미디어 폴더 | MEDIA_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\video\`
 미디어 가져오기 폴더 | SINGLE_IMPORT_DIR | 미디어 폴더 안의 `_imports/`
 썸네일 폴더 | THUMBNAIL_DIR | `%LOCALAPPDATA%\BB\BB Video Wallpaper\thumbnails\`
+배경화면용 흐림 이미지 폴더 |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\backgrounds\`
 로그 파일 |  | `%LOCALAPPDATA%\BB\BB Video Wallpaper\log\log.log`
 VLC 배경화면 재생 옵션 |  | 오디오 비활성화, 동영상 제목 숨김, 반복 옵션 `--input-repeat=65535`
-배경화면 크기 조정 방식 |  | 이미지와 동영상 모두 종횡비를 유지하며 중앙을 기준으로 잘라 화면을 채움
+기본 배경화면 크기 조정 방식 |  | 이미지와 동영상 모두 종횡비를 유지하며 중앙을 기준으로 잘라 화면을 채움
 시작 시 배경화면 선택 순서 |  | 해당 모니터에 저장된 배경화면 > 최근 기록의 첫 항목 > 미디어 목록의 첫 항목, 앞의 두 후보는 파일이 존재해야 함
 배경화면 재연결 기본 지연 시간 |  | 0.2 s
 바탕 화면이 준비되지 않았을 때 재연결 대기 시간 |  | 2 s
@@ -147,6 +148,7 @@ VLC 배경화면 재생 옵션 |  | 오디오 비활성화, 동영상 제목 숨
 배경화면 재연결 실패 후 최대 재시도 횟수 |  | 재시도 2회, 최초 시도를 포함해 총 3회
 VLC 중지 시 깨우기 간격 |  | 0.05 s
 시작 시 바탕 화면 준비 상태 확인 간격 |  | 1 s
+시작 시 바탕 화면 준비 대기 시간 제한 |  | 120 s
 알림 표시 시간 |  | 3 s
 로그 수준 |  | INFO
 로그 파일당 최대 크기 |  | 2 MiB

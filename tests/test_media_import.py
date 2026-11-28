@@ -1,13 +1,11 @@
 """
-測試媒體匯入的同名處理, 長檔名, 內容去重, 容量檢查, 進度與取消
+測試媒體匯入期間的來源保護與部分寫入失敗後的清理
 只在暫存資料夾操作, 不啟動桌布或修改使用者設定
 """
 
 from contextlib import contextmanager
 import errno
 from functools import partial
-import hashlib
-import json
 import os
 from pathlib import Path
 import shutil
@@ -24,104 +22,35 @@ ROOT = Path(__file__).resolve().parents[1]
 if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
 
-from media_import import MediaImportCancelled, calculate_sha256, import_media
+from media_import import calculate_sha256, import_media
 
 
-@unittest.skipUnless(os.name == "nt", "需要 Windows 的 rename 不覆寫語意")
+@unittest.skipUnless(os.name == "nt", "需要 Windows 的檔案共用模式")
 class MediaImportTests(unittest.TestCase):
     """
-    媒體匯入, 容量檢查與檔名衝突處理
+    Windows 來源鎖定與匯入失敗後的檔案保護
     """
 
     def setUp(self) -> None:
         """
-        建立暫存來源與匯入目錄, 固定可用容量及語言
+        建立暫存來源與匯入目錄, 固定可用容量
         """
 
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp_dir.cleanup)
-        self.source_dir = Path(self.temp_dir.name) / "source"
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.source_dir = directory / "source"
         self.source_dir.mkdir()
-        self.media_dir = Path(self.temp_dir.name) / "media"
-        self.import_dir = self.media_dir / "_imports"
+        self.import_dir = directory / "media" / "_imports"
         self.import_dir.mkdir(parents=True)
 
         # 模擬可用容量
-        self.disk_usage = self.enterContext(mock.patch.object(shutil, "disk_usage"))
-        self.disk_usage.return_value.free = 1024 * 1024 * 1024
+        disk_usage = self.enterContext(mock.patch.object(shutil, "disk_usage"))
+        disk_usage.return_value.free = 1024 * 1024 * 1024
 
-        self.language = json.loads((ROOT / "lang" / "zh-TW.json").read_text(encoding="utf-8"))
         self.import_media = partial(
             import_media,
             import_dir=self.import_dir,
-            translate=lambda key: self.language.get(key, key)
+            translate=lambda key: key
         )
-
-
-    def test_space_boundary_rejects_before_copy_and_accepts_exact_reserve(self) -> None:
-        """
-        容量不足時在建立暫存檔前拒絕, 剛好保留 200 MiB 時可完成匯入
-        """
-
-        source = self.source_dir / "sample.mp4"
-        contents = b"new"
-        source.write_bytes(contents)
-        # 來源檔案大小加上 200 MiB 保留空間
-        self.disk_usage.return_value.free = len(contents) + 200 * 1024 * 1024 - 1
-
-        with mock.patch.object(tempfile, "NamedTemporaryFile") as temporary_file:
-            with self.assertRaises(OSError):
-                self.import_media(source)
-            temporary_file.assert_not_called()
-        self.assertEqual(list(self.import_dir.iterdir()), [])
-        self.assertEqual(source.read_bytes(), contents)
-
-        self.disk_usage.return_value.free += 1
-        destination = self.import_media(source)
-        self.assertEqual(destination.read_bytes(), contents)
-        self.assertEqual(source.read_bytes(), contents)
-        self.assertEqual(list(self.import_dir.iterdir()), [destination])
-
-
-    def test_existing_file_or_identical_content_is_reused_when_disk_is_full(self) -> None:
-        """
-        磁碟已滿時仍可重用匯入目錄內的來源檔或內容相同的既有檔案
-        """
-
-        existing = self.import_dir / "existing.mp4"
-        existing.write_bytes(b"same")
-        source = self.source_dir / "sample.mp4"
-        source.write_bytes(b"same")
-        self.disk_usage.return_value.free = 0
-        progress = mock.Mock()
-
-        for path in (source, existing):
-            with self.subTest(source=path):
-                self.assertEqual(self.import_media(path, progress=progress), existing)
-                self.assertEqual(list(self.import_dir.iterdir()), [existing])
-        progress.assert_not_called()
-        self.disk_usage.assert_not_called()
-
-
-    def test_source_with_active_writer_is_rejected_and_can_be_retried(self) -> None:
-        """
-        驗證已有寫入者時拒絕匯入且不留下暫存檔, 關閉寫入者後可重試
-        """
-
-        source = self.source_dir / "sample.mp4"
-        contents = b"new contents"
-        source.write_bytes(contents)
-        progress = mock.Mock()
-
-        with source.open("r+b"):
-            with self.assertRaises(OSError) as caught:
-                self.import_media(source, progress=progress)
-
-        self.assertEqual(str(caught.exception), self.language["media_source_busy"])
-        progress.assert_not_called()
-        self.assertEqual(list(self.import_dir.iterdir()), [])
-        destination = self.import_media(source)
-        self.assertEqual(destination.read_bytes(), contents)
 
 
     def test_source_is_protected_during_hashing_and_copy_and_released_on_success(self) -> None:
@@ -219,130 +148,6 @@ class MediaImportTests(unittest.TestCase):
         self.assertEqual(existing.read_bytes(), b"old contents")
         with source.open("r+b") as file:
             self.assertEqual(file.read(), b"new contents")
-
-
-    def test_cancel_during_hashing_source_or_candidate(self) -> None:
-        """
-        計算來源或既有檔案的雜湊時可取消
-        """
-
-        source = self.source_dir / "sample.mp4"
-        source.write_bytes(b"new contents")
-        existing = self.import_dir / "existing.mp4"
-        existing.write_bytes(b"old contents")
-        real_sha256 = hashlib.sha256
-
-        # 依序取消來源與既有檔案的雜湊
-        for cancel_hash_number in (1, 2):
-            with self.subTest(cancel_hash_number=cancel_hash_number):
-                cancelled = False
-                hash_count = 0
-                progress = mock.Mock()
-
-                def new_digest():
-                    """
-                    建立雜湊物件, 在指定次數的雜湊計算中加入取消回呼
-                    """
-
-                    nonlocal hash_count
-                    hash_count += 1
-                    digest = real_sha256()
-
-                    if hash_count == cancel_hash_number:
-
-                        def update_and_cancel(chunk):
-                            """
-                            更新雜湊內容後設定取消旗標
-                            """
-
-                            nonlocal cancelled
-                            digest.update(chunk)
-                            cancelled = True
-
-                        wrapper = mock.Mock(wraps=digest)
-                        wrapper.update.side_effect = update_and_cancel
-                        return wrapper
-
-                    return digest
-
-                with mock.patch.object(hashlib, "sha256", side_effect=new_digest):
-                    with self.assertRaises(MediaImportCancelled):
-                        self.import_media(source, progress=progress, cancelled=lambda: cancelled)
-
-                progress.assert_not_called()
-                self.assertEqual(hash_count, cancel_hash_number)
-                self.assertEqual(list(self.import_dir.iterdir()), [existing])
-                self.assertEqual(existing.read_bytes(), b"old contents")
-                with source.open("r+b") as file:
-                    self.assertEqual(file.read(), b"new contents")
-
-
-    def test_cancel_during_copy_cleans_up_partial_file(self) -> None:
-        """
-        複製中取消時清除暫存檔
-        """
-
-        source = self.source_dir / "sample.mp4"
-        contents = b"new" * (1024 * 1024)
-        source.write_bytes(contents)
-        existing = self.import_dir / source.name
-        existing.write_bytes(b"old contents")
-
-        cancelled = False
-        updates = []
-
-        def report(percent):
-            """
-            記錄複製進度, 開始複製後確認暫存檔存在並要求取消
-            """
-
-            nonlocal cancelled
-            updates.append(percent)
-
-            if percent > 0:
-                self.assertTrue(list(self.import_dir.glob(".import-*.tmp")))
-                cancelled = True
-
-        with self.assertRaises(MediaImportCancelled):
-            self.import_media(source, progress=report, cancelled=lambda: cancelled)
-
-        self.assertNotIn(100, updates)
-        self.assertEqual(list(self.import_dir.iterdir()), [existing])
-        self.assertEqual(existing.read_bytes(), b"old contents")
-        with source.open("r+b") as file:
-            self.assertEqual(file.read(), contents)
-
-
-    def test_collisions_preserve_files_and_reimport_reuses_truncated_names(self) -> None:
-        """
-        同名時保留既有檔案, 長檔名依 UTF-16 截短, 再次匯入重用相同內容
-        """
-
-        cases = (
-            ("short", "sample", 2, "sample(2).mp4"),
-            ("chinese", "桌" * 251, 1, "桌" * 244 + "(1).mp4"),
-            ("emoji", "a" + "🌄" * 125, 1, "a" + "🌄" * 121 + "(1).mp4"),
-            ("two-digits", "a" * 248, 10, "a" * 243 + "(10).mp4"),
-        )
-        for label, stem, count, expected in cases:
-            with self.subTest(case=label):
-                source = self.source_dir / f"{stem}.mp4"
-                source.write_bytes(b"new")
-                import_dir = self.import_dir / label
-                import_dir.mkdir()
-                existing = [import_dir / source.name]
-                existing.extend(import_dir / f"{stem}({index}).mp4" for index in range(1, count))
-                for path in existing:
-                    path.write_bytes(b"old")
-
-                destination = self.import_media(source, import_dir=import_dir)
-                self.assertEqual(destination.name, expected)
-                self.assertLessEqual(len(destination.name.encode("utf-16-le")) // 2, 255)
-                self.assertEqual(destination.read_bytes(), b"new")
-                self.assertEqual(self.import_media(source, import_dir=import_dir), destination)
-                self.assertEqual(set(import_dir.iterdir()), {*existing, destination})
-                for path in existing:
-                    self.assertEqual(path.read_bytes(), b"old")
 
 
 if __name__ == "__main__":

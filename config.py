@@ -12,6 +12,7 @@ from configparser import ConfigParser, Error as ConfigParserError
 from pathlib import Path
 
 from screen_follow import FollowGraph, valid_screen_id
+from thumbnails import get_ray_mode
 
 
 logger = logging.getLogger(__name__)
@@ -372,10 +373,6 @@ class ConfigStore:
             config["language"] = "zh-TW"
 
         recent = config.get("recentVideo", [])
-        # 相容舊版單筆紀錄
-        if isinstance(recent, str):
-            recent = [recent]
-
         normalized_recent = []
         seen = set()
 
@@ -458,11 +455,21 @@ class ConfigStore:
                     if modes:
                         normalized_entries[normalized] = modes
 
+                elif value == "blur":
+                    normalized_entries[normalized] = value
+
+                elif value in ("ray1", "ray2"):
+                    ray_mode = get_ray_mode(Path(normalized), value)
+                    if ray_mode is None:
+                        report("設定欄位 backgroundColor.%s 的光暈背景僅限圖片, 已移除", media_path)
+                    else:
+                        normalized_entries[normalized] = ray_mode
+
                 elif isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value):
                     normalized_entries[normalized] = value.lower()
 
                 else:
-                    report("設定欄位 backgroundColor.%s 必須是六位色碼, 已移除", media_path)
+                    report("設定欄位 backgroundColor.%s 必須是六位色碼, blur, ray1 或 ray2, 已移除", media_path)
 
             config[key] = normalized_entries
 
@@ -572,17 +579,9 @@ class ConfigStore:
             return False
 
 
-    def load_language(self, language_code: str = "") -> dict:
+    def load_language(self) -> dict:
 
-        config = self.load()
-
-        if language_code:
-            config["language"] = language_code
-            self.save(config)
-
-        else:
-            language_code = config["language"]
-
+        language_code = self.load()["language"]
         path = self.lang_dir / f"{language_code}.json"
         if not path.is_file():
             path = self.lang_dir / "zh-TW.json"
