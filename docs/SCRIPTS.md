@@ -117,7 +117,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\create-vlc-lite.ps1
 ---                                                                 | ---
 [test_app_lifecycle.py](../tests/test_app_lifecycle.py)             | 播放與匯入的延遲回呼, 重掛重試時保留進度, 跟隨同步, 重掛中拔除螢幕
 [test_media_import.py](../tests/test_media_import.py)               | 雜湊與複製期間鎖定來源, 複製部分內容後磁碟寫滿的清理
-[test_video_display.py](../tests/test_video_display.py)             | 真實 VLC 的載入中指令, 父視窗失效後的恢復與停止, 暫停時的實際縮放與裁切
+[test_video_display.py](../tests/test_video_display.py)             | 真實 VLC 的載入中指令, 父視窗失效後的恢復, 停止與切換素材
 [test_windows_integration.py](../tests/test_windows_integration.py) | 掛載座標與 WorkerW 重建, 圖片原生子視窗重綁與釋放
 [test_thumbnails.py](../tests/test_thumbnails.py)                   | 縮圖工作排程與過期回呼, AV1 解碼與取消, 預設影像軌的輸出尺寸與像素
 

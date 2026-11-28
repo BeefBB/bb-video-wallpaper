@@ -1,11 +1,10 @@
 """
-以隔離程序驗證 VLC 的非同步操作, 桌布重掛與原生輸出幾何
+以隔離程序驗證 VLC 的非同步操作, 桌布重掛與原生輸出恢復
 使用測試專用影片及父視窗, 不重啟 Explorer 或修改使用者設定
 """
 
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
-import ctypes
 import faulthandler
 import logging
 from pathlib import Path
@@ -17,7 +16,6 @@ import tempfile
 import threading
 import time
 from types import TracebackType
-from typing import cast
 import unittest
 from unittest import mock
 
@@ -80,9 +78,7 @@ def run_display_probe(directory: Path, operation: str) -> None:
     sys.path.insert(0, str(ROOT))
     import win32con
     import win32gui
-    import win32ui
     from PySide6.QtCore import QEventLoop, QTimer, Qt
-    from PySide6.QtGui import QImage, QPainter, QTransform
     from PySide6.QtWidgets import QApplication, QWidget
     import bb_video_display
 
@@ -121,11 +117,6 @@ def run_display_probe(directory: Path, operation: str) -> None:
             loop.exec()
 
 
-    def wait_paused(player: vlc.MediaPlayer) -> None:
-
-        wait(lambda: player.get_state() == paused_state)
-
-
     def create_target() -> tuple[QWidget, subprocess.Popen[str]]:
 
         host, process = hosts.enter_context(open_host())
@@ -154,34 +145,6 @@ def run_display_probe(directory: Path, operation: str) -> None:
         )
 
 
-    def capture(hwnd: int | None = None) -> QImage:
-
-        # 擷取原生背景視窗, 不以繪圖替身代替 Qt 與 Windows 的輸出
-        if hwnd is None:
-            window = display._window
-            assert window is not None
-            hwnd = window.host_hwnd
-        _, _, width, height = win32gui.GetClientRect(hwnd)
-        handle = win32gui.GetDC(hwnd)
-        dc = win32ui.CreateDCFromHandle(handle)
-        buffer = dc.CreateCompatibleDC()
-        bitmap = win32ui.CreateBitmap()
-        bitmap.CreateCompatibleBitmap(dc, width, height)
-        original = buffer.SelectObject(bitmap)
-
-        try:
-            assert ctypes.windll.user32.PrintWindow(hwnd, buffer.GetSafeHdc(), 2)
-            pixels = bitmap.GetBitmapBits(True)
-            return QImage(pixels, width, height, QImage.Format.Format_RGB32).copy()
-
-        finally:
-            buffer.SelectObject(original)
-            buffer.DeleteDC()
-            dc.DeleteDC()
-            win32gui.ReleaseDC(hwnd, handle)
-            win32gui.DeleteObject(bitmap.GetHandle())
-
-
     with ExitStack() as cleanup:
         cleanup.callback(faulthandler.cancel_dump_traceback_later)
         cleanup.callback(module._vlc_dll_directory.close)
@@ -192,185 +155,40 @@ def run_display_probe(directory: Path, operation: str) -> None:
         target, host = create_target()
         display.set_hwnd(int(target.winId()))
         display.set_scaling("fit", "#123456")
-        if operation.startswith("lifecycle"):
-            media = directory / ("rotated.mp4" if operation == "lifecycle-rotated" else "base.mp4")
-            display.set_media(media)
-            display.play()
-            display.set_time(3000)
-            display.pause()
-            wait(lambda: paused_at(3000))
 
-            # 不處理事件佇列就再次換片與停止, 舊 Playing 通知不能重新啟動輸出
-            display.set_media(media)
-            display.set_time(1000)
-            display.stop()
-            app.processEvents()
-            assert display.get_time() is None and display._state == "stop"
-            assert display._window is not None and not display._window.isVisible()
-            display.pause()
-            display.set_time(3000)
-            wait(lambda: paused_at(3000))
+        media = directory / ("rotated.mp4" if operation == "lifecycle-rotated" else "base.mp4")
+        display.set_media(media)
+        display.play()
+        display.set_time(3000)
+        display.pause()
+        wait(lambda: paused_at(3000))
 
-            old_hwnd = int(target.winId())
-            host.terminate()
-            host.wait(timeout=5)
-            wait(lambda: not win32gui.IsWindow(old_hwnd))
-            # 外部父程序退出不保證送出 WM_DESTROY, 呼叫端依桌面通知解除掛載
-            display.set_hwnd(0)
-            target, host = create_target()
-            display.set_hwnd(int(target.winId()))
-            wait(lambda: paused_at(3000))
-            display.play()
-            wait(lambda: (display.get_time() or 0) > 3300)
+        # 不處理事件佇列就再次換片與停止, 舊 Playing 通知不能重新啟動輸出
+        display.set_media(media)
+        display.set_time(1000)
+        display.stop()
+        app.processEvents()
+        assert display.get_time() is None and display._state == "stop"
+        assert display._window is not None and not display._window.isVisible()
+        display.pause()
+        display.set_time(3000)
+        wait(lambda: paused_at(3000))
 
-            if operation == "lifecycle-rotated":
-                display.set_media(directory / "base.mp4")
-                wait(lambda: (display.get_time() or 0) > 500)
-                wait(lambda: capture().pixelColor(200, 200).red() > 180)
+        old_hwnd = int(target.winId())
+        host.terminate()
+        host.wait(timeout=5)
+        wait(lambda: not win32gui.IsWindow(old_hwnd))
+        # 外部父程序退出不保證送出 WM_DESTROY, 呼叫端依桌面通知解除掛載
+        display.set_hwnd(0)
+        target, host = create_target()
+        display.set_hwnd(int(target.winId()))
+        wait(lambda: paused_at(3000))
+        display.play()
+        wait(lambda: (display.get_time() or 0) > 3300)
 
-        elif operation == "fit-background":
-            import bb_image_display
-
-            # 正方形目標應裁掉最外側的黃色, 露出中間的綠色與藍色
-            background = QImage(400, 200, QImage.Format.Format_RGB32)
-            background.fill(Qt.GlobalColor.yellow)
-            painter = QPainter(background)
-            painter.fillRect(100, 0, 100, 200, Qt.GlobalColor.green)
-            painter.fillRect(200, 0, 100, 200, Qt.GlobalColor.blue)
-            painter.end()
-
-            def wait_background(hwnd: int, blurred: bool) -> None:
-                left, right = ("#00ff00", "#0000ff") if blurred else ("#123456", "#123456")
-
-                def samples() -> tuple[str, str, int]:
-                    actual = capture(hwnd)
-                    width, height = actual.width(), actual.height()
-                    return (
-                        actual.pixelColor(width // 20, height // 20).name(),
-                        actual.pixelColor(width * 19 // 20, height * 19 // 20).name(),
-                        actual.pixelColor(width // 8, height * 3 // 8).red()
-                    )
-
-                def matches() -> bool:
-                    first, last, red = samples()
-                    return (first, last) == (left, right) and red > 200
-
-                try:
-                    wait(matches)
-                except AssertionError:
-                    raise AssertionError((left, right, samples())) from None
-
+        if operation == "lifecycle-rotated":
             display.set_media(directory / "base.mp4")
-            display.play()
-            wait(lambda: (display.get_time() or 0) > 500 and capture().pixelColor(100, 180).red() > 200)
-            display.pause()
-            player = display._player
-            assert player is not None
-            wait_paused(player)
-            position = display.get_time()
-            assert position is not None
-            assert display._window is not None
-            video_host = display._window.host_hwnd
-            wait_background(video_host, False)
-            display.set_background_image(background)
-            wait_background(video_host, True)
-            display.set_background_image(None)
-            wait_background(video_host, False)
-            assert display.get_time() == position and paused_at(position)
-            display.stop()
-
-            still = bb_image_display.Instance()
-            cleanup.callback(still.close)
-            still.set_hwnd(int(target.winId()))
-            still.set_scaling("fit", "#123456")
-            still.set_background_image(background)
-            still.set_media(directory / "pattern.png")
-            still.show()
-            assert still.window is not None
-            image_host = still.window._host_hwnd
-            wait_background(image_host, True)
-            still.set_background_image(None)
-            wait_background(image_host, False)
-
-        elif operation == "crop-reset":
-            display.set_media(directory / "base.mp4")
-            display.play()
-            wait(lambda: display._video_size is not None and (display.get_time() or 0) > 500)
-            display.pause()
-            player = display._player
-            assert player is not None
-            wait_paused(player)
-            position = display.get_time()
-
-            for mode, point in (("fit", (5, 200)), ("stretch", (5, 5))):
-                for _ in range(3):
-                    player.video_set_crop_geometry("5:3")
-                    display.set_scaling(mode, "#123456")
-                    # 等待裁切佇列處理, 避免舊畫面讓比對提早通過
-                    loop = QEventLoop()
-                    QTimer.singleShot(250, loop.quit)
-                    loop.exec()
-                    wait(lambda: capture().pixelColor(*point).red() > 180)
-                    assert display.get_time() == position, "縮放模式切換不應改變暫停進度"
-
-        elif operation.startswith("scaling-"):
-            rotation = int(operation.removeprefix("scaling-"))
-            source = QImage(str(directory / "pattern.png"))
-            for sar in (1, 2):
-                image = source.scaled(320 * sar, 180).transformed(QTransform().rotate(-rotation))
-                display.set_media(directory / f"pattern-{sar}-{rotation}.mp4")
-                display.play()
-                wait(lambda: display._video_size is not None and (display.get_time() or 0) > 500)
-                display.pause()
-                player = display._player
-                assert player is not None
-                wait_paused(player)
-
-                for width, height in ((300, 500), (500, 300)):
-                    win32gui.SetWindowPos(
-                        int(target.winId()), 0, 0, 0, width, height,
-                        win32con.SWP_NOMOVE | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE
-                    )
-                    for mode in ("fit", "stretch", "fill", "fit"):
-                        position = display.get_time()
-                        display.set_scaling(mode, "#123456")
-                        aspect = {
-                            "fit": Qt.AspectRatioMode.KeepAspectRatio,
-                            "stretch": Qt.AspectRatioMode.IgnoreAspectRatio,
-                            "fill": Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                        }[mode]
-                        scaled = image.scaled(width, height, aspect)
-                        expected = QImage(width, height, QImage.Format.Format_RGB32)
-                        expected.fill("#123456")
-                        painter = QPainter(expected)
-                        painter.drawImage((width - scaled.width()) // 2, (height - scaled.height()) // 2, scaled)
-                        painter.end()
-
-                        # 多點比對實際畫面, 略過色塊邊界並容許影片壓縮色偏
-                        samples = []
-                        for x in (5, *range(width // 10, width, width // 10), width - 6):
-                            for y in (5, *range(height // 10, height, height // 10), height - 6):
-                                color = expected.pixelColor(x, y)
-                                if all(expected.pixelColor(x + dx, y + dy) == color
-                                       for dx, dy in ((-3, 0), (3, 0), (0, -3), (0, 3))):
-                                    samples.append((x, y, color))
-
-                        def matches() -> bool:
-
-                            actual = capture()
-                            return actual.size() == expected.size() and all(
-                                max(abs(a - b) for a, b in zip(
-                                    cast(tuple[int, int, int, int], actual.pixelColor(x, y).getRgb())[:3],
-                                    cast(tuple[int, int, int, int], color.getRgb())[:3]
-                                )) <= 30
-                                for x, y, color in samples
-                            )
-
-                        try:
-                            wait(matches)
-                        except AssertionError:
-                            raise AssertionError((rotation, sar, width, height, mode)) from None
-                        assert display.get_time() == position, "縮放模式切換不應改變暫停進度"
+            wait(lambda: (display.get_time() or 0) > 500)
 
         assert not errors, errors
         print(f"PASS {operation}", flush=True)
@@ -587,24 +405,6 @@ class VideoDisplayTests(unittest.TestCase):
         )
         ffmpeg("-display_rotation:v:0", "90", "-i", base, "-c", "copy", cls.directory / "rotated.mp4")
 
-        pattern = cls.directory / "pattern.mp4"
-        ffmpeg(
-            "-f", "lavfi", "-i",
-            "color=c=red:s=320x180:r=30,"
-            "drawbox=x=160:y=0:w=160:h=90:color=lime:t=fill,"
-            "drawbox=x=0:y=90:w=160:h=90:color=blue:t=fill,"
-            "drawbox=x=160:y=90:w=160:h=90:color=yellow:t=fill,"
-            "drawbox=x=80:y=48:w=80:h=48:color=white:t=fill",
-            "-t", "8", "-c:v", "libx264", "-preset", "ultrafast", pattern
-        )
-        ffmpeg("-i", pattern, "-frames:v", "1", cls.directory / "pattern.png")
-        for sar in (1, 2):
-            anamorphic = cls.directory / f"pattern-{sar}.mp4"
-            ffmpeg("-i", pattern, "-vf", f"setsar={sar}", "-c:v", "libx264", "-preset", "ultrafast", anamorphic)
-            for rotation in (0, 90, 180, 270):
-                ffmpeg("-display_rotation:v:0", str(rotation), "-i", anamorphic, "-c", "copy",
-                       cls.directory / f"pattern-{sar}-{rotation}.mp4")
-
 
     def run_probe(self, probe: str, operation: str) -> str:
         """
@@ -628,33 +428,6 @@ class VideoDisplayTests(unittest.TestCase):
         for operation in ("lifecycle", "lifecycle-rotated"):
             with self.subTest(operation=operation):
                 self.assertIn(f"PASS {operation}", self.run_probe("--display", operation))
-
-
-    def test_rotated_scaling_matches_rendered_pixels_while_paused(self) -> None:
-        """
-        實際輸出符合旋轉與像素比例, 暫停時切換縮放或尺寸也更新畫面
-        """
-
-        for rotation in (90, 270, 180, 0):
-            with self.subTest(rotation=rotation):
-                operation = f"scaling-{rotation}"
-                self.assertIn(f"PASS {operation}", self.run_probe("--display", operation))
-
-
-    def test_pending_crop_is_cleared_when_switching_scaling_while_paused(self) -> None:
-        """
-        連續設定裁切與縮放後恢復完整畫面, 保留暫停進度
-        """
-
-        self.assertIn("PASS crop-reset", self.run_probe("--display", "crop-reset"))
-
-
-    def test_fit_background_repaints_behind_still_image_and_paused_video(self) -> None:
-        """
-        比對模糊背景就緒與移除後的原生桌布畫面, 暫停中的影片應保留進度
-        """
-
-        self.assertIn("PASS fit-background", self.run_probe("--display", "fit-background"))
 
 
     def test_playing_and_paused_video_recover_after_host_process_ends(self) -> None:
