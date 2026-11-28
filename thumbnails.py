@@ -20,7 +20,7 @@ from typing import Literal
 from uuid import UUID
 
 from PySide6.QtCore import QRect, QRectF, QSize, Qt, QThread, Signal
-from PySide6.QtGui import QColor, QImage, QImageReader, QImageWriter, QPainter, QRegion
+from PySide6.QtGui import QColor, QImage, QImageReader, QImageWriter, QPainter
 
 from display_painting import draw_cover_image, fit_image_rect
 
@@ -500,7 +500,7 @@ def _opaque_on_black(image: QImage) -> QImage:
 
 
 def _draw_ray_strip(
-    painter: QPainter, target: QRect, band: QImage, *,
+    painter: QPainter, target: QRect, strip: QImage, *,
     sideways: bool, leading: bool, inner_distance: float,
     ray_mode: RayMode, ray_decay: int
 ) -> None:
@@ -509,17 +509,7 @@ def _draw_ray_strip(
     (逐次高斯模糊)
     """
 
-    band = _opaque_on_black(band)
-
-    if sideways:
-        edge = band.copy(0 if leading else band.width() - 1, 0, 1, band.height())
-        depth = target.width()
-
-    else:
-        edge = band.copy(0, 0 if leading else band.height() - 1, band.width(), 1)
-        depth = target.height()
-
-    strip = edge
+    depth = target.width() if sideways else target.height()
 
     for index in range(depth):
 
@@ -553,11 +543,9 @@ def _draw_ray_strip(
             strip = _gaussian_blur(strip, 5)
 
 
-def _render_ray(
-    image: QImage, size: QSize, ray_mode: RayMode, ray_decay: int, *, include_foreground: bool
-) -> QImage:
+def _render_ray(image: QImage, size: QSize, ray_mode: RayMode, ray_decay: int) -> QImage:
     """
-    依指定尺寸繪製光暈, 預覽時將原圖合成到同一張圖上
+    依指定尺寸合成原圖與光暈背景
     """
 
     result = QImage(size, QImage.Format.Format_RGB32)
@@ -575,50 +563,36 @@ def _render_ray(
     extent = size.width() if sideways else size.height()
     leading_gap = start_pixel.x() if sideways else start_pixel.y()
     trailing_gap = extent - (end_pixel.x() if sideways else end_pixel.y())
-    if not leading_gap and not trailing_gap and not include_foreground:
-        return result
 
-    if include_foreground:
-        image = _opaque_on_black(image)
-
+    image = _opaque_on_black(image)
     inner_distance = (fitted.width() if sideways else fitted.height()) / 2
-    source_extent = image.width() if sideways else image.height()
-    band_depth = max(1, round(source_extent * 0.025))
 
     with QPainter(result) as painter:
 
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        if image.hasAlphaChannel():
-            # 純背景留給半透明前景的區域維持黑底, 讓前景只在顯示時合成一次
-            coverage = QRect(
-                start_pixel.x(), start_pixel.y(), end_pixel.x() - start_pixel.x(), end_pixel.y() - start_pixel.y()
-            )
-            painter.setClipRegion(QRegion(result.rect()).subtracted(QRegion(coverage)))
 
         for leading, gutter in ((True, leading_gap), (False, trailing_gap)):
 
             if not gutter:
                 continue
 
-            offset = 0 if leading else source_extent - band_depth
             # 繪製矩形朝原圖延伸一個像素, 避免取整時露出黑線
             start = 0 if leading else extent - gutter - 1
 
             if sideways:
-                band = image.copy(offset, 0, band_depth, image.height())
+                edge = image.copy(0 if leading else image.width() - 1, 0, 1, image.height())
                 target = QRect(start, 0, gutter + 1, size.height())
 
             else:
-                band = image.copy(0, offset, image.width(), band_depth)
+                edge = image.copy(0, 0 if leading else image.height() - 1, image.width(), 1)
                 target = QRect(0, start, size.width(), gutter + 1)
 
             _draw_ray_strip(
-                painter, target, band, sideways=sideways, leading=leading,
+                painter, target, edge, sideways=sideways, leading=leading,
                 inner_distance=inner_distance, ray_mode=ray_mode, ray_decay=ray_decay
             )
 
-        if include_foreground:
-            painter.drawImage(fitted, image, source)
+        painter.drawImage(fitted, image, source)
 
     return result
 
@@ -761,7 +735,7 @@ def ensure_thumbnail(
         raise InterruptedError("縮圖工作已取消")
 
     if kind == "background_ray" and canvas_size is not None:
-        image = _render_ray(image, canvas_size, ray_mode, ray_decay, include_foreground=True)
+        image = _render_ray(image, canvas_size, ray_mode, ray_decay)
     elif blur_path is not None and canvas_size is not None:
         background = QImage(str(blur_path))
         if background.isNull() or background.size() != image.size():
