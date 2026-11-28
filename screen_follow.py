@@ -344,12 +344,11 @@ class FollowController:
             return False
 
         root = self.graph.root(wallpaper.screen_id)
-        members = [self.wallpapers[screen_id] for screen_id in self.graph.subtree(root) if screen_id in self.wallpapers]
-
         # 跟隨者的計時通知不重複掃描同一群組
         if from_timer and wallpaper.screen_id != root:
             return True
 
+        members = [self.wallpapers[screen_id] for screen_id in self.graph.subtree(root) if screen_id in self.wallpapers]
         if update_auto_pause(members):
             logger.info("auto_pause - %s", members[0].play_state)
             self.synchronize(root)
