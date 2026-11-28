@@ -52,15 +52,19 @@ def add_previews(
         *screens,
     }
 
-    def add_preview(name: str, *items: MenuItem) -> None:
+    def add_preview(
+        name: str, *items: MenuItem, title_suffix: str = "", following: bool = False, disabled: tuple[str, ...] = (),
+    ) -> None:
 
         title = preview_titles.get(name, name).partition(" (")[0]
-        preview = menu.addMenu(prefix + title)
+        preview = menu.addMenu(prefix + title + title_suffix)
 
         for item in items:
             if item is None:
                 preview.addSeparator()
-            elif isinstance(item, tuple):
+                continue
+
+            if isinstance(item, tuple):
                 label, checked = item
                 action = preview.addAction(text.get(label, label))
 
@@ -77,15 +81,22 @@ def add_previews(
 
                 action.setCheckable(True)
                 action.setChecked(checked)
-            elif item in submenus:
-                preview.addMenu(text.get(item, item))
             else:
-                preview.addAction(text.get(item, item))
+                label = item
+                if label in submenus:
+                    action = preview.addMenu(text.get(label, label)).menuAction()
+                    if label == "follow_monitor":
+                        action.setCheckable(True)
+                        action.setChecked(following)
+                else:
+                    action = preview.addAction(text.get(label, label))
+
+            action.setEnabled(label not in disabled)
 
     if multiple:
         main_items = ("all_play", "all_pause", "all_stop", None, *screens)
     else:
-        main_items = (("play", True), "pause", "stop", None, "select_video")
+        main_items = (("play", True), ("pause", False), ("stop", False), None, "select_video")
 
     add_preview(
         "主選單", *main_items, "add_media", "open_video_folder", None,
@@ -96,38 +107,58 @@ def add_previews(
         "options", "font_size", "preview_size", None, "auto_pause", None, "language", None, ("startup", False),
     )
 
-    add_preview("advanced", "open_config_file", "open_log_folder", "hardware_decoding", "reset_defaults")
+    add_preview(
+        "advanced", "open_config_file", "open_log_folder", "clear_image_cache", "hardware_decoding", "reset_defaults",
+    )
     add_preview(
         "hardware_decoding", ("hardware_decoding_auto", True), ("hardware_decoding_d3d11", False),
         ("hardware_decoding_dxva2", False), ("hardware_decoding_disabled", False),
     )
     add_preview("reset_defaults", "confirm_reset_defaults")
 
+    recent = ("Clouds.jpg", "Ocean.mp4", "City Lights.mp4", "Forest Walk.mp4")
     files = (
-        "scaling_mode", "background_color", None, ("Ocean.mp4", True), ("City Lights.mp4", False),
-        ("Forest Walk.mp4", False), "clear_recent_videos", None,
-
-        ("City Lights.mp4", False), ("Clouds.jpg", False), ("Forest Walk.mp4", False),
-        ("Mountain Lake.mp4", False), ("Ocean.mp4", True), ("Rainy Night.mp4", False),
-        ("Sunset Drive.mp4", False),
+        "City Lights.mp4", "Clouds.jpg", "Forest Walk.mp4", "Mountain Lake.mp4",
+        "Ocean.mp4", "Rainy Night.mp4", "Sunset Drive.mp4",
     )
-    add_preview("select_video", *files)
+
+    def media_items(selected: str | None) -> tuple[MenuItem, ...]:
+
+        return (
+            "scaling_mode", "background_color", None,
+            *((file, file == selected) for file in recent), "clear_recent_videos", None,
+            *((file, file == selected) for file in files),
+        )
 
     if multiple:
-        for screen in screens:
-            add_preview(screen, ("play", True), "pause", "stop", None, "follow_monitor", *files)
+        add_preview(
+            screens[0], ("play", True), ("pause", False), ("stop", False),
+            None, "follow_monitor", *media_items("Ocean.mp4"),
+        )
+        add_preview(
+            screens[1], ("play", True), ("pause", False), ("stop", False),
+            None, "follow_monitor", *media_items("Clouds.jpg"), disabled=("pause",),
+        )
+        add_preview(
+            screens[2], ("play", False), ("pause", False), ("stop", False),
+            None, "follow_monitor", *media_items(None), following=True,
+        )
 
         # 以最後一台螢幕為例, 跟隨清單排除自己
         add_preview("follow_monitor", *((screen, screen == screens[0]) for screen in screens[:-1]))
+    else:
+        add_preview("select_video", *media_items("Ocean.mp4"))
 
     add_preview(
         "scaling_mode", ("scaling_fill", False), ("scaling_fit", True), ("scaling_stretch", False),
     )
 
-    colors = ((key, False) for key in text if key.startswith("color_"))
+    backgrounds = (("background_color_auto", True), ("background_blur", False))
+    colors = tuple((key, False) for key in BACKGROUND_COLORS)
+    add_preview("background_color", *backgrounds, None, *colors, title_suffix=" (影片)")
     add_preview(
-        "background_color", ("background_color_auto", True), ("background_blur", False),
-        ("background_ray1", False), ("background_ray2", False), None, *colors
+        "background_color", *backgrounds, ("background_ray1", False), ("background_ray2", False), None, *colors,
+        title_suffix=" (圖片)",
     )
 
     sizes = ("size_largest", "size_large", "size_normal", "size_small", "size_smallest")
