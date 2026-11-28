@@ -15,7 +15,7 @@ from win32con import WM_DESTROY
 
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog, QMessageBox
 from PySide6.QtCore import QByteArray, QSize, Qt, QTimer, QThread, Signal
-from PySide6.QtGui import QAction, QActionGroup, QIcon, QFont, QImage, QImageReader, QScreen, QCursor
+from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon, QFont, QImage, QImageReader, QPainter, QPixmap, QScreen, QCursor
 
 import bb_image_display
 import bb_video_display
@@ -1698,6 +1698,17 @@ class Tray:
         for background, label in background_options.items():
 
             action = color_menu.addAction(tr(label))
+
+            if background is not None and background.startswith("#"):
+
+                swatch = QPixmap(16, 16)
+                swatch.fill(QColor("#808080"))
+                painter = QPainter(swatch)
+                painter.fillRect(1, 1, 14, 14, QColor(background))
+                painter.end()
+
+                action.setIcon(QIcon(swatch))
+
             action.setCheckable(True)
             action.setChecked(background == selected_background)
             color_group.addAction(action)

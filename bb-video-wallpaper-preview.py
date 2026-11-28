@@ -4,12 +4,37 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon, QFont, QCursor
+from PySide6.QtGui import QColor, QIcon, QFont, QCursor, QPainter, QPixmap
 
 from config import SUPPORTED_LANGUAGES
 
 
 MenuItem = str | tuple[str, bool] | None
+
+BACKGROUND_COLORS = {
+    "color_black": "#000000",
+    "color_PMS419_moonless_night": "#212322",
+    "color_PMS425_sesame": "#54575a",
+    "color_PMS423_metal": "#8a8d8e",
+    "color_PMS427_concrete": "#d0d3d5",
+    "color_PMS663_cloud": "#e6e1e7",
+    "color_white": "#ffffff",
+    "color_PMS7533_cocoa": "#483729",
+    "color_PMS7623_brick": "#8f292b",
+    "color_PMS176_cherry_blossom": "#ffb3bb",
+    "color_PMS715_orange": "#f98e2c",
+    "color_PMS2015_wood_plank": "#facfa9",
+    "color_PMS7401_sand": "#f7e1a5",
+    "color_PMS129_sunflower": "#f6cf3f",
+    "color_PMS386_lemon": "#eaeb6c",
+    "color_PMS2268_leaf": "#75d87e",
+    "color_PMS5565_sage": "#7d9c91",
+    "color_PMS2244_forest": "#0e7f6f",
+    "color_PMS278_sky": "#8ab8e9",
+    "color_PMS655_deep_sea": "#002554",
+    "color_PMS7445_taro": "#a8a2c3",
+    "color_PMS2077_grape": "#6f40a2",
+}
 
 
 def add_previews(
@@ -38,6 +63,18 @@ def add_previews(
             elif isinstance(item, tuple):
                 label, checked = item
                 action = preview.addAction(text.get(label, label))
+
+                background = BACKGROUND_COLORS.get(label)
+                if background is not None:
+
+                    swatch = QPixmap(16, 16)
+                    swatch.fill(QColor("#808080"))
+                    painter = QPainter(swatch)
+                    painter.fillRect(1, 1, 14, 14, QColor(background))
+                    painter.end()
+
+                    action.setIcon(QIcon(swatch))
+
                 action.setCheckable(True)
                 action.setChecked(checked)
             elif item in submenus:
