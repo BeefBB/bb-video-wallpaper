@@ -1329,10 +1329,11 @@ class Tray:
         if self.waiting_for_screens:
             # 等待螢幕列舉穩定後再建立桌布(單純等一小段時間)
             self.follow_restore_timer.start(config.get("followRestoreDelayMs", 3000))
+
+            self.rebuild_screen_menus()
         else:
             self.initialize_screens()
 
-        self.rebuild_screen_menus()
         self.tray.show()
 
 
