@@ -10,7 +10,7 @@ from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QPropertyAnimation, QRe
 from PySide6.QtGui import QAction, QColor, QCursor, QImage, QPainter, QPixmap, QScreen
 
 from config import get_scaling_mode
-from display_painting import draw_cover_image, fit_image_rect
+from display_painting import fit_image_rect
 from thumbnails import DEFAULT_RAY_DECAY, ThumbnailThread, get_ray_mode
 from windows_integration import screen_pixel_size
 
@@ -229,8 +229,10 @@ class MediaPreviewMenu(QMenu):
                 return
 
         if mode == "fit" and background == "blur":
+            screen_size = screen_pixel_size(screen) or screen.geometry().size()
             self.thumbnail_thread.request(
-                path, "thumbnail_orig", "thumbnail_blur", preview_size=self.preview_size, priority=True
+                path, "thumbnail_orig", "thumbnail_blur", preview_size=self.preview_size,
+                screen_size=screen_size.toTuple(), priority=True
             )
         else:
             self.thumbnail_thread.request(path, "thumbnail_orig", preview_size=self.preview_size, priority=True)
@@ -256,10 +258,16 @@ class MediaPreviewMenu(QMenu):
         self.display_preview()
 
 
-    @Slot(str, int, QImage)
-    def update_blurred_preview(self, media_path: str, preview_size: int, image: QImage) -> None:
+    @Slot(str, int, QSize, QImage)
+    def update_blurred_preview(self, media_path: str, preview_size: int, screen_size: QSize, image: QImage) -> None:
 
         if image.isNull() or not self._matches_preview(media_path, preview_size):
+            return
+
+        screen = self.target_screen or QApplication.screenAt(QCursor.pos()) or self.screen()
+        if self._display_options(Path(media_path), screen) != ("fit", "blur"):
+            return
+        if (screen_pixel_size(screen) or screen.geometry().size()) != screen_size:
             return
 
         self.blurred_thumbnail = image
@@ -315,15 +323,24 @@ class MediaPreviewMenu(QMenu):
         size = QSize(max(1, size.width()), max(1, size.height()))
 
         mode, background = "fill", None
+        composite = None
 
-        if self.ray_thumbnail is not None or self.preview_pixmap.cacheKey() != self.loading_pixmap.cacheKey():
+        if (
+            self.ray_thumbnail is not None or self.blurred_thumbnail is not None or
+            self.preview_pixmap.cacheKey() != self.loading_pixmap.cacheKey()
+        ):
 
             mode, background = self._display_options(Path(action.data()), target_screen)
-            if mode == "fit" and background is None:
-                average = self.preview_pixmap.toImage().scaled(
-                    1, 1, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation
-                )
-                background = average.pixelColor(0, 0).name()
+            if mode == "fit":
+                if background in ("ray1", "ray2"):
+                    composite = self.ray_thumbnail
+                elif background == "blur":
+                    composite = self.blurred_thumbnail
+                elif background is None:
+                    average = self.preview_pixmap.toImage().scaled(
+                        1, 1, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation
+                    )
+                    background = average.pixelColor(0, 0).name()
 
         source = QRectF(self.preview_pixmap.rect())
         bounds = QRectF(0, 0, size.width(), size.height())
@@ -342,12 +359,9 @@ class MediaPreviewMenu(QMenu):
         pixmap.fill(QColor("#000000" if background in (None, "blur", "ray1", "ray2") else background))
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        if mode == "fit" and background in ("ray1", "ray2") and self.ray_thumbnail is not None:
-            # 光暈縮圖已合成原圖, 直接繪製整張縮圖
-            painter.drawImage(bounds, self.ray_thumbnail, QRectF(self.ray_thumbnail.rect()))
+        if composite is not None:
+            painter.drawImage(bounds, composite, QRectF(composite.rect()))
         else:
-            if mode == "fit" and background == "blur" and self.blurred_thumbnail is not None:
-                draw_cover_image(painter, bounds, self.blurred_thumbnail)
             painter.drawPixmap(destination, self.preview_pixmap, source)
         painter.end()
 

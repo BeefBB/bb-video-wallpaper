@@ -151,9 +151,9 @@ def thumbnail_probe(path: str, mode: str, connection) -> None:
 
 class ThumbnailCacheTests(QtTestCase):
 
-    def test_missing_results_read_the_video_and_cache_only_the_result(self) -> None:
+    def test_missing_results_read_the_video_and_cache_the_results(self) -> None:
         """
-        驗證缺少的成品各自從影片取圖, 命中成品快取時略過取圖
+        驗證模糊預覽會保存桌布背景, 命中快取時略過取圖
         """
 
         directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
@@ -169,14 +169,16 @@ class ThumbnailCacheTests(QtTestCase):
         decode = self.enterContext(mock.patch("thumbnails._read_video_frame", return_value=frame))
         blur_sizes = []
 
-        def request_thumbnail(kind: ImageKind, *, preview_size: int | None = None) -> Path:
+        def request_thumbnail(
+            kind: ImageKind, *, preview_size: int | None = None, screen_size: tuple[int, int] | None = None
+        ) -> Path:
             """
             用同一份素材與快取目錄請求指定成品
             """
 
             return ensure_thumbnail(
                 path, cancelled, kind=kind, media_dir=media_dir, thumbnail_dir=thumbnail_dir,
-                background_dir=background_dir, preview_size=preview_size
+                background_dir=background_dir, preview_size=preview_size, screen_size=screen_size
             )
 
         def blur(image: QImage) -> QImage:
@@ -189,19 +191,21 @@ class ThumbnailCacheTests(QtTestCase):
 
         self.enterContext(mock.patch("thumbnails._gaussian_blur", side_effect=blur))
 
-        blurred = request_thumbnail("thumbnail_blur", preview_size=3)
+        blurred = request_thumbnail("thumbnail_blur", preview_size=3, screen_size=(600, 800))
         self.assertEqual(list(thumbnail_dir.rglob("*.png")), [blurred])
+        saved_backgrounds = list(background_dir.rglob("*.png"))
 
         clear = request_thumbnail("thumbnail_orig", preview_size=5)
         background = request_thumbnail("background_blur")
-        self.assertEqual(decode.call_args_list, [mock.call(path.resolve(), cancelled)] * 3)
-        self.assertEqual(blur_sizes, [(300, 150), (800, 400)])
+        self.assertEqual(saved_backgrounds, [background])
+        self.assertEqual(decode.call_args_list, [mock.call(path.resolve(), cancelled)] * 2)
+        self.assertEqual(blur_sizes, [(800, 400)])
         self.assertEqual(QImage(str(clear)).size().toTuple(), (500, 250))
         self.assertEqual(QImage(str(background)).size().toTuple(), (800, 400))
         self.assertEqual(set(directory.rglob("*.png")), {blurred, clear, background})
 
         decode.reset_mock()
-        cached_blur = request_thumbnail("thumbnail_blur", preview_size=3)
+        cached_blur = request_thumbnail("thumbnail_blur", preview_size=3, screen_size=(600, 800))
         self.assertEqual(cached_blur, blurred)
         decode.assert_not_called()
 
@@ -263,13 +267,13 @@ class ThumbnailThreadTests(QtTestCase):
             Qt.ConnectionType.DirectConnection
         )
         worker.blurred_thumbnail_ready.connect(
-            lambda path, size, image: blur_ready.set() if Path(path) == queued else None,
+            lambda path, size, screen_size, image: blur_ready.set() if Path(path) == queued else None,
             Qt.ConnectionType.DirectConnection
         )
         worker.request(first, "thumbnail_orig", preview_size=3)
         self.assertTrue(started.wait(5), "首項縮圖工作未開始")
         worker.request(ordinary, "thumbnail_orig", preview_size=3)
-        worker.request(queued, "thumbnail_blur", preview_size=3)
+        worker.request(queued, "thumbnail_blur", preview_size=3, screen_size=(320, 180))
         worker.request(last, "thumbnail_orig", preview_size=3)
         worker.request(first, "thumbnail_orig", preview_size=3)
         worker.request(first, "thumbnail_orig", preview_size=3, priority=True)
@@ -277,7 +281,7 @@ class ThumbnailThreadTests(QtTestCase):
         worker.request(first, "thumbnail_orig", preview_size=4)
         worker.request(queued, "thumbnail_orig", preview_size=3, priority=True)
         worker.request(newest, "thumbnail_orig", preview_size=3, priority=True)
-        worker.request(queued, "thumbnail_orig", "thumbnail_blur", preview_size=3, priority=True)
+        worker.request(queued, "thumbnail_orig", "thumbnail_blur", preview_size=3, screen_size=(320, 180), priority=True)
         worker.request(ordinary, "thumbnail_orig", preview_size=3)
         release.set()
         self.assertTrue(completed.wait(5), "縮圖佇列未處理完成")
@@ -298,7 +302,7 @@ class ThumbnailWorker(QObject):
     """
 
     thumbnail_ready = Signal(str, int, QImage)
-    blurred_thumbnail_ready = Signal(str, int, QImage)
+    blurred_thumbnail_ready = Signal(str, int, QSize, QImage)
     ray_thumbnail_ready = Signal(str, int, QSize, str, int, QImage)
 
     def __init__(self) -> None:
@@ -344,7 +348,7 @@ class MediaPreviewTests(QtTestCase):
         self.worker.deleteLater()
 
 
-    def queue_thumbnail(self, size: int, color: Qt.GlobalColor, *, blurred: bool = False) -> None:
+    def queue_thumbnail(self, size: int, color: Qt.GlobalColor, *, screen_size: QSize | None = None) -> None:
         """
         從背景執行緒送出縮圖, 讓呼叫端控制何時處理 Qt 佇列
         """
@@ -352,8 +356,12 @@ class MediaPreviewTests(QtTestCase):
         image = QImage(120, 60, QImage.Format.Format_RGB32)
         image.fill(color)
         path = self.action.data()
-        signal = self.worker.blurred_thumbnail_ready if blurred else self.worker.thumbnail_ready
-        thread = threading.Thread(target=signal.emit, args=(path, size, image))
+        if screen_size is None:
+            thread = threading.Thread(target=self.worker.thumbnail_ready.emit, args=(path, size, image))
+        else:
+            thread = threading.Thread(
+                target=self.worker.blurred_thumbnail_ready.emit, args=(path, size, screen_size, image)
+            )
         thread.start()
         thread.join(timeout=5)
         self.assertFalse(thread.is_alive())
@@ -375,7 +383,7 @@ class MediaPreviewTests(QtTestCase):
                 self.menu.preview_mode = True
                 self.menu.preview_timer.start()
                 self.queue_thumbnail(3, Qt.GlobalColor.red)
-                self.queue_thumbnail(3, Qt.GlobalColor.yellow, blurred=True)
+                self.queue_thumbnail(3, Qt.GlobalColor.yellow, screen_size=QSize(300, 600))
                 self.assertEqual(displayed_on, [])
 
                 self.menu.set_preview_size(size)
@@ -404,7 +412,7 @@ class MediaPreviewTests(QtTestCase):
 
     def test_hovered_blur_uses_target_orientation_and_ignores_late_results(self) -> None:
         """
-        直向預覽以模糊小圖置中裁切鋪底, 切換項目或關閉後忽略先前排隊的結果
+        直向預覽使用已合成縮圖, 切換項目或關閉後忽略先前排隊的結果
         """
 
         path = Path(self.action.data())
@@ -412,6 +420,7 @@ class MediaPreviewTests(QtTestCase):
         other.setData(str(path.with_name("other.png")))
         screen = mock.Mock()
         screen.geometry.return_value = QRect(0, 0, 200, 400)
+        self.enterContext(mock.patch.object(media_preview, "screen_pixel_size", return_value=QSize(300, 600)))
         self.menu.target_screen = screen
         self.menu.display_config = {
             "scalingMode": {path.name: {"portrait": "fit", "landscape": "fill"}},
@@ -421,23 +430,25 @@ class MediaPreviewTests(QtTestCase):
         self.menu.show()
         self.menu.preview_action = self.action
         self.menu.show_preview()
-        self.worker.request.assert_called_with(path, "thumbnail_orig", "thumbnail_blur", preview_size=3, priority=True)
+        self.worker.request.assert_called_with(
+            path, "thumbnail_orig", "thumbnail_blur", preview_size=3, screen_size=(300, 600), priority=True
+        )
 
         self.queue_thumbnail(3, Qt.GlobalColor.red)
         self.app.processEvents()
         self.assertEqual(self.menu.preview.pixmap().toImage().pixelColor(5, 5), QColor("black"))
 
-        background = QImage(120, 60, QImage.Format.Format_RGB32)
-        background.fill(Qt.GlobalColor.yellow)
-        painter = QPainter(background)
-        painter.fillRect(45, 0, 30, 60, Qt.GlobalColor.blue)
+        composite = QImage(150, 300, QImage.Format.Format_RGB32)
+        composite.fill(Qt.GlobalColor.yellow)
+        painter = QPainter(composite)
+        painter.fillRect(0, 112, 150, 76, Qt.GlobalColor.blue)
         painter.end()
-        self.worker.blurred_thumbnail_ready.emit(str(path), 3, background)
+        self.worker.blurred_thumbnail_ready.emit(str(path), 3, QSize(300, 600), composite)
         result = self.menu.preview.pixmap().toImage()
-        self.assertEqual(result.pixelColor(5, 5), QColor("blue"))
-        self.assertEqual(result.pixelColor(result.width() // 2, result.height() // 2), QColor("red"))
+        self.assertEqual(result.pixelColor(5, 5), QColor("yellow"))
+        self.assertEqual(result.pixelColor(result.width() // 2, result.height() // 2), QColor("blue"))
 
-        self.queue_thumbnail(3, Qt.GlobalColor.yellow, blurred=True)
+        self.queue_thumbnail(3, Qt.GlobalColor.yellow, screen_size=QSize(300, 600))
         self.menu.preview_action = other
         self.menu.show_preview()
         self.app.processEvents()
@@ -448,7 +459,7 @@ class MediaPreviewTests(QtTestCase):
         self.menu.preview_action = self.action
         self.menu.show_preview()
         self.worker.request.assert_called_with(path, "thumbnail_orig", preview_size=3, priority=True)
-        self.queue_thumbnail(3, Qt.GlobalColor.yellow, blurred=True)
+        self.queue_thumbnail(3, Qt.GlobalColor.yellow, screen_size=QSize(300, 600))
         self.menu.hide()
         self.app.processEvents()
         self.assertIsNone(self.menu.blurred_thumbnail)
