@@ -38,11 +38,8 @@ DEFAULT_RAY_MODE: RayMode = "ray2"
 CACHE_NAME = re.compile(
     r"(?P<source>[0-9a-f]{16})-(?P<digest>[0-9a-f]{8})-"
     r"(?:[1-5](?:-blur-[1-9][0-9]*-[1-9][0-9]*)?|blur|"
-    r"(?:[1-5]-)?ray[12]-(?:100|[1-9]?[0-9])-[1-9][0-9]*-[1-9][0-9]*)\.png"
+    r"(?:[1-5]-)?ray[12]-[1-9][0-9]*-[1-9][0-9]*)\.png"
 )
-
-# 光暈亮度衰減
-RAY_DECAY = 55
 
 
 def get_ray_mode(path: Path, background: str | None) -> RayMode | None:
@@ -519,8 +516,10 @@ def _draw_ray_strip(
     (逐次高斯模糊)
     """
 
-    depth = target.width() if sideways else target.height()
+    # 光暈亮度衰減
+    RAY_DECAY = 0.55
 
+    depth = target.width() if sideways else target.height()
     for index in range(depth):
 
         progress = index / max(1, depth - 1)
@@ -544,8 +543,8 @@ def _draw_ray_strip(
         # 繪製目前的像素列
         painter.drawImage(destination, strip, sample)
 
-        # 亮度衰減
-        darken = RAY_DECAY / 100 * progress ** 2
+        # 光暈亮度衰減
+        darken = RAY_DECAY * progress ** 2
         painter.fillRect(destination, QColor.fromRgbF(0.0, 0.0, 0.0, darken))
 
         # 將目前的像素列模糊後作為下一列
@@ -661,7 +660,7 @@ def ensure_thumbnail(
         if is_ray:
             if ray_mode not in ("ray1", "ray2"):
                 raise ValueError("光暈模式需為 ray1 或 ray2")
-            variant = f"{ray_mode}-{RAY_DECAY}-{width}-{height}"
+            variant = f"{ray_mode}-{width}-{height}"
         else:
             variant = f"blur-{width}-{height}"
 
