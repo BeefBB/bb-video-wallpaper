@@ -13,7 +13,7 @@ from typing import Literal, cast
 
 from win32con import WM_DESTROY
 
-from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QFileDialog, QMessageBox, QProxyStyle
 from PySide6.QtCore import QByteArray, QSize, Qt, QTimer, QThread, Signal
 from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon, QFont, QImage, QImageReader, QPainter, QPixmap, QScreen, QCursor
 
@@ -1070,6 +1070,23 @@ class Wallpaper(QWidget):
                 logger.exception("釋放桌布資源失敗 - %s", description)
 
 
+class BackgroundColorMenuStyle(QProxyStyle):
+
+    def __init__(self, menu: QMenu) -> None:
+
+        super().__init__(menu.style().name())
+        self.swatch_size = round(menu.font().pointSizeF() * 16 / 11)
+        self.setParent(menu)
+
+
+    def pixelMetric(self, metric, option=None, widget=None) -> int:
+
+        if metric == self.PixelMetric.PM_SmallIconSize:
+            return self.swatch_size
+
+        return super().pixelMetric(metric, option, widget)
+
+
 class Tray:
 
     def __init__(self, app: QApplication) -> None:
@@ -1658,6 +1675,9 @@ class Tray:
             return
 
         color_menu = menu.addMenu(tr("background_color"))
+        color_style = BackgroundColorMenuStyle(color_menu)
+        color_menu.setStyle(color_style)
+        swatch_size = color_style.swatch_size
         color_group = QActionGroup(color_menu)
         is_image = wallpaper.is_image()
         ray_options = {"ray1": "background_ray1", "ray2": "background_ray2"} if is_image else {}
@@ -1701,10 +1721,10 @@ class Tray:
 
             if background is not None and background.startswith("#"):
 
-                swatch = QPixmap(16, 16)
+                swatch = QPixmap(swatch_size, swatch_size)
                 swatch.fill(QColor("#808080"))
                 painter = QPainter(swatch)
-                painter.fillRect(1, 1, 14, 14, QColor(background))
+                painter.fillRect(1, 1, swatch_size - 2, swatch_size - 2, QColor(background))
                 painter.end()
 
                 action.setIcon(QIcon(swatch))
