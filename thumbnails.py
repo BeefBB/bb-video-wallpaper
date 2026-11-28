@@ -116,7 +116,7 @@ def fast_hash(path: Path) -> str:
 
     digest = hashlib.sha256()
     # 將縮圖演算法版本納入識別碼計算
-    digest.update(b"thumbnail-v6\0")
+    digest.update(b"thumbnail-v7\0")
 
     with path.open("rb") as file:
 
@@ -509,15 +509,12 @@ def _opaque_on_black(image: QImage) -> QImage:
 def _draw_ray_strip(
     painter: QPainter, target: QRect, strip: QImage, *,
     sideways: bool, leading: bool, inner_distance: float,
-    ray_mode: RayMode, blur: Callable[[QImage], QImage]
+    ray_mode: RayMode, ray_decay: float, blur: Callable[[QImage], QImage]
 ) -> None:
     """
     依指定的方向將原圖邊緣延伸到留白, 並往外柔化與衰減
     (逐次高斯模糊)
     """
-
-    # 光暈亮度衰減
-    RAY_DECAY = 0.55
 
     depth = target.width() if sideways else target.height()
     for index in range(depth):
@@ -544,7 +541,7 @@ def _draw_ray_strip(
         painter.drawImage(destination, strip, sample)
 
         # 光暈亮度衰減
-        darken = RAY_DECAY * progress ** 2
+        darken = ray_decay * progress ** 2
         painter.fillRect(destination, QColor.fromRgbF(0.0, 0.0, 0.0, darken))
 
         # 將目前的像素列模糊後作為下一列
@@ -556,6 +553,11 @@ def _render_ray(image: QImage, size: QSize, ray_mode: RayMode) -> QImage:
     """
     依指定尺寸合成原圖與光暈背景
     """
+
+    # 高斯模糊半徑
+    GAUSSIAN_BLUR_RADIUS = 5.0
+    # 光暈亮度衰減
+    RAY_DECAY = 0.55
 
     result = QImage(size, QImage.Format.Format_RGB32)
     if result.isNull():
@@ -587,7 +589,10 @@ def _render_ray(image: QImage, size: QSize, ray_mode: RayMode) -> QImage:
                 continue
 
             if blur is None:
-                blur = resources.enter_context(_gdiplus_blur(5))
+                source_length = image.height() if sideways else image.width()
+                output_length = size.height() if sideways else size.width()
+                radius = GAUSSIAN_BLUR_RADIUS * source_length / output_length
+                blur = resources.enter_context(_gdiplus_blur(radius))
 
             # 繪製矩形朝原圖延伸一個像素, 避免取整時露出黑線
             start = 0 if leading else extent - gutter - 1
@@ -602,7 +607,7 @@ def _render_ray(image: QImage, size: QSize, ray_mode: RayMode) -> QImage:
 
             _draw_ray_strip(
                 painter, target, edge, sideways=sideways, leading=leading,
-                inner_distance=inner_distance, ray_mode=ray_mode, blur=blur
+                inner_distance=inner_distance, ray_mode=ray_mode, ray_decay=RAY_DECAY, blur=blur
             )
 
         painter.drawImage(fitted, image, source)
